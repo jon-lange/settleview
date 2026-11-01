@@ -161,6 +161,13 @@
     return Math.max(0, n);
   }
 
+  // An Ask Settleview card (copilot line, hold note or slide check: {tone, kind, text, progress, details}) in the markup.
+  function askCls(a) { return a && a.tone === 'warn' ? 'sv-warn' : ''; }
+  function askText(a) { return a ? a.text : ''; }
+  function askSetup(a) { return !!a && a.kind === 'setup'; }
+  function askProg(a) { return Math.round(((a && a.progress) || 0) * 100); }
+  function askDetails(a) { return (a && a.details) || []; }
+
   window.playView = function () {
     var pc = null, oddsK = null, oddsP = null;  // the chart and the odds history: outside Alpine's reactivity
     var trend = null;  // { key, pts: [[ms, mid_up | null]] }: every live view (stream frame) this window (null = stale quote)
@@ -1864,6 +1871,206 @@
         window.dispatchEvent(new CustomEvent('pl-settings'));
       },
 
+      // ----- the page's bindings (index.html, Play): Alpine's CSP build evaluates property paths only, so every
+      // condition, label, class and handler the markup uses is named here. A row of an x-for is read from `this`
+      // (this.x, this.s, this.ch: the loop's variable); a handler gets the event as its argument. -----
+      SIDES: ['UP', 'DOWN'],
+      playShown: function () { return Alpine.store('app').view === 'play'; },
+      venueEvent: function (e) { this.setVenue(e.detail); },
+      venueChosen: function () { return !this.needVenue(); },
+      venueIsX: function () { return this.venue === this.x; },
+      setVenueX: function () { this.setVenue(this.x); },
+      hasTicket: function () { return !!this.ticket; },
+      venueNameX: function () { return VENUE_NAMES[this.x]; },
+      venueOpenX: function () { return this.venueOpen(this.x); },
+      tradeOnX: function () { return 'Trade on ' + VENUE_NAMES[this.x]; },
+      settingsExpanded: function () { return this.settings ? 'true' : 'false'; },
+      closeSettings: function () { this.settings = false; },
+      openPerps: function () { window.perpsOpen(); },
+      openAgentsHere: function () { window.agentOpen(this.agentsHere().market); },
+      clearRouteNote: function () { Alpine.store('app').routeNote = ''; },
+      // the market picker (x-data="menu", web/app.js: its open / close are the picker's own)
+      pickerOff: function () { return !!this.ticket || this.needVenue(); },
+      pickerAria: function () { return 'Market: ' + this.pickerLabel() + '. Change market'; },
+      pickerMenuAria: function () { return this.venueName() + ' markets'; },
+      itemChecked: function () { return this.it.on ? 'true' : 'false'; },
+      pickMenuItem: function () { this.close(); this.pickMarket(this.it); },
+      setSpanS: function () { this.setSpan(this.s); },
+      spanMarketsS: function () { return spanName(this.s) + ' markets'; },
+      openOnS: function () { return this.openOn(this.venue, this.s); },
+      // the header: clock, kill switch, money line
+      notChoosing: function () { return !this.choosing(); },
+      hasWinPct: function () { return this.winPct() != null; },
+      winBarStyle: function () { return 'width:' + (this.winPct() || 0) + '%'; },
+      killCls: function () { return this.killed() ? 'is-on' : ''; },
+      killPressed: function () { return this.killed() ? 'true' : 'false'; },
+      killAria: function () {
+        return this.killed() ? (this.resumeLocked() ? 'Kill switch is on. Turn it off on the PC' : 'Kill switch is on. Resume trading') : 'Kill switch: stop all new trading';
+      },
+      killOff: function () { return this.killBusy || this.resumeLocked(); },
+      killBtnCls: function () { return this.killed() ? '' : 'pl-btn-kill'; },
+      killBtnText: function () { return this.killed() ? 'Resume trading' : 'KILL SWITCH: stop all new trading'; },
+      showMoney: function () { return !!this.v && this.ok(); },
+      cashCls: function () { var b = this.bal(); return b && b.fresh ? '' : 'pl-warn'; },
+      showWhy: function () { return !!this.v && !this.ok(); },
+      vReason: function () { return (this.v && this.v.reason) || ''; },
+      notReady: function () { return !this.v.ready; },
+      settleWarnings: function () { return (this.v && this.v.settle_warnings) || []; },
+      showLock: function () { var l = this.lockLine(); return !!l && (this.msg || '').indexOf(l) < 0; },
+      errorText: function () { return 'Could not load: ' + this.error; },
+      showCpErr: function () { return !!this.cpErr && this.cpMode !== 'off'; },
+      // the outcome card and the in-trade parameters
+      showOutcome: function () { return this.ok() && !this.pos() && !!this.outcome; },
+      outcomeCls: function () { return this.outcome && this.outcome.word === 'WON' ? 'pl-outcome-won' : ''; },
+      inTrade: function () { return this.ok() && !!this.pos(); },
+      preEntry: function () { return this.ok() && !this.pos(); },
+      noPos: function () { return !this.pos(); },
+      noOutcome: function () { return !this.outcome; },
+      chipCls: function () { return this.ch.cls || ''; },
+      chipTap: function () { return !!this.ch.tap; },
+      chipNoTap: function () { return !this.ch.tap; },
+      chipTapText: function () { return this.ch.text + ' ›'; },
+      tpOff: function () { var p = this.pos(); return !p || p.state !== 'open'; },
+      // the call card
+      detailsExpanded: function () { return this.details ? 'true' : 'false'; },
+      detailsToggled: function (e) { this.setDetails(e.target.open); },
+      agreeAria: function () { return this.agreeText() + '. Show details'; },
+      callReason: function () { return this.call().reason; },
+      focusAsk: function () { return c(this.side().ask); },
+      focusTerms: function () {
+        var s = this.focus();
+        return sideName(s) + ' · ' + (this.effMode(s) === 'market' ? 'Market' : 'Max price ' + c(this.capFor(s)));
+      },
+      rideTo: function () { return 'Ride to ' + this.endHm(); },
+      barCls: function () { return this.call().mid_up == null ? 'pl-bar-none' : ''; },
+      barAria: function () { return 'Market: Up ' + pct(this.call().mid_up); },
+      upStyle: function () { return 'width:' + this.upWidth(); },
+      hasFair: function () { return this.fairLeft() != null; },
+      fairStyle: function () { return 'left:' + this.fairLeft(); },
+      fairAria: function () { return 'Model ' + pct(this.call().fair_up) + ' Up'; },
+      upText: function () { return '▲ Up ' + pct(this.call().mid_up); },
+      hasFairUp: function () { return this.call().fair_up != null; },
+      modelText: function () { return 'model ' + pct(this.call().fair_up); },
+      hasTrend: function () { return this.trendDelta() != null; },
+      downText: function () { return this.downPct() + ' ▼'; },
+      hasStake: function () { return !!(this.v && this.v.stake); },
+      hasLights: function () { return this.cpLights().length > 0; },
+      ltClsX: function () { return this.ltCls(this.x); },
+      ltNameX: function () { return this.ltName(this.x); },
+      ltPressed: function () { return this.ltTip === this.x.rule ? 'true' : 'false'; },
+      ltTapX: function () { this.ltTap(this.x); },
+      agentsHereAria: function () { var a = this.agentsHere(); return a ? a.head + ', ' + a.tail + '. Show them' : ''; },
+      agentsHereHead: function () { var a = this.agentsHere(); return a ? a.head : ''; },
+      agentsHereTail: function () { var a = this.agentsHere(); return a ? ' · ' + a.tail : ''; },
+      // Ask Settleview's three cards (under the call, while holding, the check at the slide): the same markup
+      showCpLine: function () { var l = this.cpLine(); return !!l && !(l.tone === 'warn' && this.cpSlideWarn()); },
+      cpLineCls: function () { return askCls(this.cpLine()); },
+      cpLineAria: function () { return 'Ask Settleview: ' + askText(this.cpLine()); },
+      cpLineText: function () { return askText(this.cpLine()); },
+      cpLineSetup: function () { return askSetup(this.cpLine()); },
+      cpLineProgAria: function () { return askProg(this.cpLine()) + '% of the way'; },
+      cpLineProgStyle: function () { return 'width:' + askProg(this.cpLine()) + '%'; },
+      cpLineDetails: function () { return askDetails(this.cpLine()); },
+      cpHoldCls: function () { return askCls(this.cpHold()); },
+      cpHoldAria: function () { return 'Ask Settleview: ' + askText(this.cpHold()); },
+      cpHoldText: function () { return askText(this.cpHold()); },
+      cpHoldSetup: function () { return askSetup(this.cpHold()); },
+      cpHoldProgAria: function () { return askProg(this.cpHold()) + '% of the way'; },
+      cpHoldProgStyle: function () { return 'width:' + askProg(this.cpHold()) + '%'; },
+      cpHoldDetails: function () { return askDetails(this.cpHold()); },
+      cpCheckCls: function () { return askCls(this.cpSlideWarn()); },
+      cpCheckAria: function () { return 'Check: ' + askText(this.cpSlideWarn()); },
+      cpCheckText: function () { return askText(this.cpSlideWarn()); },
+      cpCheckSetup: function () { return askSetup(this.cpSlideWarn()); },
+      cpCheckProgAria: function () { return askProg(this.cpSlideWarn()) + '% of the way'; },
+      cpCheckProgStyle: function () { return 'width:' + askProg(this.cpSlideWarn()) + '%'; },
+      cpCheckDetails: function () { return askDetails(this.cpSlideWarn()); },
+      // in a trade: chance, hold vs sell, advice
+      chanceNowText: function () { return pct(this.look().chance_now); },
+      modelChanceText: function () { return pct(this.look().model_chance); },
+      hasChanceBase: function () { return this.chanceBaseTop() != null; },
+      chanceBaseStyle: function () { return 'top:' + (this.chanceBaseTop() || '0'); },
+      sellVsCls: function () { var d = this.sellVsCost(); return d == null ? '' : d >= 0 ? 'pl-up' : 'pl-down'; },
+      sellVsText: function () { return sUsd(this.sellVsCost()); },
+      giveUpText: function () { return 'spread + fee ≈ ' + this.sellGiveUp(); },
+      advLineCls: function () { var p = this.pos(); return p && p.advice ? this.advCls(p.advice) : ''; },
+      advAction: function () { var p = this.pos(); return p && p.advice ? p.advice.action : ''; },
+      // the price-to-beat chart card
+      dangerCls: function () { return this.danger() ? 'pl-danger' : ''; },
+      ptbBtcText: function () { return 'BTC ' + this.ptbBtc(); },
+      sigPressed: function () { return this.sigTip === this.ch.tip ? 'true' : 'false'; },
+      sigTapCh: function () { this.sigTap(this.ch); },
+      showSigTip: function () { return !!this.sigTip && !this.pos(); },
+      showClose: function () { return this.closeX != null && !this.ptbEmpty(); },
+      closeStyle: function () { return 'left:' + (this.closeX || 0) + 'px'; },
+      closeText: function () { return 'close ' + this.endHm(); },
+      hasStrike: function () { return !!(this.v && this.v.btc && this.v.btc.strike != null); },
+      oddsHead: function () { return this.oddsLabel() + (this.pos() && this.autoSell() != null ? ' · auto-sell ' + c(this.autoSell()) : ''); },
+      oddsCls: function () { return this.pos() ? 'pl-odds-trade' : ''; },
+      oddsPressed: function () { return this.odds ? 'true' : 'false'; },
+      levelsPressed: function () { return this.levels ? 'true' : 'false'; },
+      // the bottom bar: retry, side, amount, slide
+      staleCls: function () { return this.stale() ? 'pl-stale' : ''; },
+      retryCls: function () { return this.retry && this.retry.side === 'DOWN' ? 'pl-retry-down' : 'pl-retry-up'; },
+      retryOff: function () { return !!this.retryWhy(); },
+      retryFoot: function () { return this.retryWhy() || this.retryNote(); },
+      dismissRetry: function () { this.retry = null; },
+      sideBtnCls: function () { var s = this.s; return (s === 'UP' ? 'pl-buy-up' : 'pl-buy-down') + (this.sideNow() === s ? ' on' : ''); },
+      sideChecked: function () { return this.sideNow() === this.s ? 'true' : 'false'; },
+      sideLabelS: function () { return this.sideLabel(this.s); },
+      chooseS: function () { this.choose(this.s); },
+      sideNameS: function () { return sideName(this.s); },
+      sideAskS: function () { var s = this.s; return c(this.side(s).ask) + (this.primary(s) ? ' · the call' : ''); },
+      chipPressed: function () { return !this.other && this.stake() === this.x ? 'true' : 'false'; },
+      chipOffX: function () { return this.chipOff(this.x); },
+      pickChipX: function () { this.pickChip(this.x); },
+      chipText: function () { return '$' + this.x; },
+      otherPressed: function () { return this.other ? 'true' : 'false'; },
+      showOther: function () { return this.other && !this.pos(); },
+      stakeModel: function () { return BTC.model(this, 'stakeInput'); },
+      undoOff: function () { return this.busy || this.sliding; },
+      infoCls: function () { return this.infoWarn() ? 'pl-warn' : ''; },
+      slideCls: function () {
+        var s = this.sideNow();
+        return (this.pos() ? 'pl-slide-exit' : (s === 'UP' ? 'pl-slide-up' : s === 'DOWN' ? 'pl-slide-down' : 'pl-slide-none')) +
+          (this.slideOk() && !this.busy ? '' : ' off') + (this.pulse ? ' pl-pulse' : '') + (this.alert ? ' pl-alert' : '');
+      },
+      slideFillStyle: function () { return 'width:' + (this.slideX + 60) + 'px'; },
+      knobStyle: function () { return 'transform:translateX(' + this.slideX + 'px)'; },
+      knobOff: function () { return !this.slideOk() || this.busy; },
+      slideCancel: function () { this.slideX = 0; this.sliding = false; },
+      // the auto-sell sheet
+      showTpSheet: function () { return this.tpSheet && !!this.pos(); },
+      tpInput: function (e) { this.tpCents = Number(e.target.value); },
+      slInput: function (e) { this.slDist = Number(e.target.value); },
+      slOnModel: function () { return BTC.model(this, 'slOn'); },
+      slCls: function () { return this.slOn ? 'pl-down' : 'muted'; },
+      tpNoMoreModel: function () { return BTC.model(this, 'tpNoMore'); },
+      // settings: Ask Settleview, theme
+      cpModeChecked: function () { return this.cpMode === this.m ? 'true' : 'false'; },
+      setCpModeM: function () { this.setCpMode(this.m); },
+      cpModeName: function () { return CP_NAMES[this.m]; },
+      hasCpUnknown: function () { return this.cpUnknown != null; },
+      cpUnknownText: function () { return 'The saved Ask Settleview mode (“' + this.cpUnknown + '”) was not recognised, so it is Off. Pick one to replace it.'; },
+      cpWarnOnK: function () { return this.cpWarnOn(this.k); },
+      toggleCpWarnK: function () { this.toggleCpWarn(this.k); },
+      cpWarnName: function () { return CP_WARN_NAMES[this.k]; },
+      hasCpWarnUnknown: function () { return this.cpWarnUnknown != null; },
+      cpWarnUnknownText: function () { return 'The saved warning switches (“' + this.cpWarnUnknown + '”) were not recognised, so all are on. Tap one to replace them.'; },
+      themeChecked: function () { return this.themeMode === this.m; },
+      setThemeM: function () { this.setTheme(this.m); },
+      themeName: function () { return THEME_NAMES[this.m]; },
+      hasThemeUnknown: function () { return this.themeUnknown != null; },
+      themeUnknownText: function () { return 'The saved theme (“' + this.themeUnknown + '”) was not recognised, so System is used. Pick one to replace it.'; },
+      // the confirm sheet
+      answerYes: function () { this.answer(true); },
+      answerNo: function () { this.answer(false); },
+      rowKey: function () { return this.row[0]; },
+      rowLabel: function () { return this.row[0]; },
+      rowValue: function () { return this.row[1]; },
+      ticketFoot: function () { return this.stale() ? 'Live prices stopped: confirm is off until they are back.' : 'Expires in ' + this.ticketLeft() + ' s'; },
+      confirmOff: function () { return this.busy || this.ticketLeft() === 0 || this.stale(); },
+
       sideName: sideName, THEMES: THEMES, THEME_NAMES: THEME_NAMES, CHIPS: CHIPS, VENUES: VENUES, VENUE_NAMES: VENUE_NAMES, W: W, H: H, PROD_CONFIRM: PROD_CONFIRM, usd: usd, sUsd: sUsd, c: c, pct: pct, money0: money0, arrows: arrows
     };
   };
@@ -2136,7 +2343,28 @@
         var self = this, url = self.a && self.a.lan_url;
         if (!url || !navigator.clipboard) return;
         navigator.clipboard.writeText(url).then(function () { self.copied = true; setTimeout(function () { self.copied = false; }, 2000); }, function () {});
-      }
+      },
+
+      // the card's bindings (index.html; Alpine's CSP build evaluates property paths only)
+      paPillCls: function () { return this.a && this.a.pin_set ? 'pa-on' : 'pa-off'; },
+      paPillText: function () { var a = this.a; return a && a.pin_set ? 'On' : (a && a.reset_needed ? 'New PIN needed' : 'Off'); },
+      paChecking: function () { return !this.tried; },
+      paRefused: function () { return this.tried && !this.a; },
+      paRefusedText: function () { return 'Phone access (the PIN): change this on the PC (' + this.refused + ')'; },
+      paResetNeeded: function () { return !!(this.a && this.a.reset_needed); },
+      paNote: function () { return (this.a && this.a.note) || ''; },
+      paPinSet: function () { return !!(this.a && this.a.pin_set); },
+      pinModel: function () { return BTC.model(this, 'pin'); },
+      pin2Model: function () { return BTC.model(this, 'pin2'); },
+      pinMismatch: function () { return !!this.pin2 && this.pin !== this.pin2; },
+      pinBadFormat: function () { return !!this.pin && !/^[0-9]{6,8}$/.test(this.pin); },
+      paSaveOff: function () { return this.busy || !this.valid(); },
+      paSaveText: function () { return this.paPinSet() ? 'Change PIN' : 'Turn on phone access'; },
+      paUrlText: function () { return (this.a && this.a.lan_url) || 'unknown'; },
+      paNoUrl: function () { return !(this.a && this.a.lan_url); },
+      paCopyText: function () { return this.copied ? 'Copied' : 'Copy'; },
+      paHowToFind: function () { return (this.a && this.a.how_to_find_ip) || ''; },
+      paSignedIn: function () { return 'Phones signed in: ' + (this.a && this.a.signed_in); }
     };
   };
 
@@ -2241,7 +2469,50 @@
           return { k: i, when: when, word: up ? 'Raised' : 'Lowered', up: up,
             text: 'Per trade ' + side(d.old, 'per_trade') + ' → ' + money(d.new.per_trade) + ' · per day ' + side(d.old, 'per_day') + ' → ' + money(d.new.per_day) };
         });
-      }
+      },
+
+      // the card's bindings (index.html; Alpine's CSP build evaluates property paths only). `this.v` and `this.pc` are
+      // Play's (the card sits inside Play's component); a band chip's row is this.x, a history row this.h.
+      lmChecking: function () { return !this.lmTried; },
+      lmFailed: function () { return this.lmTried && !this.lm; },
+      lmErrText: function () { return 'Could not load your trade limits: ' + this.lmErr; },
+      lmUnreadable: function () { return !!this.lm && !this.lm.readable; },
+      lmError: function () { return (this.lm && this.lm.error) || ''; },
+      lmNowTrade: function () { return this.lmNow('per_trade'); },
+      lmNowDay: function () { return this.lmNow('per_day'); },
+      lmUsedText: function () { return this.lmUsed(this.v); },
+      lmNoTradeModel: function () { return BTC.model(this, 'lmNoTrade'); },
+      lmTradeModel: function () { return BTC.model(this, 'lmTrade'); },
+      lmNoDayModel: function () { return BTC.model(this, 'lmNoDay'); },
+      lmDayModel: function () { return BTC.model(this, 'lmDay'); },
+      lmPhraseModel: function () { return BTC.model(this, 'lmPhrase'); },
+      lmNoTradeOff: function () { return this.pc === false && !this.lmNoTrade; },
+      lmNoDayOff: function () { return this.pc === false && !this.lmNoDay; },
+      lmTradeShown: function () { return !this.lmNoTrade; },
+      lmDayShown: function () { return !this.lmNoDay; },
+      lmNoNeed: function () { return !this.lmNeed; },
+      lmSaveNow: function () { this.lmSave(false); },
+      lmSaveConfirmed: function () { this.lmSave(true); },
+      lmSaveText: function () { return this.lmBusy ? 'Saving…' : 'Save limits'; },
+      lmNeedReason: function () { return (this.lmNeed && this.lmNeed.reason) || ''; },
+      lmNeedPhrase: function () { return (this.lmNeed && this.lmNeed.confirm_phrase) || ''; },
+      lmConfirmOff: function () { var n = this.lmNeed; return this.lmBusy || !n || !n.confirm_phrase || this.lmPhrase !== n.confirm_phrase; },
+      bandUnreadable: function () { var b = this.lm && this.lm.market_band; return !!b && !b.readable; },
+      bandError: function () { var b = this.lm && this.lm.market_band; return (b && b.error) || ''; },
+      bandKey: function () { return String(this.x); },
+      bandChecked: function () { return this.bandIs(this.x) ? 'true' : 'false'; },
+      bandOff: function () { return this.lmBusy || (this.pc === false && this.bandWider(this.x)); },
+      bandSaveX: function () { this.bandSave(this.x); },
+      bandText: function () { var x = this.x; return x == null ? 'Up to 99¢' : '+' + x + '¢'; },
+      lmHasHistory: function () { return this.lmHistory().length > 0; },
+      histCls: function () { return this.h.up ? 'amber' : ''; }
     };
   };
+
+  // The components, by name for Alpine's CSP build (x-data="playView"); the window names stay for other scripts.
+  document.addEventListener('alpine:init', function () {
+    Alpine.data('playView', window.playView);
+    Alpine.data('phoneAccessCard', window.phoneAccessCard);
+    Alpine.data('playLimitsCard', window.playLimitsCard);
+  });
 })();

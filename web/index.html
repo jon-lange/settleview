@@ -34,375 +34,375 @@
 <!-- ================= PLAY (phone: you make the call) ================= -->
 <!-- ================= PLAY and RECORD share one Play component (web/views/play.js): Record shows Play's own record
      view and the mode controls for each market, moved off Play (design pass 2026-10-31) ================= -->
-<div class="pl-scope" x-data="playView()" @pl-limits-saved.window="load()" @pl-venue.window="setVenue($event.detail)" @pl-open-settings.window="openSettings()">
-<section id="panel-play" class="pl" aria-label="Play" x-show="$store.app.view === 'play'" x-cloak>
+<div class="pl-scope" x-data="playView" @pl-limits-saved.window="load" @pl-venue.window="venueEvent" @pl-open-settings.window="openSettings">
+<section id="panel-play" class="pl" aria-label="Play" x-show="playShown" x-cloak>
   <div class="pl-top">
     <!-- the venue (segmented), then the market picker: Kalshi -> BTC 15m · BTC Perps; Polymarket -> BTC 15m · BTC 5m -->
     <div class="nv-row">
-      <div class="nv-seg" role="radiogroup" aria-label="Venue" x-show="!needVenue()">
+      <div class="nv-seg" role="radiogroup" aria-label="Venue" x-show="venueChosen">
         <template x-for="x in VENUES" :key="x">
-          <button type="button" role="radio" :aria-checked="venue === x" @click="setVenue(x)" :disabled="!!ticket"><span x-text="VENUE_NAMES[x]"></span><i class="pl-odot" x-show="venueOpen(x)" role="img" aria-label="open position"></i></button>
+          <button type="button" role="radio" :aria-checked="venueIsX" @click="setVenueX" :disabled="hasTicket"><span x-text="venueNameX"></span><i class="pl-odot" x-show="venueOpenX" role="img" aria-label="open position"></i></button>
         </template>
       </div>
-      <span class="nv-sp" x-show="needVenue()"></span>
-      <button type="button" class="nv-gear" @click="openSettings()" aria-label="Settings" :aria-expanded="settings ? 'true' : 'false'" aria-controls="pl-settings"><svg width="22" height="22" aria-hidden="true"><use href="#tb-gear"/></svg></button>
+      <span class="nv-sp" x-show="needVenue"></span>
+      <button type="button" class="nv-gear" @click="openSettings" aria-label="Settings" :aria-expanded="settingsExpanded" aria-controls="pl-settings"><svg width="22" height="22" aria-hidden="true"><use href="#tb-gear"/></svg></button>
     </div>
     <div class="nv-hdr">
-      <div class="nv-picker" x-show="!needVenue()" x-data="{ open: false }" @keydown.escape="open = false" @click.outside="open = false">
-        <button type="button" class="nv-pick" aria-haspopup="menu" :aria-expanded="open ? 'true' : 'false'" @click="open = !open" :disabled="!!ticket || needVenue()" :aria-label="'Market: ' + pickerLabel() + '. Change market'">
-          <b><span x-text="pickerLabel()"></span><small aria-hidden="true">&#9662;</small></b>
-          <span class="nv-sub num" x-text="pickerSub()"></span>
+      <div class="nv-picker" x-show="venueChosen" x-data="menu" @keydown.escape="close" @click.outside="close">
+        <button type="button" class="nv-pick" aria-haspopup="menu" :aria-expanded="expanded" @click="toggle" :disabled="pickerOff" :aria-label="pickerAria">
+          <b><span x-text="pickerLabel"></span><small aria-hidden="true">&#9662;</small></b>
+          <span class="nv-sub num" x-text="pickerSub"></span>
         </button>
-        <div class="nv-menu" role="menu" :aria-label="venueName() + ' markets'" x-show="open" x-cloak>
-          <template x-for="it in pickerItems()" :key="it.key">
-            <button type="button" role="menuitemradio" :aria-checked="it.on ? 'true' : 'false'" @click="open = false; pickMarket(it)"><span x-text="it.label"></span><small x-show="it.note" x-text="it.note"></small><i class="pl-odot" x-show="it.dot" role="img" aria-label="open position"></i><b class="nv-check" aria-hidden="true" x-show="it.on">&#10003;</b></button>
+        <div class="nv-menu" role="menu" :aria-label="pickerMenuAria" x-show="open" x-cloak>
+          <template x-for="it in pickerItems" :key="it.key">
+            <button type="button" role="menuitemradio" :aria-checked="itemChecked" @click="pickMenuItem"><span x-text="it.label"></span><small x-show="it.note" x-text="it.note"></small><i class="pl-odot" x-show="it.dot" role="img" aria-label="open position"></i><b class="nv-check" aria-hidden="true" x-show="it.on">&#10003;</b></button>
           </template>
         </div>
       </div>
       <span class="nv-sp"></span>
-      <div class="pl-cd" x-show="!choosing()">
-        <div class="pl-cd-row"><span class="pl-clock num" :class="clockCls()" aria-label="Time left in this window" x-text="left()"></span><small aria-hidden="true">left</small></div>
+      <div class="pl-cd" x-show="notChoosing">
+        <div class="pl-cd-row"><span class="pl-clock num" :class="clockCls" aria-label="Time left in this window" x-text="left"></span><small aria-hidden="true">left</small></div>
         <!-- the window's progress: the server's window start / end against the server-synced clock -->
-        <div class="pl-wbar" x-show="winPct() != null" :class="clockCls()" role="progressbar" aria-label="Window elapsed" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="winPct()"><span :style="'width:' + (winPct() || 0) + '%'"></span></div>
+        <div class="pl-wbar" x-show="hasWinPct" :class="clockCls" role="progressbar" aria-label="Window elapsed" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="winPct"><span :style="winBarStyle"></span></div>
       </div>
       <!-- the one kill switch (shared by every strategy): quiet until engaged; KILL needs no confirm, Resume asks first -->
-      <button type="button" class="pl-kill" :class="killed() ? 'is-on' : ''" :aria-pressed="killed() ? 'true' : 'false'"
-        :aria-label="killed() ? (resumeLocked() ? 'Kill switch is on. Turn it off on the PC' : 'Kill switch is on. Resume trading') : 'Kill switch: stop all new trading'" @click="toggleKill()" :disabled="killBusy || resumeLocked()" x-text="killLabel()"></button>
+      <button type="button" class="pl-kill" :class="killCls" :aria-pressed="killPressed"
+        :aria-label="killAria" @click="toggleKill" :disabled="killOff" x-text="killLabel"></button>
     </div>
     <!-- the money line: the mode pill and the venue's cash -->
-    <p class="nv-money num" x-show="v && ok()"><span class="nv-pill" :class="pillCls()" :aria-label="pillAria()" x-text="pillWord()"></span><span :class="bal() && bal().fresh ? '' : 'pl-warn'" x-text="cashText()"></span></p>
-    <p class="pl-note muted nv-why" x-show="v && !ok()" x-text="v && v.reason" role="status"></p>
-    <template x-for="w in (v && v.settle_warnings) || []" :key="w.id"><p class="pl-note amber" role="alert" x-text="w.message"></p></template>
+    <p class="nv-money num" x-show="showMoney"><span class="nv-pill" :class="pillCls" :aria-label="pillAria" x-text="pillWord"></span><span :class="cashCls" x-text="cashText"></span></p>
+    <p class="pl-note muted nv-why" x-show="showWhy" x-text="vReason" role="status"></p>
+    <template x-for="w in settleWarnings" :key="w.id"><p class="pl-note amber" role="alert" x-text="w.message"></p></template>
   </div>
   <p class="pl-route" x-show="$store.app.routeNote" x-cloak role="status"><span x-text="$store.app.routeNote"></span>
-    <button type="button" class="pl-link" @click="$store.app.routeNote = ''">OK</button></p>
-  <p class="pl-killed" x-show="killed()" x-cloak role="status"><b>Kill switch is ON.</b> No new entries in any mode. Open positions keep their take profit and stop.</p>
+    <button type="button" class="pl-link" @click="clearRouteNote">OK</button></p>
+  <p class="pl-killed" x-show="killed" x-cloak role="status"><b>Kill switch is ON.</b> No new entries in any mode. Open positions keep their take profit and stop.</p>
   <p class="pl-msg red" x-show="killMsg" x-text="killMsg" role="alert"></p>
-  <p class="pl-ask" x-show="pickLine()" x-text="pickLine()" role="status"></p>
+  <p class="pl-ask" x-show="pickLine" x-text="pickLine" role="status"></p>
   <!-- ===== nothing chosen yet: the venue, then (a venue with several) the market length, as one clear choice ===== -->
-  <div class="pl-choose" x-show="needVenue()" role="group" aria-labelledby="pl-choose-v">
+  <div class="pl-choose" x-show="needVenue" role="group" aria-labelledby="pl-choose-v">
     <h2 id="pl-choose-v">Where do you want to trade?</h2>
     <template x-for="x in VENUES" :key="x">
-      <button type="button" class="pl-choosebtn" @click="setVenue(x)" x-text="'Trade on ' + VENUE_NAMES[x]"></button>
+      <button type="button" class="pl-choosebtn" @click="setVenueX" x-text="tradeOnX"></button>
     </template>
-    <button type="button" class="pl-choosebtn" @click="perpsOpen()">Trade BTC perps on Kalshi</button>
+    <button type="button" class="pl-choosebtn" @click="openPerps">Trade BTC perps on Kalshi</button>
     <p>Play remembers your choice on this device.</p>
   </div>
-  <div class="pl-choose" x-show="needSpan()" role="group" aria-labelledby="pl-choose-s">
-    <h2 id="pl-choose-s" x-text="spanAsk()"></h2>
-    <template x-for="s in spans()" :key="s">
-      <button type="button" class="pl-choosebtn" @click="setSpan(s)" :disabled="!!ticket"><span x-text="spanName(s) + ' markets'"></span><i class="pl-odot" x-show="openOn(venue, s)" role="img" aria-label="open position"></i></button>
+  <div class="pl-choose" x-show="needSpan" role="group" aria-labelledby="pl-choose-s">
+    <h2 id="pl-choose-s" x-text="spanAsk"></h2>
+    <template x-for="s in spans" :key="s">
+      <button type="button" class="pl-choosebtn" @click="setSpanS" :disabled="hasTicket"><span x-text="spanMarketsS"></span><i class="pl-odot" x-show="openOnS" role="img" aria-label="open position"></i></button>
     </template>
     <p>Play remembers your choice on this device.</p>
   </div>
-  <p class="pl-lock" x-show="lockLine() &&(msg || '').indexOf(lockLine()) < 0" x-text="lockLine()" role="status"></p>
-  <p class="error-box" x-show="error" x-text="'Could not load: ' + error" role="alert"></p>
+  <p class="pl-lock" x-show="showLock" x-text="lockLine" role="status"></p>
+  <p class="error-box" x-show="error" x-text="errorText" role="alert"></p>
   <!-- the live stream is down (or not up yet): the numbers below are not live, so the slide is greyed and off -->
-  <p class="pl-stale-note" x-show="staleText()" x-text="staleText()" role="status"></p>
+  <p class="pl-stale-note" x-show="staleText" x-text="staleText" role="status"></p>
   <p class="pl-msg" x-show="msg" :class="msgCls" x-text="msg" role="status"></p>
-  <p class="pl-note amber" x-show="cpErr && cpMode !== 'off'" x-text="cpErr" role="status"></p>
+  <p class="pl-note amber" x-show="showCpErr" x-text="cpErr" role="status"></p>
 
   <!-- ===== the outcome (about 8 s or until tapped; neutral for a loss or break-even, no celebration) ===== -->
-  <template x-if="ok() && !pos() && outcome">
-    <button type="button" class="pl-card pl-outcome" :class="outcome.word === 'WON' ? 'pl-outcome-won' : ''" @click="closeOutcome()" role="status">
-      <strong class="num" x-text="outcomeText()"></strong>
-      <small x-text="outcomeSub()"></small>
+  <template x-if="showOutcome">
+    <button type="button" class="pl-card pl-outcome" :class="outcomeCls" @click="closeOutcome" role="status">
+      <strong class="num" x-text="outcomeText"></strong>
+      <small x-text="outcomeSub"></small>
     </button>
   </template>
 
   <!-- ===== in a trade (board 14): every parameter, live; the auto-sell chip opens the auto-sell sheet ===== -->
-  <div class="pl-params" x-show="ok() && pos()" role="group" aria-label="Your trade">
-    <template x-for="ch in params()" :key="ch.k">
-      <span class="pl-pchip num" :class="ch.cls">
-        <template x-if="ch.tap"><button type="button" class="pl-pchip-btn" @click="tpOpen()" :disabled="!pos() || pos().state !== 'open'" x-text="ch.text + ' ›'"></button></template>
-        <template x-if="!ch.tap"><span x-text="ch.text"></span></template>
+  <div class="pl-params" x-show="inTrade" role="group" aria-label="Your trade">
+    <template x-for="ch in params" :key="ch.k">
+      <span class="pl-pchip num" :class="chipCls">
+        <template x-if="chipTap"><button type="button" class="pl-pchip-btn" @click="tpOpen" :disabled="tpOff" x-text="chipTapText"></button></template>
+        <template x-if="chipNoTap"><span x-text="ch.text"></span></template>
       </span>
     </template>
   </div>
 
   <!-- ===== before entry: the recommendation first (call + target entry/exit), then the amount ===== -->
-  <template x-if="ok() && !pos()">
+  <template x-if="preEntry">
     <div class="pl-pre">
-      <div class="pl-card pl-verdict" :class="verdictCls()" x-show="!outcome">
+      <div class="pl-card pl-verdict" :class="verdictCls" x-show="noOutcome">
         <div class="pl-vhead">
           <span class="pl-eyebrow">The call</span>
           <!-- the server's agree count only (call.agree); hidden when it is not sent. Opens Details. -->
-          <button type="button" class="pl-agree num" x-show="agreeShort()" @click="openDetails()" aria-controls="pl-why" :aria-expanded="details ? 'true' : 'false'"
-            :aria-label="agreeText() + '. Show details'"><span x-text="agreeShort()"></span><i aria-hidden="true">&#8250;</i></button>
+          <button type="button" class="pl-agree num" x-show="agreeShort" @click="openDetails" aria-controls="pl-why" :aria-expanded="detailsExpanded"
+            :aria-label="agreeAria"><span x-text="agreeShort"></span><i aria-hidden="true">&#8250;</i></button>
         </div>
-        <strong class="pl-hero" x-text="heroText()"></strong>
-        <span class="pl-reason" x-text="call().reason"></span>
+        <strong class="pl-hero" x-text="heroText"></strong>
+        <span class="pl-reason" x-text="callReason"></span>
         <!-- Target and Ride-to as one row: the target entry, then the server's payoffs for this side at this amount -->
         <div class="pl-pair num">
-          <div><small>Target</small><b x-text="c(side().ask)"></b><span x-text="sideName(focus()) + ' · ' + (effMode(focus()) === 'market' ? 'Market' : 'Max price ' + c(capFor(focus())))"></span></div>
-          <div class="pl-plan"><small x-text="'Ride to ' + endHm()"></small><b><span class="pl-up" x-text="planWins()"></span> <span class="pl-plan-of">/ <span class="pl-down" x-text="planLoses()"></span></span></b><span>if it wins / if not</span></div>
+          <div><small>Target</small><b x-text="focusAsk"></b><span x-text="focusTerms"></span></div>
+          <div class="pl-plan"><small x-text="rideTo"></small><b><span class="pl-up" x-text="planWins"></span> <span class="pl-plan-of">/ <span class="pl-down" x-text="planLoses"></span></span></b><span>if it wins / if not</span></div>
         </div>
         <div class="pl-trend">
           <div class="pl-barwrap">
-            <div class="pl-bar" :class="call().mid_up == null ? 'pl-bar-none' : ''" role="img" :aria-label="'Market: Up ' + pct(call().mid_up)"><span :style="'width:' + upWidth()"></span></div>
-            <i class="pl-bar-fair" x-show="fairLeft() != null" :style="'left:' + fairLeft()" role="img" :aria-label="'Model ' + pct(call().fair_up) + ' Up'" :title="'Model ' + pct(call().fair_up) + ' Up'"></i>
+            <div class="pl-bar" :class="barCls" role="img" :aria-label="barAria"><span :style="upStyle"></span></div>
+            <i class="pl-bar-fair" x-show="hasFair" :style="fairStyle" role="img" :aria-label="fairAria" :title="fairAria"></i>
           </div>
-          <div class="pl-split num" role="status" :aria-label="trendAria()">
-            <b class="pl-up" x-text="'▲ Up ' + pct(call().mid_up)"></b>
-            <span class="pl-split-mid"><span x-show="call().fair_up != null" x-text="'model ' + pct(call().fair_up)"></span><b :class="trendCls()" x-show="trendDelta() != null" x-text="trendText()"></b></span>
-            <b class="pl-down" x-text="downPct() + ' ▼'"></b>
+          <div class="pl-split num" role="status" :aria-label="trendAria">
+            <b class="pl-up" x-text="upText"></b>
+            <span class="pl-split-mid"><span x-show="hasFairUp" x-text="modelText"></span><b :class="trendCls" x-show="hasTrend" x-text="trendText"></b></span>
+            <b class="pl-down" x-text="downText"></b>
           </div>
         </div>
         <!-- Ask Settleview's setup lights (Full): one per active tested rule; grey not in play, amber setting up, green ready -->
-        <div class="sv-setups" x-show="cpLights().length" role="group" aria-label="Setups: tap one for its record">
+        <div class="sv-setups" x-show="hasLights" role="group" aria-label="Setups: tap one for its record">
           <div class="sv-lights">
-            <template x-for="x in cpLights()" :key="x.rule">
-              <button type="button" class="sv-lt" :class="ltCls(x)" :aria-label="ltName(x)" :aria-pressed="ltTip === x.rule ? 'true' : 'false'" @click="ltTap(x)"><i aria-hidden="true"></i><span x-text="x.rule"></span></button>
+            <template x-for="x in cpLights" :key="x.rule">
+              <button type="button" class="sv-lt" :class="ltClsX" :aria-label="ltNameX" :aria-pressed="ltPressed" @click="ltTapX"><i aria-hidden="true"></i><span x-text="x.rule"></span></button>
             </template>
           </div>
-          <p class="sv-tip" x-show="ltTipText()" x-text="ltTipText()" role="status"></p>
+          <p class="sv-tip" x-show="ltTipText" x-text="ltTipText" role="status"></p>
         </div>
-        <details id="pl-why" class="pl-why" x-ref="why" :open="details" @toggle="setDetails($event.target.open)">
+        <details id="pl-why" class="pl-why" x-ref="why" :open="details" @toggle="detailsToggled">
           <summary>Details</summary>
-          <small x-text="modelLine()"></small>
-          <small class="muted" x-show="v" x-text="settleLine()"></small>
-          <small class="muted" x-show="v && v.stake" x-text="stakeSentence()"></small>
+          <small x-text="modelLine"></small>
+          <small class="muted" x-show="v" x-text="settleLine"></small>
+          <small class="muted" x-show="hasStake" x-text="stakeSentence"></small>
         </details>
       </div>
       <!-- the agents on this market (one quiet line; tap: the Agents tab filtered to it) -->
-      <button type="button" class="sv-here num" x-show="agentsHere()" @click="agentOpen(agentsHere().market)" :aria-label="agentsHere() ? agentsHere().head + ', ' + agentsHere().tail + '. Show them' : ''"><svg class="sv-glyph" width="16" height="16" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-here-t"><b x-text="agentsHere() ? agentsHere().head : ''"></b><span x-text="agentsHere() ? ' · ' + agentsHere().tail : ''"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></button>
+      <button type="button" class="sv-here num" x-show="agentsHere" @click="openAgentsHere" :aria-label="agentsHereAria"><svg class="sv-glyph" width="16" height="16" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-here-t"><b x-text="agentsHereHead"></b><span x-text="agentsHereTail"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></button>
       <!-- Ask Settleview: one sentence under the call (nothing when there is nothing to say); the why behind a tap -->
-      <template x-if="cpLine() && !(cpLine().tone === 'warn' && cpSlideWarn())"><!-- once the slide shows the check, the warning lives there only -->
-        <details class="sv-ask" :class="cpLine().tone === 'warn' ? 'sv-warn' : ''" :aria-label="'Ask Settleview: ' + cpLine().text">
-          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview</span><span class="sv-say" x-text="cpLine().text"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
+      <template x-if="showCpLine"><!-- once the slide shows the check, the warning lives there only -->
+        <details class="sv-ask" :class="cpLineCls" :aria-label="cpLineAria">
+          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview</span><span class="sv-say" x-text="cpLineText"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
           <div class="sv-why num">
-            <div class="sv-prog" x-show="cpLine().kind === 'setup'" role="img" :aria-label="Math.round((cpLine().progress || 0) * 100) + '% of the way'"><span :style="'width:' + Math.round((cpLine().progress || 0) * 100) + '%'"></span></div>
-            <ul><template x-for="(d, i) in cpLine().details" :key="i"><li x-text="d"></li></template></ul>
+            <div class="sv-prog" x-show="cpLineSetup" role="img" :aria-label="cpLineProgAria"><span :style="cpLineProgStyle"></span></div>
+            <ul><template x-for="(d, i) in cpLineDetails" :key="i"><li x-text="d"></li></template></ul>
           </div>
         </details>
       </template>
-      <button type="button" class="sv-pill" x-show="canFill()" @click="fillIn()"><svg width="16" height="16" aria-hidden="true"><use href="#sv-mark"/></svg>Fill in ticket</button>
-      <p class="muted pl-note" x-show="!v.ready" x-text="v.reason"></p>
+      <button type="button" class="sv-pill" x-show="canFill" @click="fillIn"><svg width="16" height="16" aria-hidden="true"><use href="#sv-mark"/></svg>Fill in ticket</button>
+      <p class="muted pl-note" x-show="notReady" x-text="vReason"></p>
     </div>
   </template>
 
   <!-- ===== in a trade: chance it wins now (outlook.chance_now / model_chance / disagree; sparkline = this page's polls) ===== -->
-  <div class="pl-card pl-chance" x-show="ok() && pos()" role="group" aria-label="Chance it wins now">
+  <div class="pl-card pl-chance" x-show="inTrade" role="group" aria-label="Chance it wins now">
     <span class="pl-eyebrow">Chance it wins now</span>
     <div class="pl-chance-row">
-      <strong class="pl-chance-big num" :class="chanceTone()" :aria-label="chanceAria()" x-text="pct(look().chance_now)"></strong>
+      <strong class="pl-chance-big num" :class="chanceTone" :aria-label="chanceAria" x-text="chanceNowText"></strong>
       <div class="pl-chance-side" aria-hidden="true">
-        <b class="num" :class="chanceCls()" x-text="chanceText()"></b>
-        <span class="num">model says <b class="pl-model" x-text="pct(look().model_chance)"></b></span>
+        <b class="num" :class="chanceCls" x-text="chanceText"></b>
+        <span class="num">model says <b class="pl-model" x-text="modelChanceText"></b></span>
       </div>
     </div>
-    <p class="pl-disagree" x-show="disagreeText()" x-text="disagreeText()" role="status"></p>
+    <p class="pl-disagree" x-show="disagreeText" x-text="disagreeText" role="status"></p>
     <div class="pl-chance-spark">
-      <svg class="pl-spark" role="img" :aria-label="chanceLabel()" viewBox="0 0 300 32" preserveAspectRatio="none" :class="chanceTone()">
-        <path class="pl-spark-mid" :d="chanceBase()"></path>
-        <path class="pl-spark-line" :d="chancePath()"></path>
-        <path class="pl-spark-dot" :d="chanceDot()"></path>
+      <svg class="pl-spark" role="img" :aria-label="chanceLabel" viewBox="0 0 300 32" preserveAspectRatio="none" :class="chanceTone">
+        <path class="pl-spark-mid" :d="chanceBase"></path>
+        <path class="pl-spark-line" :d="chancePath"></path>
+        <path class="pl-spark-dot" :d="chanceDot"></path>
       </svg>
-      <i class="pl-chance-entry" x-show="chanceBaseTop() != null" :style="'top:' + (chanceBaseTop() || '0')" aria-hidden="true">entry</i>
+      <i class="pl-chance-entry" x-show="hasChanceBase" :style="chanceBaseStyle" aria-hidden="true">entry</i>
     </div>
-    <small class="num" x-text="chanceFoot()"></small>
+    <small class="num" x-text="chanceFoot"></small>
   </div>
 
   <!-- ===== the live "price to beat" chart card (boards 13 and 14; web/playchart.js) ===== -->
-  <div class="pl-card pl-ptb" x-show="ok()" :class="danger() ? 'pl-danger' : ''">
+  <div class="pl-card pl-ptb" x-show="ok" :class="dangerCls">
     <div class="pl-ptb-head">
-      <b class="pl-ptb-btc num" x-text="'BTC ' + ptbBtc()"></b>
-      <span class="pl-ptb-chip num" x-show="ptbChip()" :class="ptbCls()" x-text="ptbChip()"></span>
+      <b class="pl-ptb-btc num" x-text="ptbBtcText"></b>
+      <span class="pl-ptb-chip num" x-show="ptbChip" :class="ptbCls" x-text="ptbChip"></span>
     </div>
-    <small class="pl-ptb-sub num" x-text="ptbSub()"></small>
-    <div class="pl-sigs" x-show="!pos()" role="group" aria-label="Signals: tap one to read what it means">
-      <template x-for="ch in sigChips()" :key="ch.key">
-        <button type="button" class="pl-sigchip num" :class="ch.cls" :aria-pressed="sigTip === ch.tip ? 'true' : 'false'" @click="sigTap(ch)" x-text="ch.text"></button>
+    <small class="pl-ptb-sub num" x-text="ptbSub"></small>
+    <div class="pl-sigs" x-show="noPos" role="group" aria-label="Signals: tap one to read what it means">
+      <template x-for="ch in sigChips" :key="ch.key">
+        <button type="button" class="pl-sigchip num" :class="chipCls" :aria-pressed="sigPressed" @click="sigTapCh" x-text="ch.text"></button>
       </template>
     </div>
-    <p class="pl-sigtip" x-show="sigTip && !pos()" x-text="sigTip" role="status"></p>
+    <p class="pl-sigtip" x-show="showSigTip" x-text="sigTip" role="status"></p>
     <p class="pl-lvlnote" x-show="levels">Levels are reference lines, not signals — in our tests chart levels didn't predict these markets.</p>
     <div class="pl-ptb-box">
-      <div x-ref="ptb" class="pl-ptb-chart" role="img" :aria-label="ptbLabel()"></div>
-      <span class="pl-ptb-close" x-show="closeX != null && !ptbEmpty()" :style="'left:' + (closeX || 0) + 'px'" aria-hidden="true"><i x-text="'close ' + endHm()"></i></span>
+      <div x-ref="ptb" class="pl-ptb-chart" role="img" :aria-label="ptbLabel"></div>
+      <span class="pl-ptb-close" x-show="showClose" :style="closeStyle" aria-hidden="true"><i x-text="closeText"></i></span>
       <p class="pl-ptb-read num" x-show="readout" x-text="readout" role="status"></p>
-      <div class="pl-wempty" x-show="ptbEmpty()">Chart appears once this window has data.</div>
+      <div class="pl-wempty" x-show="ptbEmpty">Chart appears once this window has data.</div>
     </div>
     <!-- the chart's key (desktop): shown only while the price to beat is known, since the fills need it -->
-    <div class="pl-legend" x-show="v && v.btc && v.btc.strike != null"><span><i class="lg-strike"></i>Price to beat</span><span><i class="lg-up"></i>Above: ▲ UP wins</span><span><i class="lg-down"></i>Below: ▼ DOWN wins</span><span x-show="coneOk()"><i class="lg-cone"></i>Likely close range (1σ / 2σ): random walk at the current volatility</span></div>
-    <p class="pl-lvlnote amber" x-show="coneNote()" x-text="coneNote()" role="status"></p>
-    <div class="pl-oddsbox" x-show="oddsOn()">
-      <p class="pl-oddshead"><small x-text="oddsLabel() + (pos() && autoSell() != null ? ' · auto-sell ' + c(autoSell()) : '')"></small><b class="num" x-text="oddsNow()"></b></p>
-      <div x-ref="odds" class="pl-odds" :class="pos() ? 'pl-odds-trade' : ''"></div>
+    <div class="pl-legend" x-show="hasStrike"><span><i class="lg-strike"></i>Price to beat</span><span><i class="lg-up"></i>Above: ▲ UP wins</span><span><i class="lg-down"></i>Below: ▼ DOWN wins</span><span x-show="coneOk"><i class="lg-cone"></i>Likely close range (1σ / 2σ): random walk at the current volatility</span></div>
+    <p class="pl-lvlnote amber" x-show="coneNote" x-text="coneNote" role="status"></p>
+    <div class="pl-oddsbox" x-show="oddsOn">
+      <p class="pl-oddshead"><small x-text="oddsHead"></small><b class="num" x-text="oddsNow"></b></p>
+      <div x-ref="odds" class="pl-odds" :class="oddsCls"></div>
       <small x-show="oddsEmpty">No recorded prices for this window yet.</small>
     </div>
     <div class="pl-ptb-foot">
-      <button type="button" class="pl-tog" x-show="!pos()" :aria-pressed="odds ? 'true' : 'false'" @click="toggleOdds()">Odds</button>
-      <button type="button" class="pl-tog" :aria-pressed="levels ? 'true' : 'false'" @click="toggleLevels()">Levels</button>
+      <button type="button" class="pl-tog" x-show="noPos" :aria-pressed="oddsPressed" @click="toggleOdds">Odds</button>
+      <button type="button" class="pl-tog" :aria-pressed="levelsPressed" @click="toggleLevels">Levels</button>
     </div>
-    <small class="pl-hint" x-show="!pos()">Drag a finger across the chart to read any moment.</small>
+    <small class="pl-hint" x-show="noPos">Drag a finger across the chart to read any moment.</small>
   </div>
 
   <!-- ===== in a trade: hold vs sell now (outlook.hold_value / sell_now / give_up; advice payoffs and cost) ===== -->
-  <div class="pl-card pl-holdsell" x-show="ok() && pos()" role="group" aria-label="Hold or sell now">
+  <div class="pl-card pl-holdsell" x-show="inTrade" role="group" aria-label="Hold or sell now">
     <div>
-      <span class="pl-eyebrow" x-text="holdAt()"></span>
-      <b class="num" x-text="holdValue()"></b>
-      <span class="num"><b class="pl-up" x-text="holdWins()"></b> if it wins</span>
-      <span class="num"><b class="pl-down" x-text="holdLoses()"></b> if not</span>
+      <span class="pl-eyebrow" x-text="holdAt"></span>
+      <b class="num" x-text="holdValue"></b>
+      <span class="num"><b class="pl-up" x-text="holdWins"></b> if it wins</span>
+      <span class="num"><b class="pl-down" x-text="holdLoses"></b> if not</span>
     </div>
     <div>
       <span class="pl-eyebrow">Sell now</span>
-      <b class="num" x-text="sellNow()"></b>
-      <span class="num"><b :class="sellVsCost() == null ? '' : sellVsCost() >= 0 ? 'pl-up' : 'pl-down'" x-text="sUsd(sellVsCost())"></b> vs cost</span>
-      <span class="num" x-text="'spread + fee ≈ ' + sellGiveUp()"></span>
+      <b class="num" x-text="sellNow"></b>
+      <span class="num"><b :class="sellVsCls" x-text="sellVsText"></b> vs cost</span>
+      <span class="num" x-text="giveUpText"></span>
     </div>
   </div>
 
   <!-- ===== in a trade: HOLD / CONSIDER EXIT in one sentence (display only) ===== -->
-  <div class="pl-card pl-advline" x-show="ok() && pos()" :class="pos() && pos().advice ? advCls(pos().advice) : ''" role="status">
-    <p><b x-text="pos() && pos().advice ? pos().advice.action : ''"></b> · <span x-text="watchLine()"></span></p>
+  <div class="pl-card pl-advline" x-show="inTrade" :class="advLineCls" role="status">
+    <p><b x-text="advAction"></b> · <span x-text="watchLine"></span></p>
   </div>
-  <template x-if="cpHold()">
-        <details class="sv-ask" :class="cpHold().tone === 'warn' ? 'sv-warn' : ''" :aria-label="'Ask Settleview: ' + cpHold().text">
-          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview</span><span class="sv-say" x-text="cpHold().text"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
+  <template x-if="cpHold">
+        <details class="sv-ask" :class="cpHoldCls" :aria-label="cpHoldAria">
+          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview</span><span class="sv-say" x-text="cpHoldText"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
           <div class="sv-why num">
-            <div class="sv-prog" x-show="cpHold().kind === 'setup'" role="img" :aria-label="Math.round((cpHold().progress || 0) * 100) + '% of the way'"><span :style="'width:' + Math.round((cpHold().progress || 0) * 100) + '%'"></span></div>
-            <ul><template x-for="(d, i) in cpHold().details" :key="i"><li x-text="d"></li></template></ul>
+            <div class="sv-prog" x-show="cpHoldSetup" role="img" :aria-label="cpHoldProgAria"><span :style="cpHoldProgStyle"></span></div>
+            <ul><template x-for="(d, i) in cpHoldDetails" :key="i"><li x-text="d"></li></template></ul>
           </div>
         </details>
       </template>
 
 
   <!-- ===== sticky bottom bar ===== -->
-  <div class="pl-bottom" x-show="ok()" :class="stale() ? 'pl-stale' : ''" role="region" aria-label="Order ticket">
+  <div class="pl-bottom" x-show="ok" :class="staleCls" role="region" aria-label="Order ticket">
     <!-- one-tap retry after a "price moved" refusal of a buy: the live ask, 15 s, same tab / ticker / side / amount -->
-    <div class="pl-retry" x-show="retryShow()" x-cloak role="group" aria-label="Retry the buy at the new price">
-      <p class="pl-retry-head num" aria-live="polite" x-text="retryHead()"></p>
-      <button type="button" class="pl-btn pl-retry-go" :class="retry && retry.side === 'DOWN' ? 'pl-retry-down' : 'pl-retry-up'"
-        @click="retryBuy()" :disabled="!!retryWhy()" x-text="retryLabel()"></button>
-      <p class="pl-retry-note num" x-text="retryWhy() || retryNote()"></p>
-      <button type="button" class="pl-link pl-retry-x" @click="retry = null">Dismiss</button>
+    <div class="pl-retry" x-show="retryShow" x-cloak role="group" aria-label="Retry the buy at the new price">
+      <p class="pl-retry-head num" aria-live="polite" x-text="retryHead"></p>
+      <button type="button" class="pl-btn pl-retry-go" :class="retryCls"
+        @click="retryBuy" :disabled="retryOff" x-text="retryLabel"></button>
+      <p class="pl-retry-note num" x-text="retryFoot"></p>
+      <button type="button" class="pl-link pl-retry-x" @click="dismissRetry">Dismiss</button>
     </div>
-    <div class="pl-sidepick" role="radiogroup" aria-label="Side to buy" x-show="!pos()">
-      <template x-for="s in ['UP', 'DOWN']" :key="s">
-        <button type="button" role="radio" class="pl-sidebtn" :class="(s === 'UP' ? 'pl-buy-up' : 'pl-buy-down') + (sideNow() === s ? ' on' : '')"
-          :aria-checked="sideNow() === s ? 'true' : 'false'" :aria-label="sideLabel(s)" @click="choose(s)"><b x-text="sideName(s)"></b><small class="num" x-text="c(side(s).ask) + (primary(s) ? ' · the call' : '')"></small></button>
+    <div class="pl-sidepick" role="radiogroup" aria-label="Side to buy" x-show="noPos">
+      <template x-for="s in SIDES" :key="s">
+        <button type="button" role="radio" class="pl-sidebtn" :class="sideBtnCls"
+          :aria-checked="sideChecked" :aria-label="sideLabelS" @click="chooseS"><b x-text="sideNameS"></b><small class="num" x-text="sideAskS"></small></button>
       </template>
     </div>
     <!-- the amount: chips and Other, with the contract count beside them -->
-    <div class="pl-amts" x-show="!pos()" role="group" aria-label="Amount per trade">
+    <div class="pl-amts" x-show="noPos" role="group" aria-label="Amount per trade">
       <template x-for="x in CHIPS" :key="x">
-        <button type="button" class="pl-chipbtn" :aria-pressed="!other && stake() === x ? 'true' : 'false'" :disabled="chipOff(x)" @click="pickChip(x)" x-text="'$' + x"></button>
+        <button type="button" class="pl-chipbtn" :aria-pressed="chipPressed" :disabled="chipOffX" @click="pickChipX" x-text="chipText"></button>
       </template>
-      <button type="button" class="pl-chipbtn" :aria-pressed="other ? 'true' : 'false'" @click="pickOther()">Other</button>
-      <span class="pl-amts-n num" x-text="countLine()"></span>
+      <button type="button" class="pl-chipbtn" :aria-pressed="otherPressed" @click="pickOther">Other</button>
+      <span class="pl-amts-n num" x-text="countLine"></span>
     </div>
-    <label class="pl-amount" x-show="other && !pos()"><span>$</span><input id="pl-amount" type="text" inputmode="decimal" autocomplete="off" x-model="stakeInput" @change="saveStake()" aria-label="Amount in dollars"></label>
-    <div class="sv-filled num" x-show="filledLine()" role="status"><span class="sv-by"><svg width="14" height="14" aria-hidden="true"><use href="#sv-mark"/></svg>Filled in</span><span x-text="filledLine()"></span>
-      <button type="button" class="sv-undo" @click="undoFill()" :disabled="busy || sliding">Undo</button></div>
+    <label class="pl-amount" x-show="showOther"><span>$</span><input id="pl-amount" type="text" inputmode="decimal" autocomplete="off" x-model="stakeModel" @change="saveStake" aria-label="Amount in dollars"></label>
+    <div class="sv-filled num" x-show="filledLine" role="status"><span class="sv-by"><svg width="14" height="14" aria-hidden="true"><use href="#sv-mark"/></svg>Filled in</span><span x-text="filledLine"></span>
+      <button type="button" class="sv-undo" @click="undoFill" :disabled="undoOff">Undo</button></div>
     <!-- one secondary line: what bounds this amount when it is over a cap, else the order's terms -->
-    <p class="pl-slideinfo num" :class="infoWarn() ? 'pl-warn' : ''" x-show="infoLine()" x-text="infoLine()"></p>
-    <p class="pl-slideinfo" x-show="pos()">Sell needs a 70% slide. If the bid drops over 2¢ mid-slide it snaps back.</p>
+    <p class="pl-slideinfo num" :class="infoCls" x-show="infoLine" x-text="infoLine"></p>
+    <p class="pl-slideinfo" x-show="pos">Sell needs a 70% slide. If the bid drops over 2¢ mid-slide it snaps back.</p>
     <!-- the check while you slide: one amber line, only when there is something to warn about; it never blocks the slide -->
-    <template x-if="cpSlideWarn()">
-        <details class="sv-ask sv-check" :class="cpSlideWarn().tone === 'warn' ? 'sv-warn' : ''" :aria-label="'Check: ' + cpSlideWarn().text">
-          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview · check</span><span class="sv-say" x-text="cpSlideWarn().text"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
+    <template x-if="cpSlideWarn">
+        <details class="sv-ask sv-check" :class="cpCheckCls" :aria-label="cpCheckAria">
+          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview · check</span><span class="sv-say" x-text="cpCheckText"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
           <div class="sv-why num">
-            <div class="sv-prog" x-show="cpSlideWarn().kind === 'setup'" role="img" :aria-label="Math.round((cpSlideWarn().progress || 0) * 100) + '% of the way'"><span :style="'width:' + Math.round((cpSlideWarn().progress || 0) * 100) + '%'"></span></div>
-            <ul><template x-for="(d, i) in cpSlideWarn().details" :key="i"><li x-text="d"></li></template></ul>
+            <div class="sv-prog" x-show="cpCheckSetup" role="img" :aria-label="cpCheckProgAria"><span :style="cpCheckProgStyle"></span></div>
+            <ul><template x-for="(d, i) in cpCheckDetails" :key="i"><li x-text="d"></li></template></ul>
           </div>
         </details>
       </template>
-    <div class="pl-slide" x-ref="track" :class="(pos() ? 'pl-slide-exit' : (sideNow() === 'UP' ? 'pl-slide-up' : sideNow() === 'DOWN' ? 'pl-slide-down' : 'pl-slide-none')) + (slideOk() && !busy ? '' : ' off') + (pulse ? ' pl-pulse' : '') + (alert ? ' pl-alert' : '')">
-      <div class="pl-slide-fill" :style="'width:' + (slideX + 60) + 'px'"></div>
-      <span class="pl-slide-text" aria-live="polite"><span x-text="slideText()"></span><small x-show="slideSub()" x-text="slideSub()"></small></span>
-      <button type="button" class="pl-slide-knob" :style="'transform:translateX(' + slideX + 'px)'"
-        :aria-label="slideAria()" :disabled="!slideOk() || busy"
-        @pointerdown="slideStart($event)" @pointermove="slideMove($event)" @pointerup="slideEnd()" @pointercancel="slideX = 0; sliding = false">&#8250;&#8250;</button>
+    <div class="pl-slide" x-ref="track" :class="slideCls">
+      <div class="pl-slide-fill" :style="slideFillStyle"></div>
+      <span class="pl-slide-text" aria-live="polite"><span x-text="slideText"></span><small x-show="slideSub" x-text="slideSub"></small></span>
+      <button type="button" class="pl-slide-knob" :style="knobStyle"
+        :aria-label="slideAria" :disabled="knobOff"
+        @pointerdown="slideStart" @pointermove="slideMove" @pointerup="slideEnd" @pointercancel="slideCancel">&#8250;&#8250;</button>
     </div>
   </div>
 
   <!-- ===== auto-sell sheet (after a fill; optional; sits above the bottom bar so slide-to-sell stays usable) ===== -->
-  <div class="pl-sheet pl-tpsheet" x-show="tpSheet && pos()" x-cloak role="dialog" aria-labelledby="pl-tp-title">
+  <div class="pl-sheet pl-tpsheet" x-show="showTpSheet" x-cloak role="dialog" aria-labelledby="pl-tp-title">
     <h2 id="pl-tp-title">Auto sell</h2>
     <small class="muted">Sell price</small>
-    <input type="range" class="pl-range" max="99" step="1" :min="tpLo()" :value="tpCents" @input="tpCents = Number($event.target.value)" aria-label="Auto-sell price in cents" :aria-valuetext="tpLabel()">
-    <p class="pl-tplabel" x-text="tpLabel()"></p>
+    <input type="range" class="pl-range" max="99" step="1" :min="tpLo" :value="tpCents" @input="tpInput" aria-label="Auto-sell price in cents" :aria-valuetext="tpLabel">
+    <p class="pl-tplabel" x-text="tpLabel"></p>
     <p class="muted pl-note">Our data: riding beat an 85¢ auto-sell by about 5¢ a contract (5.3¢ over 222 held-out trades).</p>
-    <label class="pl-check pl-slcheck"><input id="pl-slon" type="checkbox" x-model="slOn"> Stop-loss (optional)</label>
-    <input type="range" class="pl-range" x-show="slOn" min="5" max="300" step="5" :value="slDist" @input="slDist = Number($event.target.value)" aria-label="Stop-loss distance from BTC now, in dollars" :aria-valuetext="slLabel()">
-    <p class="pl-tplabel" :class="slOn ? 'pl-down' : 'muted'" x-text="slLabel()"></p>
+    <label class="pl-check pl-slcheck"><input id="pl-slon" type="checkbox" x-model="slOnModel"> Stop-loss (optional)</label>
+    <input type="range" class="pl-range" x-show="slOn" min="5" max="300" step="5" :value="slDist" @input="slInput" aria-label="Stop-loss distance from BTC now, in dollars" :aria-valuetext="slLabel">
+    <p class="pl-tplabel" :class="slCls" x-text="slLabel"></p>
     <p class="pl-msg red" x-show="tpMsg" x-text="tpMsg" role="alert"></p>
     <div class="pl-grid2">
-      <button type="button" class="pl-btn pl-yes" @click="sheetSave()" :disabled="tpBusy">Submit</button>
-      <button type="button" class="pl-btn" @click="tpClose()" :disabled="tpBusy">Close</button>
+      <button type="button" class="pl-btn pl-yes" @click="sheetSave" :disabled="tpBusy">Submit</button>
+      <button type="button" class="pl-btn" @click="tpClose" :disabled="tpBusy">Close</button>
     </div>
-    <button type="button" class="pl-link" x-show="tpHas()" @click="tpRemove()" :disabled="tpBusy">Remove auto-sell (ride to settlement)</button>
-    <label class="pl-check"><input type="checkbox" x-model="tpNoMore"> Don't show this again</label>
+    <button type="button" class="pl-link" x-show="tpHas" @click="tpRemove" :disabled="tpBusy">Remove auto-sell (ride to settlement)</button>
+    <label class="pl-check"><input type="checkbox" x-model="tpNoMoreModel"> Don't show this again</label>
   </div>
 
   <!-- ===== settings (the gear): kill switch state, and phone access (PIN) on the PC only ===== -->
-  <div class="pl-dim" x-show="settings" x-cloak @click="settings = false"></div>
-  <div id="pl-settings" class="pl-sheet pl-set" x-show="settings" x-cloak role="dialog" aria-modal="true" aria-labelledby="pl-set-title" @keydown.escape="settings = false">
+  <div class="pl-dim" x-show="settings" x-cloak @click="closeSettings"></div>
+  <div id="pl-settings" class="pl-sheet pl-set" x-show="settings" x-cloak role="dialog" aria-modal="true" aria-labelledby="pl-set-title" @keydown.escape="closeSettings">
     <h2 id="pl-set-title">Settings</h2>
     <section class="pl-set-sec" aria-labelledby="pl-set-kill">
       <h3 id="pl-set-kill">Kill switch</h3>
-      <p class="pl-note" x-text="killState()"></p>
-      <button type="button" class="pl-btn" :class="killed() ? '' : 'pl-btn-kill'" @click="toggleKill()" :disabled="killBusy || resumeLocked()" x-text="killed() ? 'Resume trading' : 'KILL SWITCH: stop all new trading'"></button>
-      <p class="pl-note muted" x-show="resumeLocked()">Turning the kill switch off: change this on the PC.</p>
+      <p class="pl-note" x-text="killState"></p>
+      <button type="button" class="pl-btn" :class="killBtnCls" @click="toggleKill" :disabled="killOff" x-text="killBtnText"></button>
+      <p class="pl-note muted" x-show="resumeLocked">Turning the kill switch off: change this on the PC.</p>
       <small>One switch for every strategy and venue (the KILL button at the top is the same switch). It stops new entries and ends auto-approve sessions; open positions keep their take profit and stop.</small>
     </section>
-    <section class="pl-set-sec pl-lim" aria-labelledby="pl-set-lim" x-data="playLimitsCard()" @pl-settings.window="lmLoad()">
+    <section class="pl-set-sec pl-lim" aria-labelledby="pl-set-lim" x-data="playLimitsCard" @pl-settings.window="lmLoad">
       <h3 id="pl-set-lim">Trade limits</h3>
-      <p class="pl-note muted" x-show="!lmTried">Checking…</p>
-      <p class="error-box" x-show="lmTried && !lm" x-text="'Could not load your trade limits: ' + lmErr" role="alert"></p>
+      <p class="pl-note muted" x-show="lmChecking">Checking…</p>
+      <p class="error-box" x-show="lmFailed" x-text="lmErrText" role="alert"></p>
       <template x-if="lm">
         <div class="pl-lim-body">
-          <p class="error-box" x-show="!lm.readable" x-text="lm.error" role="alert"></p>
+          <p class="error-box" x-show="lmUnreadable" x-text="lmError" role="alert"></p>
           <dl class="pl-lim-now">
-            <div><dt>Per trade</dt><dd class="num" x-text="lmNow('per_trade')"></dd></div>
-            <div><dt>Per day</dt><dd class="num" x-text="lmNow('per_day')"></dd></div>
+            <div><dt>Per trade</dt><dd class="num" x-text="lmNowTrade"></dd></div>
+            <div><dt>Per day</dt><dd class="num" x-text="lmNowDay"></dd></div>
           </dl>
-          <p class="pl-note muted num" x-text="lmUsed(v)"></p>
+          <p class="pl-note muted num" x-text="lmUsedText"></p>
           <div class="pl-lim-edit">
             <div class="pl-lim-field">
-              <label class="pl-check"><input type="checkbox" x-model="lmNoTrade" @change="lmEdited()" :disabled="pc === false && !lmNoTrade"> No per-trade limit</label>
-              <label class="pl-amount" x-show="!lmNoTrade"><span>$</span><input id="pl-lim-trade" type="text" inputmode="decimal" autocomplete="off" x-model="lmTrade" @input="lmEdited()" aria-label="Per-trade limit in dollars"></label>
+              <label class="pl-check"><input type="checkbox" x-model="lmNoTradeModel" @change="lmEdited" :disabled="lmNoTradeOff"> No per-trade limit</label>
+              <label class="pl-amount" x-show="lmTradeShown"><span>$</span><input id="pl-lim-trade" type="text" inputmode="decimal" autocomplete="off" x-model="lmTradeModel" @input="lmEdited" aria-label="Per-trade limit in dollars"></label>
             </div>
             <div class="pl-lim-field">
-              <label class="pl-check"><input type="checkbox" x-model="lmNoDay" @change="lmEdited()" :disabled="pc === false && !lmNoDay"> No per-day limit</label>
-              <label class="pl-amount" x-show="!lmNoDay"><span>$</span><input id="pl-lim-day" type="text" inputmode="decimal" autocomplete="off" x-model="lmDay" @input="lmEdited()" aria-label="Per-day limit in dollars"></label>
+              <label class="pl-check"><input type="checkbox" x-model="lmNoDayModel" @change="lmEdited" :disabled="lmNoDayOff"> No per-day limit</label>
+              <label class="pl-amount" x-show="lmDayShown"><span>$</span><input id="pl-lim-day" type="text" inputmode="decimal" autocomplete="off" x-model="lmDayModel" @input="lmEdited" aria-label="Per-day limit in dollars"></label>
             </div>
           </div>
-          <button type="button" class="pl-btn pl-yes" x-show="!lmNeed" @click="lmSave(false)" :disabled="lmBusy" x-text="lmBusy ? 'Saving…' : 'Save limits'"></button>
+          <button type="button" class="pl-btn pl-yes" x-show="lmNoNeed" @click="lmSaveNow" :disabled="lmBusy" x-text="lmSaveText"></button>
           <template x-if="lmNeed">
             <div class="pl-lim-confirm" role="group" aria-labelledby="pl-lim-cf">
-              <p class="pl-note" id="pl-lim-cf" x-text="lmNeed.reason"></p>
-              <label class="field" for="pl-lim-phrase">Type: <b class="mono" x-text="lmNeed.confirm_phrase"></b></label>
-              <input id="pl-lim-phrase" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" x-model="lmPhrase">
+              <p class="pl-note" id="pl-lim-cf" x-text="lmNeedReason"></p>
+              <label class="field" for="pl-lim-phrase">Type: <b class="mono" x-text="lmNeedPhrase"></b></label>
+              <input id="pl-lim-phrase" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" x-model="lmPhraseModel">
               <div class="pl-grid2">
-                <button type="button" class="pl-btn pl-yes" @click="lmSave(true)" :disabled="lmBusy || !lmNeed.confirm_phrase || lmPhrase !== lmNeed.confirm_phrase">Confirm and save</button>
-                <button type="button" class="pl-btn" @click="lmEdited()" :disabled="lmBusy">Cancel</button>
+                <button type="button" class="pl-btn pl-yes" @click="lmSaveConfirmed" :disabled="lmConfirmOff">Confirm and save</button>
+                <button type="button" class="pl-btn" @click="lmEdited" :disabled="lmBusy">Cancel</button>
               </div>
             </div>
           </template>
           <p class="pl-note" :class="lmMsgCls" x-show="lmMsg" x-text="lmMsg" role="status"></p>
           <p class="pl-note">The per-day limit is one combined total for the day across Kalshi, Polymarket and perps. A dollar means the stake for event contracts and the committed collateral for perps (the per-trade limit caps the collateral of each perps entry or add). The per-window limit does not apply to perps.</p>
           <small>Lowering a limit saves at once; raising or removing one asks you to type a confirmation. In production every order must also fit your venue cash.</small>
-          <p class="pl-note muted" x-show="pc === false">Raising or removing a limit, or widening the market protection: change this on the PC.</p>
+          <p class="pl-note muted" x-show="phone">Raising or removing a limit, or widening the market protection: change this on the PC.</p>
           <div class="pl-band">
             <small id="pl-band-l">Market protection: a Market buy fills at most this far over the ask you saw</small>
-            <p class="error-box" x-show="lm.market_band && !lm.market_band.readable" x-text="lm.market_band && lm.market_band.error" role="alert"></p>
+            <p class="error-box" x-show="bandUnreadable" x-text="bandError" role="alert"></p>
             <div class="pl-chips" role="radiogroup" aria-labelledby="pl-band-l">
-              <template x-for="x in bandChoices()" :key="String(x)">
-                <button type="button" role="radio" class="pl-chipbtn" :aria-checked="bandIs(x) ? 'true' : 'false'" :aria-pressed="bandIs(x) ? 'true' : 'false'" :disabled="lmBusy || (pc === false && bandWider(x))" @click="bandSave(x)" x-text="x == null ? 'Up to 99¢' : '+' + x + '¢'"></button>
+              <template x-for="x in bandChoices" :key="bandKey">
+                <button type="button" role="radio" class="pl-chipbtn" :aria-checked="bandChecked" :aria-pressed="bandChecked" :disabled="bandOff" @click="bandSaveX" x-text="bandText"></button>
               </template>
             </div>
             <small class="muted">The worst case shown above the slide uses this. A wider band fills more often in a fast move; the order may cost up to that much more per contract. Default +15¢.</small>
             <p class="pl-note" :class="bandMsgCls" x-show="bandMsg" x-text="bandMsg" role="status"></p>
           </div>
-          <template x-if="lmHistory().length">
+          <template x-if="lmHasHistory">
             <div class="pl-lim-hist">
               <small class="muted">Recent changes</small>
               <ul>
-                <template x-for="h in lmHistory()" :key="h.k">
-                  <li><span class="muted num" x-text="h.when"></span> <b :class="h.up ? 'amber' : ''" x-text="h.word"></b> <span class="num" x-text="h.text"></span></li>
+                <template x-for="h in lmHistory" :key="h.k">
+                  <li><span class="muted num" x-text="h.when"></span> <b :class="histCls" x-text="h.word"></b> <span class="num" x-text="h.text"></span></li>
                 </template>
               </ul>
             </div>
@@ -414,18 +414,18 @@
       <h3 id="pl-set-sv">Ask Settleview</h3>
       <div class="pl-seg pl-seg-sm sv-mode" role="radiogroup" aria-label="Ask Settleview mode">
         <template x-for="m in CP_MODES" :key="m">
-          <button type="button" role="radio" :aria-checked="cpMode === m ? 'true' : 'false'" @click="setCpMode(m)" x-text="CP_NAMES[m]"></button>
+          <button type="button" role="radio" :aria-checked="cpModeChecked" @click="setCpModeM" x-text="cpModeName"></button>
         </template>
       </div>
-      <p class="pl-note amber" x-show="cpUnknown != null" x-text="'The saved Ask Settleview mode (“' + cpUnknown + '”) was not recognised, so it is Off. Pick one to replace it.'" role="status"></p>
+      <p class="pl-note amber" x-show="hasCpUnknown" x-text="cpUnknownText" role="status"></p>
       <details class="sv-warnset">
-        <summary><span>Warnings</span><small x-text="cpWarnCount()"></small></summary>
+        <summary><span>Warnings</span><small x-text="cpWarnCount"></small></summary>
         <template x-for="k in CP_WARNS" :key="k">
-          <label class="pl-check"><input type="checkbox" role="switch" :checked="cpWarnOn(k)" @change="toggleCpWarn(k)"> <span x-text="CP_WARN_NAMES[k]"></span></label>
+          <label class="pl-check"><input type="checkbox" role="switch" :checked="cpWarnOnK" @change="toggleCpWarnK"> <span x-text="cpWarnName"></span></label>
         </template>
       </details>
-      <p class="pl-note amber" x-show="cpWarnUnknown != null" x-text="'The saved warning switches (“' + cpWarnUnknown + '”) were not recognised, so all are on. Tap one to replace them.'" role="status"></p>
-      <small x-text="cpModeNote()"></small>
+      <p class="pl-note amber" x-show="hasCpWarnUnknown" x-text="cpWarnUnknownText" role="status"></p>
+      <small x-text="cpModeNote"></small>
       <small>Never places, approves or cancels orders. Runs only while Play is open.</small>
     </section>
     <section class="pl-set-sec" aria-labelledby="pl-set-theme">
@@ -433,63 +433,63 @@
       <fieldset class="pl-seg pl-theme">
         <legend>Theme</legend>
         <template x-for="m in THEMES" :key="m">
-          <label><input type="radio" name="pl-theme" :value="m" :checked="themeMode === m" @change="setTheme(m)"><span x-text="THEME_NAMES[m]"></span></label>
+          <label><input type="radio" name="pl-theme" :value="m" :checked="themeChecked" @change="setThemeM"><span x-text="themeName"></span></label>
         </template>
       </fieldset>
-      <p class="pl-note amber" x-show="themeUnknown != null" x-text="'The saved theme (“' + themeUnknown + '”) was not recognised, so System is used. Pick one to replace it.'" role="status"></p>
+      <p class="pl-note amber" x-show="hasThemeUnknown" x-text="themeUnknownText" role="status"></p>
       <p class="pl-note amber" x-show="themeMsg" x-text="themeMsg" role="status"></p>
       <small>System follows this device's light or dark setting.</small>
     </section>
-    <section class="pl-set-sec" aria-labelledby="pa-title" x-data="phoneAccessCard()" @pl-settings.window="load()">
-      <h3 id="pa-title">Phone access <span class="pa-pill" x-show="a" :class="a && a.pin_set ? 'pa-on' : 'pa-off'" x-text="a && a.pin_set ? 'On' : (a && a.reset_needed ? 'New PIN needed' : 'Off')"></span></h3>
-      <p class="pl-note muted" x-show="!tried">Checking…</p>
-      <p class="pl-note muted" x-show="tried && !a" x-text="'Phone access (the PIN): change this on the PC (' + refused + ')'"></p>
+    <section class="pl-set-sec" aria-labelledby="pa-title" x-data="phoneAccessCard" @pl-settings.window="load">
+      <h3 id="pa-title">Phone access <span class="pa-pill" x-show="a" :class="paPillCls" x-text="paPillText"></span></h3>
+      <p class="pl-note muted" x-show="paChecking">Checking…</p>
+      <p class="pl-note muted" x-show="paRefused" x-text="paRefusedText"></p>
       <template x-if="a">
         <div class="pa-body">
           <p class="pl-note muted">Use Play from your phone on the home network or VPN. Only this PC can change these settings. No HTTPS: never port-forward it.</p>
-          <p class="pl-note amber" x-show="a.reset_needed" role="status">Phone access needs a new 6–8 digit PIN — set it on the PC. The old PIN (set under the 4-digit rule) no longer works.</p>
-          <p class="pl-note amber" x-show="a.note" x-text="a.note"></p>
+          <p class="pl-note amber" x-show="paResetNeeded" role="status">Phone access needs a new 6–8 digit PIN — set it on the PC. The old PIN (set under the 4-digit rule) no longer works.</p>
+          <p class="pl-note amber" x-show="paNote" x-text="paNote"></p>
           <div class="pa-pins">
             <label class="field" for="pa-pin">PIN (6–8 digits)</label>
-            <input id="pa-pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" x-model="pin">
+            <input id="pa-pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" x-model="pinModel">
             <label class="field" for="pa-pin2">PIN again</label>
-            <input id="pa-pin2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" x-model="pin2">
-            <p class="pl-note red" x-show="pin2 && pin !== pin2">The two PINs do not match.</p>
-            <p class="pl-note red" x-show="pin && !/^[0-9]{6,8}$/.test(pin)">The PIN must be 6 to 8 digits.</p>
-            <button type="button" class="pl-btn pl-yes" @click="save()" :disabled="busy || !valid()" x-text="a.pin_set ? 'Change PIN' : 'Turn on phone access'"></button>
+            <input id="pa-pin2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" x-model="pin2Model">
+            <p class="pl-note red" x-show="pinMismatch">The two PINs do not match.</p>
+            <p class="pl-note red" x-show="pinBadFormat">The PIN must be 6 to 8 digits.</p>
+            <button type="button" class="pl-btn pl-yes" @click="save" :disabled="paSaveOff" x-text="paSaveText"></button>
           </div>
-          <template x-if="a.pin_set">
+          <template x-if="paPinSet">
             <div class="pa-on-box">
-              <p class="pl-note">Phone URL: <b class="mono" x-text="a.lan_url || 'unknown'"></b> <button type="button" class="pl-link" @click="copy()" :disabled="!a.lan_url" x-text="copied ? 'Copied' : 'Copy'"></button></p>
-              <p class="pl-note muted" x-show="!a.lan_url" x-text="a.how_to_find_ip"></p>
-              <p class="pl-note" x-text="'Phones signed in: ' + a.signed_in"></p>
+              <p class="pl-note">Phone URL: <b class="mono" x-text="paUrlText"></b> <button type="button" class="pl-link" @click="copy" :disabled="paNoUrl" x-text="paCopyText"></button></p>
+              <p class="pl-note muted" x-show="paNoUrl" x-text="paHowToFind"></p>
+              <p class="pl-note" x-text="paSignedIn"></p>
               <div class="pl-grid2">
-                <button type="button" class="pl-btn" @click="signOut()" :disabled="busy">Sign out all phones</button>
-                <button type="button" class="pl-btn" @click="clear()" :disabled="busy">Turn phone access off</button>
+                <button type="button" class="pl-btn" @click="signOut" :disabled="busy">Sign out all phones</button>
+                <button type="button" class="pl-btn" @click="clear" :disabled="busy">Turn phone access off</button>
               </div>
             </div>
           </template>
           <div class="pa-pc-box">
             <p class="pl-note muted">This browser is paired as the PC (no PIN). Pair another one with <span class="mono">ops pair-pc</span>.</p>
-            <button type="button" class="pl-btn" @click="signOutPc()" :disabled="busy">Sign out PC browsers</button>
+            <button type="button" class="pl-btn" @click="signOutPc" :disabled="busy">Sign out PC browsers</button>
           </div>
         </div>
       </template>
       <p class="pl-note" x-show="msg" x-text="msg" role="status"></p>
     </section>
-    <button type="button" class="pl-btn" @click="settings = false">Close</button>
+    <button type="button" class="pl-btn" @click="closeSettings">Close</button>
   </div>
 
   <!-- ===== confirm sheet (second tap) ===== -->
-  <div class="pl-dim" x-show="ticket" x-cloak @click="answer(false)"></div>
+  <div class="pl-dim" x-show="ticket" x-cloak @click="answerNo"></div>
   <div class="pl-sheet" x-show="ticket" x-cloak role="dialog" aria-modal="true" aria-labelledby="pl-sheet-title">
-    <h2 id="pl-sheet-title" x-text="sheetTitle()"></h2>
-    <p class="pl-mode pl-real" x-show="real()">REAL MONEY</p>
+    <h2 id="pl-sheet-title" x-text="sheetTitle"></h2>
+    <p class="pl-mode pl-real" x-show="real">REAL MONEY</p>
     <p class="pl-note amber pl-ticketwhy" x-show="ticketWhy" x-text="ticketWhy" role="alert"></p>
-    <dl class="pl-rows"><template x-for="row in sheetRows()" :key="row[0]"><div><dt x-text="row[0]"></dt><dd x-text="row[1]"></dd></div></template></dl>
-    <p class="muted pl-note" x-text="stale() ? 'Live prices stopped: confirm is off until they are back.' : 'Expires in ' + ticketLeft() + ' s'"></p>
-    <button type="button" class="pl-btn pl-yes" @click="answer(true)" :disabled="busy || ticketLeft() === 0 || stale()" x-text="confirmLabel()"></button>
-    <button type="button" class="pl-btn" @click="answer(false)" :disabled="busy">Cancel</button>
+    <dl class="pl-rows"><template x-for="row in sheetRows" :key="rowKey"><div><dt x-text="rowLabel"></dt><dd x-text="rowValue"></dd></div></template></dl>
+    <p class="muted pl-note" x-text="ticketFoot"></p>
+    <button type="button" class="pl-btn pl-yes" @click="answerYes" :disabled="confirmOff" x-text="confirmLabel"></button>
+    <button type="button" class="pl-btn" @click="answerNo" :disabled="busy">Cancel</button>
   </div>
 </section>
 <!-- ================= RECORD (design pass 2026-10-31): your results over today / the week / everything, from
