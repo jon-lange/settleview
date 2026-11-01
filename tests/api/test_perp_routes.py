@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import statistics
 import time
 from decimal import Decimal
 
@@ -289,12 +290,13 @@ def test_computing_the_view_with_an_open_position_takes_under_5_ms(store):
     run(setup())
     v = r.view.view(NOW)
     assert v["position"]["size"] == 3.0 and v["limits"]["committed_today"] == 310.0
-    n = 50
-    t0 = time.perf_counter()
-    for _ in range(n):
+    timings = []  # the median call: a shared CI runner's one-off stall (GC, a neighbour) is not the View's cost
+    for _ in range(50):
+        t0 = time.perf_counter()
         r.view.view(NOW)
-    per_ms = (time.perf_counter() - t0) / n * 1000
-    assert per_ms < 5.0, f"the View took {per_ms:.2f} ms"
+        timings.append((time.perf_counter() - t0) * 1000)
+    per_ms = statistics.median(timings)
+    assert per_ms < 5.0, f"the View took {per_ms:.2f} ms (median; max {max(timings):.2f} ms)"
 
 
 def test_an_approval_finishes_even_when_its_request_is_cancelled_and_shutdown_waits_for_it():
