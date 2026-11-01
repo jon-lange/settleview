@@ -385,7 +385,8 @@ docker compose up -d                            # the migrate job, the app, the 
 ```
 
 Between the third and the fourth line, recorders still running as `settleview_app` cannot write (they keep their rows
-in memory and retry, as in a database outage), so run the two back to back. Check:
+in memory and retry, as in a database outage), so run the two back to back. From Git Bash on Windows the third
+line needs `MSYS_NO_PATHCONV=1` in front ("Deploying", the least-privilege steps). Check:
 `docker compose exec postgres psql -U postgres -d settleview -c "\dn+ research"` names `settleview_recorder` as the
 owner. On Swarm run the same script with `docker exec` in the postgres task; on a managed server run the SQL inside
 `roles.sh` as the admin user (a member of `settleview_app` and `settleview_recorder`, so it may move the ownership).
@@ -740,7 +741,7 @@ from any host Python:
 | `ruff` | Ruff 0.17.1 (the `dev` extra) | any finding of the rules in `pyproject.toml` `[tool.ruff]`: pyflakes, pycodestyle errors, bugbear, pyupgrade, bandit (`S`), async, simplify |
 | `imports` | import-linter (the `dev` extra) | a broken contract in `.importlinter` (the layers; no I/O in domain and application; the Kalshi SDK only in the adapters; the supervisor never loads the app) |
 | `hadolint` | `hadolint/hadolint:v2.12.0` | a warning or error in `Dockerfile` or `deploy/dev/Dockerfile` |
-| `shellcheck` | `koalaman/shellcheck:v0.10.0` | a warning or error in `deploy/**/*.sh` |
+| `shellcheck` | `koalaman/shellcheck:v0.10.0` | a warning or error in `deploy/**/*.sh`; any finding (style included) in the git hooks, `.githooks/*` (POSIX sh) |
 | `trivy-image` | `aquasec/trivy:0.76.0` | a HIGH / CRITICAL vulnerability **with a fixed version** in the image (OS and Python packages), or a secret in it |
 | `trivy-config` | Trivy | a HIGH / CRITICAL misconfiguration (Trivy recognizes the Dockerfile; it has no checks for compose or systemd files) |
 | `trivy-fs` | Trivy | a secret in the repository (`.env*`, `secrets/`, `keys/`, `*.pem`, `*.key`, `compose.override.yaml`, `data/` and `.venv` are never read) |
@@ -788,8 +789,22 @@ ecosystem), so its security updates keep working.
 
 ## Deploying
 
-**Docker**: `git pull`, then `docker compose up -d --build` (with `GIT_SHA=$(git rev-parse HEAD)` in the shell, the
-image is labelled with its commit: `org.opencontainers.image.revision`, and telemetry's `service.version`). Compose stops the old app with SIGTERM (a clean shutdown,
+**Where the code comes from** (since 2026-11-01): GitHub's `main` (`origin`) is the source of truth
+(docs/PUBLISHING.md). The deploy checkout is a worktree of the dev clone, so it shares the clone's objects and
+remotes: fetch in the dev clone, then check out the exact commit (detached) in the deploy checkout. Deploy only a
+commit that is on `origin/main`:
+
+```bash
+git -C <dev clone> fetch origin
+git -C <dev clone> merge-base --is-ancestor <sha> origin/main && echo "on origin/main"
+cd <deploy checkout> && git checkout <sha>      # detached HEAD at that commit; never a branch, never `git pull`
+docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t settleview:local .
+docker compose up -d
+```
+
+**Docker**: with the commit checked out as above, build and `docker compose up -d` (or `docker compose up -d --build`
+with `GIT_SHA=$(git rev-parse HEAD)` in the shell; either way the image is labelled with its commit:
+`org.opencontainers.image.revision`, and telemetry's `service.version`). Compose stops the old app with SIGTERM (a clean shutdown,
 up to 60 s: the log says `SIGTERM: stopping gracefully`, then `process exiting`; before 2026-10-31 uvicorn re-raised
 the signal and the app died at once with exit 143, nothing flushed: [docs/solutions/2026-10-31-sigterm-uvicorn-reraise-and-db-outage.md](solutions/2026-10-31-sigterm-uvicorn-reraise-and-db-outage.md)) and starts the new one; a recorder is restarted
 only when its image changed, and loses at most a second of quotes. A change to the `postgres` service's settings in
@@ -808,6 +823,12 @@ docker compose exec -T postgres bash /docker-entrypoint-initdb.d/20-roles.sh   #
 docker compose up -d                            # migrate job, then the app; the recorders as settleview_recorder
 docker compose ps -a                            # migrate Exited (0); app, rec-pm-quotes, rec-pm-settle healthy
 ```
+
+**From Git Bash on Windows**, prefix the `exec ... /docker-entrypoint-initdb.d/20-roles.sh` line with
+`MSYS_NO_PATHCONV=1` (`MSYS_NO_PATHCONV=1 docker compose exec -T postgres bash /docker-entrypoint-initdb.d/20-roles.sh`):
+otherwise Git Bash rewrites the container path into a Windows path under its install folder and `bash` in the
+container finds no such file (this happened in the 2026-11-01 live deploy). PowerShell, cmd and Linux/macOS shells
+need nothing. The same applies to any `docker ... exec` or `run` argument that is an absolute container path.
 
 `ingest_token.py` before `up -d`: the recreated app and recorders read the new header at their start, so no second
 restart. The old header held OpenObserve's root login; changing the root password in its UI afterwards is a sensible

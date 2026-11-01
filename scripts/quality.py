@@ -10,7 +10,8 @@ Tools (exit code non-zero when any of them fails; each one's own output is shown
   imports       `lint-imports` (.importlinter: the layer contracts); from this Python's environment (the project
                 installed: the dev container), else PATH
   hadolint      the Dockerfiles (the app image's and deploy/dev/'s), in the official hadolint container
-  shellcheck    deploy/**/*.sh at severity warning, in the official ShellCheck container
+  shellcheck    deploy/**/*.sh at severity warning and the git hooks in .githooks/ at every severity, in the
+                official ShellCheck container
   trivy-image   the app image: vulnerabilities with a fix (HIGH, CRITICAL) and secrets
   trivy-config  misconfigurations (HIGH, CRITICAL) in the Dockerfile, compose.yaml and deploy/
   trivy-fs      secrets in the repository (never .env*, secrets/, *.pem, compose.override.yaml or data/)
@@ -115,11 +116,15 @@ def check_hadolint(_a) -> int:
 
 
 def check_shellcheck(_a) -> int:
+    """deploy/**/*.sh at severity warning; the git hooks in .githooks/ (no extension, POSIX sh) at every severity."""
     scripts = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "deploy").rglob("*.sh"))
-    if not scripts:
-        say("no deploy/**/*.sh to check")
-        return 0
-    return run([docker(), "run", "--rm", *src_mount("/mnt"), "-w", "/mnt", SHELLCHECK, "-S", "warning", *scripts])
+    hooks = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / ".githooks").glob("*") if p.is_file())
+    base = [docker(), "run", "--rm", *src_mount("/mnt"), "-w", "/mnt", SHELLCHECK]
+    code = run([*base, "-S", "warning", *scripts]) if scripts else 0
+    if hooks:
+        say(f"shellcheck {', '.join(hooks)} (every severity, POSIX sh)")
+        code = run([*base, "-S", "style", "-s", "sh", *hooks]) or code
+    return code
 
 
 def trivy(a, args: list[str], name: str) -> int:

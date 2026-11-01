@@ -1,0 +1,26 @@
+#!/bin/sh
+# Settleview pre-push hook: refuses a push that would publish private history, personal details or secrets.
+# Install once per clone:   git config core.hooksPath .githooks
+# The checks live in scripts/prepush_scan.py (standard library only); docs/PUBLISHING.md, "The pre-push scan".
+# Git passes the remote's name and URL as arguments and the refs on stdin; both go straight to the scanner.
+set -u
+
+top=$(git rev-parse --show-toplevel) || exit 1
+scanner="$top/scripts/prepush_scan.py"
+if [ ! -f "$scanner" ]; then
+    echo "pre-push: $scanner is missing; refusing the push" >&2
+    exit 1
+fi
+
+# Any working Python 3.8+ (the Windows Store "python" stubs fail this check), else uv's own interpreter.
+for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1 &&
+        "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+        exec "$py" "$scanner" "$@"
+    fi
+done
+if command -v uv >/dev/null 2>&1; then
+    exec uv run --quiet --no-project python "$scanner" "$@"
+fi
+echo "pre-push: no Python 3 or uv found; refusing the push (the scan cannot run)" >&2
+exit 1

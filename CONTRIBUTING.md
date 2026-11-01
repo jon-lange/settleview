@@ -19,6 +19,19 @@ uv run --no-project python scripts/dev.py test      # the same with uv's Python 
 python scripts/dev.py shell                         # a shell in the container, for anything else
 ```
 
+Install the pre-push hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It runs `scripts/prepush_scan.py` (standard library only; any Python 3.8+ or uv) and refuses a push whose commits
+carry an author or committer email other than a GitHub no-reply address, add a personal path (a Windows user
+profile), a `@gmail.com` address, a private key or a token, or that pushes a tag (release tags need
+`SETTLEVIEW_ALLOW_TAGS=1`). Set your no-reply address first:
+`git config user.email <id>+<user>@users.noreply.github.com` (GitHub → Settings → Emails). Details, the local
+patterns file and the opt-in Trivy scan: [docs/PUBLISHING.md](docs/PUBLISHING.md#the-pre-push-scan).
+
 ## Before you open a pull request
 
 All of these must pass (each runs in Linux containers, as CI does):

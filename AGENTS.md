@@ -24,7 +24,12 @@ Hexagonal layout (`domain/` pure, `application/` uses ports, `adapters/` do I/O,
 3. **Research databases are read-only.** Open `data/btcflow.db` and `data/research/*.db` only with the SQLite URI
    `file:...?mode=ro`. Write only new files under `data/research/` and `docs/research/`, `scripts/`.
 4. **No mock or fake data in the app** (`web/`, `btc_signal_engine/`). Tests may build their own data.
-5. **No git pushes.** Commit only when asked, with a clear message.
+5. **No git pushes.** Coding agents and subagents never push (and never touch the local-only `archive/*` tags).
+   Commit only when asked, with a clear message. GitHub's `main` (`origin`) is the source of truth; only the owner's
+   own main session pushes, and only with the owner's approval (docs/PUBLISHING.md, "How a change reaches GitHub").
+   Every commit uses the GitHub no-reply address as author and committer (this clone's `user.email`; check it in a
+   new worktree). The pre-push hook (`git config core.hooksPath .githooks`; `scripts/prepush_scan.py`) refuses
+   archive tags, other emails, personal paths and addresses, and secrets; never bypass it with `--no-verify`.
 
 ## Docs are part of done
 
@@ -69,7 +74,8 @@ add host-specific behaviour (Windows-only scripts, `C:\` paths, arch-specific de
   `settleview_settleview-{pg,data,backups}`); the PC uses http://localhost:8001 in a browser paired with
   `ops pair-pc` (no PIN), phones :8000 (PIN), external agents :8002 (session token). Never pair against or call the
   live stack from an agent session.
-- Deploy: `git checkout` the commit in the deploy checkout, `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t
+- Deploy: the deploy checkout is a worktree of the dev clone, so `git -C <dev clone> fetch origin`, then `git
+  checkout <sha>` (a commit on `origin/main`) in the deploy checkout, `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t
   settleview:local .`, `docker compose up -d`
   (a restart of `app` ends agent sessions: only between sessions). Build from the real-case path (`Documents`).
   Secrets are files in `./secrets` (compose secrets), never `.env` lines; the one-time move is

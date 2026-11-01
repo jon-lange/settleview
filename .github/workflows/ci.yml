@@ -48,7 +48,7 @@ jobs:
       - name: Hadolint (Dockerfile)
         run: .venv/bin/python scripts/quality.py --only hadolint
 
-      - name: ShellCheck (deploy/**/*.sh, severity warning)
+      - name: ShellCheck (deploy/**/*.sh at severity warning, .githooks/* at every severity)
         run: .venv/bin/python scripts/quality.py --only shellcheck
 
   trivy:
