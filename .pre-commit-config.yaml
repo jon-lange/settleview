@@ -1,0 +1,67 @@
+# The quality gates and the secret scan, run by pre-commit (https://pre-commit.com; a dev dependency in uv.lock).
+#
+#   pre-commit run --all-files     # the whole gate: in the dev container (docs/operations.md, "Quality gates"), and CI
+#   pre-commit install             # once per clone: the git hooks below on every commit and push
+#
+# Every hook repository is pinned to a commit SHA (the release tag in the comment; `pre-commit autoupdate --freeze`
+# writes the same form). Versions match the tools' other pins: Ruff == pyproject.toml's dev extra, import-linter ==
+# uv.lock's, hadolint == the binary in deploy/dev/Dockerfile (tests/test_precommit_config.py checks them).
+# Trivy (the image, the config and the repository) is not a hook: CI runs it (aquasecurity/trivy-action, ci.yml).
+# docs/operations.md, "Quality gates".
+
+minimum_pre_commit_version: "4.0.0"
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  # Secrets and personal data (.gitleaks.toml: gitleaks' default rules plus Gmail addresses and Windows profile
+  # paths). On commit: the staged diff. On push and in `run --all-files`: every commit of the branch (HEAD's history),
+  # redacted. A placeholder line carries `gitleaks:allow`. docs/PUBLISHING.md, "Secret and personal-data scanning".
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e  # frozen: v8.30.1
+    hooks:
+      - id: gitleaks
+        stages: [pre-commit]
+      - id: gitleaks
+        alias: gitleaks-history
+        name: Detect hardcoded secrets (the branch's history)
+        entry: gitleaks git --redact --verbose --log-opts=HEAD
+        always_run: true
+        stages: [pre-commit, pre-push, manual]
+
+  # Ruff: pyproject.toml's [tool.ruff] (bugs and security smells; `ruff format` is not run yet).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 38bfb07c0c64c304f47eb52090f8288150c77730  # frozen: v0.17.1
+    hooks:
+      - id: ruff-check
+
+  # Shell scripts (deploy/**/*.sh) at severity warning.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: a23f6b85d0fdd5bb9d564e2579e678033debbdff  # frozen: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: [--severity=warning]
+
+  # The Dockerfiles (the app image's and the dev container's). hadolint's official hook runs the hadolint on PATH:
+  # the dev container has it (deploy/dev/Dockerfile, the official release binary, sha256-checked).
+  - repo: https://github.com/hadolint/hadolint
+    rev: b3555ba9c2bfd9401e79f2f0da68dd1ae38e10c7  # frozen: v2.12.0
+    hooks:
+      - id: hadolint
+
+  # The GitHub Actions workflows (.github/workflows/).
+  - repo: https://github.com/rhysd/actionlint
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca  # frozen: v1.7.12
+    hooks:
+      - id: actionlint
+
+  # The hexagonal layer contracts (.importlinter). import-linter reads the source and imports nothing, so its own
+  # environment is enough; the version is uv.lock's.
+  - repo: local
+    hooks:
+      - id: lint-imports
+        name: Import contracts (lint-imports)
+        entry: lint-imports --no-cache
+        language: python
+        additional_dependencies: ["import-linter==2.15"]
+        types: [python]
+        pass_filenames: false

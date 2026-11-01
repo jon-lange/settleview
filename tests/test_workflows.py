@@ -61,38 +61,77 @@ def test_workflows_parse(wf, tmp_path):
 
 def test_release_workflow_least_privilege(tmp_path):
     doc = _parse(RELEASE, tmp_path)
-    assert doc["on"]["push"] == {"tags": ["v*.*.*"]}
+    # release-please on every push to main (the release PR; on its merge the tag and the Release), and the image in
+    # the same run: a tag made with GITHUB_TOKEN would start no other workflow.
+    assert doc["on"]["push"] == {"branches": ["main"]}
     assert "workflow_dispatch" in doc["on"]
     assert set(doc["on"]) == {"push", "workflow_dispatch"}
     assert doc["permissions"] == {}  # nothing by default
     jobs = doc["jobs"]
-    assert set(jobs) == {"plan", "build", "scan", "sign", "release"}
+    assert set(jobs) == {"release-please", "plan", "build", "scan", "sign", "release"}
     perms = {name: job.get("permissions") for name, job in jobs.items()}
     assert perms == {
+        "release-please": {"contents": "write", "pull-requests": "write", "issues": "write"},
         "plan": {"contents": "read"},
         "build": {"contents": "read", "packages": "write"},
         "scan": {"contents": "read", "packages": "read"},
         "sign": {"contents": "read", "packages": "write", "id-token": "write"},
         "release": {"contents": "write"},
     }
-    # The order: nothing is signed before the scan passed, nothing released before it was signed.
-    assert set(jobs["sign"]["needs"]) >= {"build", "scan"}
+    rp = jobs["release-please"]
+    assert rp["if"] == "github.event_name == 'push'"
+    (step,) = rp["steps"]
+    assert step["uses"].startswith("googleapis/release-please-action@")
+    assert step["with"] == {"config-file": "release-please-config.json",
+                            "manifest-file": ".release-please-manifest.json"}
+    # The order: nothing is built unless a release was made (or asked for by hand), nothing signed before the scan
+    # passed, nothing added to the Release before it was signed.
+    assert "needs.plan.outputs.kind == 'release'" in jobs["build"]["if"]
+    assert "needs.plan.outputs.kind == 'main'" in jobs["build"]["if"]
+    assert "needs.build.result == 'success'" in jobs["scan"]["if"]
+    assert set(jobs["sign"]["needs"]) >= {"build", "scan"} and "needs.scan.result == 'success'" in jobs["sign"]["if"]
     assert set(jobs["release"]["needs"]) >= {"build", "sign"}
-    assert jobs["release"]["if"] == "needs.plan.outputs.kind == 'release'"
+    assert "needs.plan.outputs.kind == 'release'" in jobs["release"]["if"]
+    assert "needs.sign.result == 'success'" in jobs["release"]["if"]
     assert doc["env"]["IMAGE"] == "ghcr.io/jon-lange/settleview"
     for name, job in jobs.items():
         assert job.get("timeout-minutes"), name
-        for step in job["steps"]:
-            if step.get("uses", "").startswith("actions/checkout@"):
-                assert step["with"]["persist-credentials"] is False, name
+        for st in job["steps"]:
+            if st.get("uses", "").startswith("actions/checkout@"):
+                assert st["with"]["persist-credentials"] is False, name
     steps = {st.get("id"): st for st in jobs["build"]["steps"]}
     meta, push = steps["meta"], steps["push"]
     assert meta["uses"].startswith("docker/metadata-action@") and meta["with"]["flavor"] == "latest=false"
     assert "latest" not in meta["with"]["tags"]
+    assert "type=semver,pattern={{version}},value=${{ needs.plan.outputs.tag }}" in meta["with"]["tags"]
     assert push["uses"].startswith("docker/build-push-action@")
     w = push["with"]
     assert w["platforms"] == "linux/amd64,linux/arm64" and w["build-args"] == "GIT_SHA=${{ github.sha }}"
     assert w["no-cache"] is True and w["pull"] is True and w["push"] is True
     assert jobs["build"]["outputs"]["digest"] == "${{ steps.push.outputs.digest }}"
-    scan = "\n".join(s.get("run", "") for s in jobs["scan"]["steps"])
-    assert "scripts/quality.py --only trivy-image" in scan
+    # The scan: Aqua's action on the pushed digest, each platform, CI's policy (the gate), then each SBOM.
+    trivy = [st for st in jobs["scan"]["steps"] if st.get("uses", "").startswith("aquasecurity/trivy-action@")]
+    gates = [st for st in trivy if st["with"].get("exit-code") == "1"]
+    assert sorted(st["env"]["TRIVY_PLATFORM"] for st in gates) == ["linux/amd64", "linux/arm64"]
+    for st in gates:
+        assert st["with"]["image-ref"] == "${{ env.IMAGE }}@${{ needs.build.outputs.digest }}"
+        assert st["with"]["severity"] == "HIGH,CRITICAL" and st["with"]["scanners"] == "vuln,secret"
+        assert st["with"]["ignore-unfixed"] is True and st["env"]["TRIVY_IMAGE_SRC"] == "remote"
+    sboms = [st for st in trivy if st["with"].get("format") == "cyclonedx"]
+    assert sorted(st["env"]["TRIVY_PLATFORM"] for st in sboms) == ["linux/amd64", "linux/arm64"]
+
+
+def test_ci_quality_gates_are_pre_commit_and_trivy(tmp_path):
+    doc = _parse(ROOT / ".github" / "workflows" / "ci.yml", tmp_path)
+    lint = doc["jobs"]["lint"]
+    (gate,) = [st for st in lint["steps"] if st.get("uses", "").startswith("devcontainers/ci@")]
+    assert gate["with"]["runCmd"] == "pre-commit run --all-files --show-diff-on-failure"  # in the dev container
+    checkout = next(st for st in lint["steps"] if st.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["fetch-depth"] == 0  # gitleaks reads every commit of the branch
+    trivy = [st for st in doc["jobs"]["trivy"]["steps"] if st.get("uses", "").startswith("aquasecurity/trivy-action@")]
+    gates = {st["with"]["scan-type"]: st["with"] for st in trivy if st["with"].get("exit-code") == "1"}
+    assert set(gates) == {"image", "config", "fs"}
+    assert gates["image"]["severity"] == gates["config"]["severity"] == "HIGH,CRITICAL"
+    assert gates["image"]["scanners"] == "vuln,secret" and gates["image"]["ignore-unfixed"] is True
+    assert gates["fs"]["scanners"] == "secret"
+    assert "scripts/quality.py" not in (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")

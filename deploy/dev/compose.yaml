@@ -51,6 +51,7 @@ x-dev: &dev
       target: /app
     - *data
     - uv-cache:/cache/uv
+    - pre-commit-cache:/cache/pre-commit
   shm_size: 1gb  # Chromium's shared memory (Docker's default 64 MB crashes tabs)
   environment: *env
 
@@ -107,3 +108,4 @@ services:
 
 volumes:
   uv-cache:
+  pre-commit-cache:

@@ -212,7 +212,7 @@ def test_every_command_runs_without_git_bash_path_conversion_and_without_compose
 def test_an_argument_git_bash_already_rewrote_is_refused(capsys):
     assert dg.main(["--sha", SHA, "--prod-file", "C:/Program Files/Git/app/x.yaml"], run=Fake()) == 2
     assert "MSYS_NO_PATHCONV=1" in capsys.readouterr().err
-    assert dg.mangled(["--x=C:/msys64/run/secrets/a", "C:/Users/me/x"]) == ["--x=C:/msys64/run/secrets/a"]  # prepush-scan: allow (placeholder path)
+    assert dg.mangled(["--x=C:/msys64/run/secrets/a", "C:/Users/me/x"]) == ["--x=C:/msys64/run/secrets/a"]  # gitleaks:allow (placeholder path)
 
 
 def test_dry_run_prints_the_commands_and_runs_nothing(capsys):

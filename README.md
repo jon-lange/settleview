@@ -355,19 +355,21 @@ runs reuse it:
 ```bash
 devcontainer up --workspace-folder .                    # the official CLI (@devcontainers/cli), headless
 devcontainer exec --workspace-folder . pytest           # the whole suite, browser tests and import contracts included
+devcontainer exec --workspace-folder . pre-commit run --all-files   # the quality gates
 
 docker compose -f deploy/dev/compose.yaml run --rm dev pytest                 # the same with Docker alone
 docker compose -f deploy/dev/compose.yaml run --rm dev pytest tests/kalshi -x # any pytest arguments
 docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest -m postgres -rs   # on a throwaway Postgres 17
 docker compose -f deploy/dev/compose.yaml run --rm dev pytest tests/evals     # the agent evals' tests
+docker compose -f deploy/dev/compose.yaml run --rm dev pre-commit run --all-files  # the quality gates
 docker compose -f deploy/dev/compose.yaml run --rm dev bash                   # a shell in the container
 docker compose -f deploy/dev/compose.yaml --profile "*" down --volumes        # remove the dev project
 ```
 
 The dev container is its own compose project (`settleview-dev`): it never touches the running app's containers,
-volumes or ports, and publishes none. The quality gates run the same pinned tools as CI (Ruff and the import contracts
-in the dev container; Trivy, Hadolint and ShellCheck from their official containers). Details:
-[docs/operations.md, "Quality gates"](docs/operations.md#quality-gates-ruff-trivy-hadolint-shellcheck).
+volumes or ports, and publishes none. The quality gates are pre-commit's hooks, the same pinned tools CI runs
+(`pre-commit run ruff-check --all-files` runs just the linter; Trivy runs in CI). Details:
+[docs/operations.md, "Quality gates"](docs/operations.md#quality-gates).
 
 The tests build their own data (fixtures, fakes and in-memory exchanges). They need no network, keys or local
 database. The `dev-pg` service starts a Postgres with no published port (profile `postgres`; `down` removes it)

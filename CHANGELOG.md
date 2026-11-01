@@ -1,8 +1,11 @@
 # Changelog
 
-All notable user-visible changes to Settleview. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+All notable user-visible changes to Settleview. From the first release on, [release-please](https://github.com/googleapis/release-please)
+writes this file from the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) since the last
+release (CONTRIBUTING.md); don't edit it by hand. Below the releases is the hand-written history before release-please
+(to 2026-11-01, in the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format).
 
-## [Unreleased]
+## [Before release-please] (history to 2026-11-01)
 
 ### Added
 - Staging: `deploy/staging/compose.staging.yaml` runs the production image as its own project (`settleview-staging`, loopback ports 18000-18002) with no real-money path: `BTCFLOW_STAGING` refuses every production credential and switch and no production gateway is built; Shadow, and Kalshi demo with a demo key. `deploy/staging/compose.offline.yaml` cuts it off the internet.
@@ -116,6 +119,7 @@ All notable user-visible changes to Settleview. The format follows [Keep a Chang
 - A short flash on a number that changes on a fill or a settle (off under Reduce Motion); messages such as "Session launched." appear as a toast.
 
 ### Changed
+- Standard tools instead of the project's own scripts (2026-11-01): the quality gates are pre-commit hooks (gitleaks, Ruff, ShellCheck, hadolint, actionlint, import-linter; `pre-commit run --all-files`, `python scripts/dev.py quality`), the secret and personal-data scan is gitleaks (`.gitleaks.toml`, on every commit and push and in CI), Trivy runs through `aquasecurity/trivy-action`, and releases are made by release-please (a release PR; merging it tags, releases and builds the signed image). `scripts/quality.py`, `scripts/prepush_scan.py`, `.githooks/pre-push` and `scripts/release.py` are gone.
 - Schema migrations run as a one-off `migrate` job before the app starts (compose; a job or one-shot task on Swarm, Container Apps and ECS); the app only checks the schema is current (`BTCFLOW_DB_MIGRATE=check`) and refuses to start on an older one. Migration 0001 no longer imports the live table definitions.
 - A recorder that is wedged ends itself so it is restarted, also under plain Docker Compose: its main loop not beating for 5 minutes, or one quotes lane stuck for 3 minutes.
 - Licence: Settleview is now under the PolyForm Noncommercial License 1.0.0 (was MIT): free for personal, hobby, research, education and noncommercial use; commercial use needs a separate licence. Third-party notices are in `NOTICE`.

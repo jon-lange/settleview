@@ -943,6 +943,7 @@ docker compose -f deploy/dev/compose.yaml run --rm dev pytest [args]            
 docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest -m postgres -rs  # profile postgres; none may skip
 docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest                  # the whole suite on that Postgres
 docker compose -f deploy/dev/compose.yaml --profile postgres down                 # ... then remove that Postgres
+docker compose -f deploy/dev/compose.yaml run --rm dev pre-commit run --all-files # the quality gates (below)
 docker compose -f deploy/dev/compose.yaml run --rm research python scripts/experiments.py report  # research, below
 docker compose -f deploy/dev/compose.yaml run --rm dev bash                       # a shell, or any command
 docker compose -f deploy/dev/compose.yaml --profile "*" down --volumes            # remove the whole dev project
@@ -993,35 +994,56 @@ run ... --live --api-key-file /run/secrets/anthropic_api_key`.
 `pytest tests/e2e/test_design_pass.py tests/e2e/test_fleet_ui.py` there and the images committed with it.
 Images from another browser or OS (fonts and anti-aliasing differ) are not committed.
 
-## Quality gates (Ruff, Trivy, Hadolint, ShellCheck)
+## Quality gates
 
-One command runs every gate, locally on any OS and in CI (`.github/workflows/ci.yml`, jobs `lint` and `trivy`, which
-call the same script). Locally, Ruff and lint-imports run in the dev container ("Development and tests" above) and the
-container tools (Hadolint, ShellCheck, Trivy) from the host's Docker, as CI runs them:
+The gates are [pre-commit](https://pre-commit.com) hooks (`.pre-commit-config.yaml`), each from the tool's own
+hook repository pinned to a commit, plus Trivy in CI with Aqua's official action. One command runs every hook, in the
+dev container locally and in CI (`.github/workflows/ci.yml`, job `lint`, runs the same command there through
+devcontainers/ci):
 
 ```bash
-docker compose -f deploy/dev/compose.yaml run --rm dev python scripts/quality.py --only ruff,imports   # in the container
-python scripts/quality.py --only hadolint,shellcheck,trivy   # from the host (Docker and any Python 3, or `uv run --no-project`)
-python scripts/quality.py --only trivy --image settleview:local    # scan an image you already built
-# one platform of a registry image, read from the registry (TRIVY_USERNAME / TRIVY_PASSWORD when private), plus its
-# CycloneDX SBOM: what the release workflow runs on the pushed digest
-python scripts/quality.py --only trivy-image --image ghcr.io/jon-lange/settleview@sha256:... --platform linux/arm64 --sbom sbom.cdx.json
+pre-commit run --all-files --show-diff-on-failure   # in the dev container (devcontainer exec --workspace-folder . ...)
+docker compose -f deploy/dev/compose.yaml run --rm dev pre-commit run --all-files   # the same with Docker alone
+pre-commit run ruff-check --all-files               # one hook
+# In a git worktree, whose .git file names the clone's git folder by a host path the container cannot see: mount
+# that folder read-only and point git at it (Git Bash: MSYS_NO_PATHCONV=1 in front, so /git is not rewritten).
+docker compose -f deploy/dev/compose.yaml run --rm -v "$(git rev-parse --git-common-dir):/git:ro" \
+  -e GIT_DIR="/git/worktrees/$(basename "$(git rev-parse --git-dir)")" -e GIT_WORK_TREE=/app \
+  dev pre-commit run --all-files
+pre-commit install                                  # on the host, once per clone: the hooks on every commit and push
 ```
 
-It exits non-zero when any gate fails. Ruff and lint-imports run from the project's environment (the dev container;
-CI's runner installs its own); the other tools run from their official images with Docker, pinned by version and
-digest in `scripts/quality.py` (no install), so `python scripts/quality.py --only hadolint,shellcheck,trivy` also runs
-from any host Python:
+It exits non-zero when any hook fails. pre-commit builds each hook's own environment once (in the dev project's
+`pre-commit-cache` volume; Go for gitleaks and actionlint is fetched by pre-commit itself); hadolint is the official
+release binary in the dev image (sha256-checked), because hadolint's official hook runs the one on PATH; the image
+trusts `/app` and `/git` as git safe directories (the checkout belongs to the host user).
 
-| Gate | Tool | What fails it |
+| Hook | Tool (pin) | What fails it |
 |---|---|---|
-| `ruff` | Ruff 0.17.1 (the `dev` extra) | any finding of the rules in `pyproject.toml` `[tool.ruff]`: pyflakes, pycodestyle errors, bugbear, pyupgrade, bandit (`S`), async, simplify |
-| `imports` | import-linter (the `dev` extra) | a broken contract in `.importlinter` (the layers; no I/O in domain and application; the Kalshi SDK only in the adapters; the supervisor never loads the app) |
-| `hadolint` | `hadolint/hadolint:v2.12.0` | a warning or error in `Dockerfile` or `deploy/dev/Dockerfile` |
-| `shellcheck` | `koalaman/shellcheck:v0.10.0` | a warning or error in `deploy/**/*.sh`; any finding (style included) in the git hooks, `.githooks/*` (POSIX sh) |
-| `trivy-image` | `aquasec/trivy:0.76.0` | a HIGH / CRITICAL vulnerability **with a fixed version** in the image (OS and Python packages), or a secret in it |
-| `trivy-config` | Trivy | a HIGH / CRITICAL misconfiguration (Trivy recognizes the Dockerfile; it has no checks for compose or systemd files) |
-| `trivy-fs` | Trivy | a secret in the repository (`.env*`, `secrets/`, `keys/`, `*.pem`, `*.key`, `compose.override.yaml`, `data/` and `.venv` are never read) |
+| `gitleaks` | gitleaks v8.30.1 | a secret, private key or personal detail in the staged diff (on commit) |
+| `gitleaks-history` | gitleaks v8.30.1 | the same in any commit of the branch (on push, in `run --all-files` and CI); `.gitleaks.toml`, docs/PUBLISHING.md |
+| `ruff-check` | Ruff 0.17.1 (astral-sh/ruff-pre-commit; the `dev` extra pins the same) | any finding of the rules in `pyproject.toml` `[tool.ruff]`: pyflakes, pycodestyle errors, bugbear, pyupgrade, bandit (`S`), async, simplify |
+| `shellcheck` | ShellCheck 0.10.0 (shellcheck-py) | a warning or error in a shell script (`deploy/**/*.sh`) |
+| `hadolint` | hadolint 2.12.0 (official hook; binary in the dev image) | a warning or error in `Dockerfile` or `deploy/dev/Dockerfile` |
+| `actionlint` | actionlint 1.7.12 (official hook) | an error in a workflow under `.github/workflows/` |
+| `lint-imports` | import-linter 2.15 (uv.lock's version) | a broken contract in `.importlinter` (the layers; no I/O in domain and application; the Kalshi SDK only in the adapters; the supervisor never loads the app) |
+
+`tests/test_precommit_config.py` checks that the hook repositories are pinned by commit and that each tool's version
+matches its other pin (pyproject.toml, uv.lock, the dev Dockerfile). To move a hook: `pre-commit autoupdate --freeze
+--repo <url>` in the dev container, then the matching pin elsewhere, then the gates.
+
+**Trivy** (CI's `trivy` job and the release workflow's `scan` job; `aquasecurity/trivy-action`, pinned by commit,
+running Trivy v0.76.0, its database cached by the action):
+
+| Scan | What fails it |
+|---|---|
+| image | a HIGH / CRITICAL vulnerability **with a fixed version** in the image (OS and Python packages), or a secret in it |
+| config | a HIGH / CRITICAL misconfiguration (Trivy recognizes the Dockerfiles; it has no checks for compose or systemd files) |
+| fs | a secret in the repository checkout |
+
+Each scan also goes to code scanning as SARIF where the repository has it. To run one locally, use Trivy's official
+image the same way (`docker run --rm -v "$PWD:/src:ro" -w /src aquasec/trivy:0.76.0 config --severity HIGH,CRITICAL
+--exit-code 1 .`); never point an fs scan at a checkout with `.env` or `secrets/` in it.
 
 Style rules that would rewrite hundreds of lines (line length, one-line `if x: return`) are off until a deliberate
 one-time `ruff format` commit; `ruff format --check` is not a gate yet. Where a rule is silenced on one line, the
@@ -1159,54 +1181,58 @@ Every exit that passes through Python logs `process exiting (pid …, up … s)`
 
 ## Releases and deploying by digest
 
-A release is a semver tag `vX.Y.Z` on a commit of `main`. The tag push runs `.github/workflows/release.yml`, which
-builds the one image (the same Dockerfile, linux/amd64 + linux/arm64, `GIT_SHA` = the tagged commit), pushes it to
-the private GitHub Container Registry package `ghcr.io/jon-lange/settleview`, scans it, signs it and makes the GitHub
-Release. A host then runs that exact image by its digest (`ghcr.io/jon-lange/settleview@sha256:...`) after checking
-its signature: no build on the host, and every host runs the bytes that were scanned. The tags `X.Y.Z` and
+A release is a semver tag `vX.Y.Z` on a commit of `main`, made by
+[release-please](https://github.com/googleapis/release-please) (`googleapis/release-please-action` in
+`.github/workflows/release.yml`; `release-please-config.json`, `.release-please-manifest.json`). The same workflow run
+then builds the one image (the same Dockerfile, linux/amd64 + linux/arm64, `GIT_SHA` = the release commit), pushes it
+to the private GitHub Container Registry package `ghcr.io/jon-lange/settleview`, scans it, signs it and adds it to the
+GitHub Release. A host then runs that exact image by its digest (`ghcr.io/jon-lange/settleview@sha256:...`) after
+checking its signature: no build on the host, and every host runs the bytes that were scanned. The tags `X.Y.Z` and
 `sha-<short>` exist for people to find an image; a deploy never names a tag, and there is no `latest`.
 
 ### Versioning and making a release
 
-Versions start at 0.1.0 (`pyproject.toml`); the next one is a patch (fixes), minor (features) or major (an
-incompatible change: a setting, route or deploy step that needs action) bump. Everything user-visible goes under
-"## [Unreleased]" in CHANGELOG.md as it lands; a release closes that section. In the dev clone, on an up-to-date
-`main`:
+Versions start at 0.1.0 (`initial-version`); after that release-please picks the next one from the
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) since the last release (CONTRIBUTING.md):
+`fix:` / `perf:` a patch, `feat:` a minor, a breaking change (`!` or a `BREAKING CHANGE:` footer) a major (a minor
+while the version is 0.x). It owns `CHANGELOG.md` from 0.1.0 on: nobody edits the changelog by hand.
 
-```bash
-git fetch origin && git status                       # main, clean, containing origin/main
-python scripts/release.py prepare 0.1.0 --dry-run    # or patch | minor | major (from the newest v*.*.* tag)
-python scripts/release.py prepare 0.1.0              # CHANGELOG "Unreleased" -> "[0.1.0] - <today>", pyproject.toml
-                                                     # and uv.lock's own entry -> 0.1.0, commit "Release v0.1.0", tag
-git push origin main                                 # the release commit first (the tag must be on origin/main)
-SETTLEVIEW_ALLOW_TAGS=1 git push origin v0.1.0       # PowerShell: $env:SETTLEVIEW_ALLOW_TAGS=1; git push origin v0.1.0
-```
+1. Every push to `main` updates one open pull request, "chore(main): release X.Y.Z", with the version in
+   `pyproject.toml` and in `uv.lock`'s own `settleview` entry (so CI's `uv lock --check` stays green) and the new
+   CHANGELOG section. Read it; fix a commit's wording by editing the PR (release-please's documented overrides).
+2. Merge it when you want the release. release-please then makes the tag `vX.Y.Z` and its GitHub Release (the section
+   as notes), and the rest of that run builds, scans, signs and adds the image to the Release.
 
-`scripts/release.py` (standard library) refuses a dirty tree, a branch other than `main`, a `main` behind
-`origin/main`, an existing tag, a version not newer than the last release, and an empty Unreleased section; it never
-pushes. The pre-push hook refuses every tag push unless `SETTLEVIEW_ALLOW_TAGS=1` is set for that one push (and
-`archive/*` tags always); release tags are the only tags pushed. In PowerShell, `Remove-Item Env:SETTLEVIEW_ALLOW_TAGS`
-afterwards. `python scripts/release.py notes 0.1.0` prints a version's section (the Release's notes).
+Nobody tags or pushes a tag by hand. **The token caveat** (release-please's documentation): the tag, the Release and
+the release PR are made with the workflow's `GITHUB_TOKEN`, and GitHub starts no workflow from an event that token
+caused. So the image is built in the same run, gated on release-please's `release_created` output, instead of by a
+separate tag-push workflow; and CI does not run on the release PR by itself (it changes only the version and the
+changelog; close and reopen it, or push an empty commit to its branch, if you want the checks on it). The repository
+setting *Actions → General → "Allow GitHub Actions to create and approve pull requests"* must be on for
+release-please to open its PR.
 
 ### What the release workflow does
 
 | Job | Permissions (`GITHUB_TOKEN`; nothing at the workflow level) | What |
 |---|---|---|
-| `plan` | `contents: read` | `release.py plan`: the tag is `vX.Y.Z`, equals pyproject.toml's version, has a CHANGELOG section, and its commit is on `origin/main`; on `main`, a `sha-<short>` image only; any other ref fails |
+| `release-please` (pushes to `main`) | `contents: write`, `pull-requests: write`, `issues: write` | the release PR; on its merge the tag `vX.Y.Z` and the GitHub Release (the CHANGELOG section) |
+| `plan` | `contents: read` | a push: a release only when release-please just made one on this commit, else nothing is built; by hand: a `vX.Y.Z` tag whose commit is on `origin/main`, or `main` (a `sha-<short>` image only); any other ref fails |
 | `build` | `contents: read`, `packages: write` | `docker/metadata-action` (tags `X.Y.Z` and `sha-<short>`, `latest=false`; the OCI labels and annotations), then `docker/build-push-action` for linux/amd64 + linux/arm64 with `pull` and `no-cache` (from scratch, so the Dockerfile's `apt-get upgrade` takes today's Debian fixes); the index digest is the output |
-| `scan` | `contents: read`, `packages: read` | `scripts/quality.py --only trivy-image` on the **pushed digest**, each platform read from GHCR (the gate's policy: fixable HIGH / CRITICAL and secrets fail; `.trivyignore` applies); the same run writes each platform's CycloneDX SBOM |
+| `scan` | `contents: read`, `packages: read` | `aquasecurity/trivy-action` on the **pushed digest**, each platform read from GHCR (CI's policy: fixable HIGH / CRITICAL and secrets fail; `.trivyignore` applies), then each platform's CycloneDX SBOM |
 | `sign` | `contents: read`, `packages: write`, `id-token: write` | cosign v3.1.3 keyless: signs the index digest and each platform's manifest, attests each SBOM (`--type cyclonedx`) on its platform manifest, then runs the deploy's `cosign verify` and `verify-attestation` |
-| `release` (tags only) | `contents: write` | the GitHub Release: the CHANGELOG section, the digest, the exact verify command, the two SBOMs as assets |
+| `release` (releases only) | `contents: write` | adds to release-please's Release: the digest, the exact verify command, the two SBOMs as assets |
 
 Nothing is signed before the scan passed, and no Release exists for an image that could not be verified. Actions are
-pinned by commit SHA (as `ci.yml`), cosign by release (`cosign-release`), Trivy by digest (`scripts/quality.py`).
+pinned by commit SHA (as `ci.yml`), cosign by release (`cosign-release`), Trivy by release (`TRIVY_VERSION`).
 Run by hand (Actions, "Release", "Run workflow"): on a `vX.Y.Z` tag it rebuilds that release (a new digest with the
-day's security fixes; the Release's notes and SBOMs are replaced; the old digest stays in GHCR, still signed); on
+day's security fixes; the Release's image section and SBOMs are replaced; the old digest stays in GHCR, still signed); on
 `main` it builds, scans and signs `sha-<short>` only (no Release), for a staging trial.
 
 **Keyless signing in public.** Sigstore's Fulcio issues a short-lived certificate for the workflow's OIDC identity and
-the signature is recorded in the public Rekor transparency log: the repository's name, the workflow path, the tag, the
-commit sha and the image digest become public there (no code, no image content).
+the signature is recorded in the public Rekor transparency log: the repository's name, the workflow path, the ref, the
+commit sha and the image digest become public there (no code, no image content). A release is signed as
+`release.yml@refs/heads/main` (release-please runs on the push to `main`); a rebuild by hand of a tag as
+`release.yml@refs/tags/vX.Y.Z`. The digest from the Release is what a deploy trusts.
 
 **Why `main` is not pushed on every commit.** The package is private, so its storage counts against the account's
 GitHub Packages quota (500 MB on the free plan; the image is about 320 MB compressed per platform, and each commit adds
@@ -1241,7 +1267,7 @@ cd <deploy checkout> && git checkout v0.1.0          # detached: compose.yaml an
 export SETTLEVIEW_IMAGE=ghcr.io/jon-lange/settleview:0.1.0@sha256:<digest from the Release>
 cosign verify "$SETTLEVIEW_IMAGE" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/jon-lange/settleview/.github/workflows/release.yml@refs/tags/v0.1.0
+  --certificate-identity https://github.com/jon-lange/settleview/.github/workflows/release.yml@refs/heads/main
 docker compose run --rm --no-deps backup bash /usr/local/bin/settleview-backup --once   # a dump first, if it migrates
 docker compose pull migrate app rec-pm-quotes rec-pm-settle
 docker compose up -d                                 # the migrate job (alembic upgrade head), then the services
@@ -1252,9 +1278,9 @@ Then put the same `SETTLEVIEW_IMAGE=...` line in `.env` yourself (the owner's fi
 plain `docker compose up -d` keeps that image; without it compose falls back to the local build `settleview:local`.
 In PowerShell: `$env:SETTLEVIEW_IMAGE = "ghcr.io/..."`, and `` ` `` for the line continuations. The digest decides
 what runs (the tag in front of it is for people); `cosign verify` fails unless that digest was signed by this
-repository's release workflow for that tag. Any release of this repository:
-`--certificate-identity-regexp '^https://github\.com/jon-lange/settleview/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'`;
-a hand-run `main` build (staging) is signed as `...release.yml@refs/heads/main`. Only a tag: `docker buildx imagetools
+repository's release workflow (the verify command in the Release names the exact identity). Any build of this
+repository's release workflow (what `scripts/deploy.py` accepts):
+`--certificate-identity-regexp '^https://github\.com/jon-lange/settleview/\.github/workflows/release\.yml@refs/(tags/v[0-9]+\.[0-9]+\.[0-9]+|heads/main)$'`. Only a tag: `docker buildx imagetools
 inspect ghcr.io/jon-lange/settleview:0.1.0` (the `Digest:` line).
 
 | Variable | Purpose |
@@ -1270,7 +1296,7 @@ newest first), check that its code knows the database's schema, then the same co
 cd <deploy checkout> && git checkout v0.0.9
 export SETTLEVIEW_IMAGE=ghcr.io/jon-lange/settleview:0.0.9@sha256:<digest from that Release>
 cosign verify "$SETTLEVIEW_IMAGE" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/jon-lange/settleview/.github/workflows/release.yml@refs/tags/v0.0.9
+  --certificate-identity https://github.com/jon-lange/settleview/.github/workflows/release.yml@refs/heads/main
 # Does that release's Alembic know the database's revision? (Alembic's own version table and its own `show`)
 rev=$(docker compose exec -T postgres psql -U postgres -d settleview -At -c "select version_num from app.alembic_version")
 docker run --rm --network none --entrypoint alembic "$SETTLEVIEW_IMAGE" show "$rev"   # "Can't locate revision": stop

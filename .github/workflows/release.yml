@@ -1,21 +1,24 @@
 name: Release
 
-# A release: the owner tags a commit on main (python scripts/release.py prepare X.Y.Z; docs/operations.md, "Releases")
-# and pushes the tag. This workflow builds the image from that commit for linux/amd64 + linux/arm64 (the same Dockerfile
-# as CI, from scratch: the newest Debian security fixes, nothing from a cache), pushes it to the private GHCR package
-# ghcr.io/jon-lange/settleview (tags X.Y.Z and sha-<short>, never `latest`), scans the pushed digest with Trivy (the
-# quality gate's policy and .trivyignore), signs it with cosign keyless (GitHub's OIDC identity of this workflow) and
-# attests each platform's CycloneDX SBOM, then makes the GitHub Release with the changelog's section, the digest, the
-# verify command and the SBOMs. A deploy pins tag@digest and runs `cosign verify` first (docs/operations.md).
+# Releases are made by release-please (googleapis/release-please-action; release-please-config.json and
+# .release-please-manifest.json): on every push to main it keeps one release PR open ("chore(main): release X.Y.Z")
+# with the next version (from the Conventional Commits since the last release), pyproject.toml's and uv.lock's version
+# and the CHANGELOG section. Merging that PR makes the tag vX.Y.Z and its GitHub Release (the changelog section as
+# notes). Then, in this same run (a tag made with GITHUB_TOKEN starts no other workflow, as release-please documents),
+# the image is built from that commit for linux/amd64 + linux/arm64 (the same Dockerfile as CI, from scratch: the
+# newest Debian security fixes, nothing from a cache), pushed to the private GHCR package ghcr.io/jon-lange/settleview
+# (tags X.Y.Z and sha-<short>, never `latest`), scanned with Trivy (the CI gate's policy and .trivyignore), signed
+# with cosign keyless (GitHub's OIDC identity of this workflow) with each platform's CycloneDX SBOM attested, and the
+# Release gets the digest, the verify command and the SBOMs. A deploy pins tag@digest and runs `cosign verify` first
+# (docs/operations.md, "Releases and deploying by digest").
 #
 # Run by hand (workflow_dispatch): on a vX.Y.Z tag it rebuilds that release (a new digest with the day's security
-# fixes; the notes are updated to it); on main it builds, scans and signs `sha-<short>` only (no Release), for a
-# staging trial. Any other ref is refused. Main is not pushed on every commit (docs/operations.md, "Releases": the
-# private package's storage, and a deploy should name a release).
+# fixes; the Release's image section is replaced); on main it builds, scans and signs `sha-<short>` only (no
+# Release), for a staging trial. Any other ref is refused. A push to main that releases nothing builds nothing.
 
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [main]
   workflow_dispatch:
 
 # Nothing by default: each job asks for what it needs, and only it.
@@ -27,13 +30,36 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/jon-lange/settleview
+  TRIVY_VERSION: v0.76.0  # as ci.yml
 
-# Actions are pinned by full commit SHA (the version in the comment), as in ci.yml; cosign by release, Trivy by digest
-# (scripts/quality.py).
+# Actions are pinned by full commit SHA (the version in the comment), as in ci.yml; cosign and Trivy by release.
 
 jobs:
+  release-please:
+    # The release PR, and on its merge the tag and the GitHub Release. Only on a push to main.
+    name: Release PR, tag and Release (release-please)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # the release PR's branch, the tag and the Release
+      pull-requests: write  # open and update the release PR
+      issues: write  # the release PR's labels (autorelease: pending / tagged)
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+      sha: ${{ steps.rp.outputs.sha }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   plan:
-    name: What to build (tag, version, changelog)
+    name: What to build (a release, main, or nothing)
+    needs: release-please
+    if: ${{ !cancelled() && needs.release-please.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -45,18 +71,48 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
-          fetch-depth: 0  # origin/main: a release tag must be on it
+          fetch-depth: 0  # origin/main: a rebuilt tag must be on it
           persist-credentials: false
 
-      # A tag: vX.Y.Z, the same version in pyproject.toml, a CHANGELOG section for it, the commit on origin/main.
-      # main: a sha-<short> image only. Anything else stops here.
-      - name: Check the ref
+      # A push: a release only when release-please just made one, on this very commit. By hand: a vX.Y.Z tag on
+      # origin/main rebuilds that release; main builds sha-<short> only; anything else stops here.
+      - name: Decide
         id: plan
-        run: python3 scripts/release.py plan --ref "$GITHUB_REF" --sha "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY" | tee -a "$GITHUB_OUTPUT"
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASED: ${{ needs.release-please.outputs.release_created }}
+          RP_TAG: ${{ needs.release-please.outputs.tag }}
+          RP_SHA: ${{ needs.release-please.outputs.sha }}
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          [ "$GITHUB_REPOSITORY" = jon-lange/settleview ] || { echo "this workflow pushes $IMAGE only"; exit 1; }
+          if [ "$EVENT" = push ]; then
+            if [ "$RELEASED" != true ]; then
+              echo "kind=none" >> "$GITHUB_OUTPUT"
+              echo "No release in this push: nothing to build." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            [[ "$RP_TAG" =~ $semver ]] || { echo "release-please made $RP_TAG, not vX.Y.Z"; exit 1; }
+            [ "$RP_SHA" = "$GITHUB_SHA" ] || { echo "$RP_TAG is on $RP_SHA, not on this run's $GITHUB_SHA"; exit 1; }
+            tag="$RP_TAG"
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then
+            { echo "kind=main"; echo "version=sha-$short"; echo "tag="; } >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" =~ $semver ]]; then
+            tag="$GITHUB_REF_NAME"
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$tag ($short) is not on origin/main"; exit 1; }
+          else
+            echo "$GITHUB_REF: the release workflow runs for a vX.Y.Z tag or for main only"
+            exit 1
+          fi
+          { echo "kind=release"; echo "version=${tag#v}"; echo "tag=$tag"; } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build and push (linux/amd64 + linux/arm64)
     needs: plan
+    if: ${{ !cancelled() && (needs.plan.outputs.kind == 'release' || needs.plan.outputs.kind == 'main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -91,7 +147,7 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
+            type=semver,pattern={{version}},value=${{ needs.plan.outputs.tag }},enable=${{ needs.plan.outputs.kind == 'release' }}
             type=sha,prefix=sha-,format=short
 
       # From scratch (pull, no-cache): the base digest is pinned, and the Dockerfile's `apt-get upgrade` layer then
@@ -121,11 +177,12 @@ jobs:
           { echo "Pushed \`$IMAGE@$DIGEST\`"; echo; echo "$TAGS"; } >> "$GITHUB_STEP_SUMMARY"
 
   scan:
-    # The pushed digest itself, each platform read from GHCR: the quality gate's Trivy scan (fixable HIGH / CRITICAL
+    # The pushed digest itself, each platform read from GHCR: CI's Trivy gate (fixable HIGH / CRITICAL
     # vulnerabilities and secrets, .trivyignore if any) fails the release before anything is signed. The same run
     # writes each platform's CycloneDX SBOM. Read-only on the package; no OIDC token here.
     name: Trivy (the pushed digest) and SBOMs
     needs: [plan, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -136,28 +193,72 @@ jobs:
         with:
           persist-credentials: false
 
-      # The vulnerability database first, without the registry credentials below (they are for GHCR's private image,
-      # not for the database's registries); the scans then find it fresh in the cache volume.
-      - name: Download Trivy's database
-        run: |
-          trivy=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); import quality; print(quality.TRIVY)')
-          docker run --rm -v settleview-quality-trivy-cache:/root/.cache "$trivy" image --download-db-only --quiet
-
-      - name: Trivy scan and SBOM, linux/amd64 and linux/arm64
+      # Each platform of the pushed digest, read from GHCR itself (TRIVY_IMAGE_SRC / TRIVY_PLATFORM are Trivy's own
+      # settings; the registry credentials by name), with CI's policy; then each platform's CycloneDX SBOM. Trivy
+      # reads .trivyignore from the checkout when there is one.
+      - name: Trivy scan (linux/amd64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         env:
-          REF: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
-          VERSION: ${{ needs.plan.outputs.version }}
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          code=0
-          for p in linux/amd64 linux/arm64; do
-            arch="${p#linux/}"
-            python3 scripts/quality.py --only trivy-image --image "$REF" --platform "$p" \
-              --sbom "sbom/settleview-${VERSION}-linux-${arch}.cdx.json" || code=1
-          done
-          exit "$code"
+          TRIVY_IMAGE_SRC: remote
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Trivy scan (linux/arm64)
+        if: success() || failure()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_IMAGE_SRC: remote
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: SBOM (linux/amd64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_IMAGE_SRC: remote
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
+          format: cyclonedx
+          output: sbom/settleview-${{ needs.plan.outputs.version }}-linux-amd64.cdx.json
+
+      - name: SBOM (linux/arm64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_IMAGE_SRC: remote
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}@${{ needs.build.outputs.digest }}
+          format: cyclonedx
+          output: sbom/settleview-${{ needs.plan.outputs.version }}-linux-arm64.cdx.json
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
@@ -168,12 +269,14 @@ jobs:
 
   sign:
     # Keyless: cosign gets a short-lived certificate for this workflow's OIDC identity
-    # (https://github.com/jon-lange/settleview/.github/workflows/release.yml@<ref>) from Sigstore's Fulcio and records
+    # (https://github.com/jon-lange/settleview/.github/workflows/release.yml@<ref>: refs/heads/main for a release made
+    # by release-please, the tag for a rebuild by hand) from Sigstore's Fulcio and records
     # the signature in the public Rekor log (the identity, the commit and the digest are public there; nothing else).
     # The index digest is signed (what a deploy names), each platform's manifest too, and each platform's SBOM is
     # attested on its manifest. Then the same verify a deploy runs, so a release that cannot be verified fails here.
     name: Sign (cosign keyless) and attest the SBOMs
     needs: [plan, build, scan]
+    if: ${{ !cancelled() && needs.scan.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -228,36 +331,47 @@ jobs:
           echo "Verified: signed by \`$identity\`" >> "$GITHUB_STEP_SUMMARY"
 
   release:
-    name: GitHub Release (notes, digest, SBOMs)
-    if: needs.plan.outputs.kind == 'release'
+    # release-please made the Release (the changelog section as its notes); this adds the image: the digest, the
+    # verify command and the SBOMs. A rebuild by hand replaces that section and the SBOMs.
+    name: GitHub Release (digest, verify command, SBOMs)
+    if: ${{ !cancelled() && needs.plan.outputs.kind == 'release' && needs.sign.result == 'success' }}
     needs: [plan, build, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write  # create the Release and upload its assets; this job only
+      contents: write  # edit the Release and upload its assets; this job only
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-        with:
-          persist-credentials: false
-
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
           name: sbom
           path: sbom
 
-      # A run by hand on an existing tag updates that Release (notes and SBOMs name the new digest).
-      - name: Create or update the Release
+      - name: Add the image to the Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
           VERSION: ${{ needs.plan.outputs.version }}
           DIGEST: ${{ needs.build.outputs.digest }}
         run: |
           set -euo pipefail
-          python3 scripts/release.py notes "$VERSION" --image "$IMAGE:$VERSION@$DIGEST" > /tmp/notes.md
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release edit "$TAG" --notes-file /tmp/notes.md
-            gh release upload "$TAG" sbom/*.cdx.json --clobber
-          else
-            gh release create "$TAG" --verify-tag --title "Settleview $VERSION" --notes-file /tmp/notes.md sbom/*.cdx.json
-          fi
+          marker='<!-- settleview-image -->'
+          ref="$IMAGE:$VERSION@$DIGEST"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          gh release view "$TAG" --json body --jq .body | awk -v m="$marker" '$0 == m { exit } { print }' > /tmp/notes.md
+          {
+            echo "$marker"
+            echo "## Image"
+            echo
+            echo "\`$ref\` (linux/amd64, linux/arm64; deploy this tag@digest, never the tag alone). Signed with cosign"
+            echo "keyless by this repository's release workflow; the CycloneDX SBOMs below are attached to it as"
+            echo "attestations too. Verify before deploying (docs/operations.md, \"Releases and deploying by digest\"):"
+            echo
+            echo '```bash'
+            echo "cosign verify $ref \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  --certificate-identity $identity"
+            echo '```'
+          } >> /tmp/notes.md
+          gh release edit "$TAG" --notes-file /tmp/notes.md
+          gh release upload "$TAG" sbom/*.cdx.json --clobber

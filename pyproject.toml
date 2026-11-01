@@ -74,7 +74,8 @@ dev = [
   "playwright==1.64.0",  # e2e browser tests of the web app (tests/e2e; user-approved 2026-10-30): drives the installed Edge/Chrome; pulls greenlet, pyee
   "greenlet==3.5.6",  # pulled by playwright; pinned
   "pyee==14.0.0",  # pulled by playwright; pinned
-  "ruff==0.17.1",  # the linter (user-approved 2026-10-31; newest release older than two weeks): `ruff check .`, scripts/quality.py
+  "ruff==0.17.1",  # the linter (user-approved 2026-10-31; newest release older than two weeks): `ruff check .`; .pre-commit-config.yaml pins the same
+  "pre-commit==4.7.0",  # the quality-gate runner and git hooks (user-approved 2026-11-01): .pre-commit-config.yaml
 ]
 
 [build-system]
@@ -84,7 +85,7 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["btc_signal_engine*"]
 
-# Ruff (scripts/quality.py and CI's `lint` job run `ruff check .`): bugs and security smells, not style. The house style
+# Ruff (pre-commit's ruff-check hook: `pre-commit run --all-files`, locally and in CI): bugs and security smells, not style. The house style
 # (long lines, one-line `if x: return`, `a = 1; b = 2`) is left alone until a deliberate one-time `ruff format` commit
 # (docs/plans/2026-10-31-1800-review-fix-plan.md, "Regular quality gates"); `ruff format` is not run or checked yet.
 [tool.ruff]

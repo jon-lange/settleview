@@ -1,0 +1,43 @@
+# gitleaks (https://github.com/gitleaks/gitleaks): what must never reach GitHub. Run by pre-commit
+# (.pre-commit-config.yaml: the staged diff on every commit, the branch's history on every push and in CI).
+#
+# gitleaks' own default rules (private keys, cloud, GitHub, AI-provider, Slack, Stripe, ... tokens), plus this
+# project's: personal details that are not secrets but must not be published either. A placeholder in docs or tests
+# (an example profile path, a made-up address) carries gitleaks' standard `gitleaks:allow` comment on its line; the
+# usual placeholder account names (C:/Users/you, /c/Users/me, ...) are allowed below.
+# Machine-local patterns (your real name, LAN host names, the deploy checkout's folder) never go here: they go in an
+# untracked config that extends this one (docs/PUBLISHING.md, "Secret and personal-data scanning").
+
+title = "Settleview"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "gmail-address"
+description = "A Gmail address (a personal email): use the GitHub no-reply address, or a placeholder marked gitleaks:allow"
+regex = '''[a-zA-Z0-9._%+-]+@(?:gmail|googlemail)\.com\b'''
+keywords = ["gmail.com", "googlemail.com"]
+tags = ["personal-data"]
+
+[[rules]]
+id = "windows-user-profile-path"
+description = "A Windows user-profile path (it names the local account): a drive letter's Users folder"
+regex = '''(?i)\b[a-z]:[\\/]+users[\\/]+[^\\/\s"'`<>|]+'''
+keywords = ["users"]
+tags = ["personal-data"]
+
+[[rules.allowlists]]
+description = "placeholder account names in examples (C:/Users/you/...)"
+regexes = ['''(?i)users[\\/]+(?:you|me|someone|username|<[^>]*>)$''']
+
+[[rules]]
+id = "posix-windows-user-profile-path"
+description = "A Windows user-profile path as Git Bash (/c/Users/...) or WSL (/mnt/c/Users/...) writes it"
+regex = '''(?i)(?:^|[^\w.])/(?:mnt/)?[a-z]/users/[^/\s"'`<>|]+'''
+keywords = ["/users/"]
+tags = ["personal-data"]
+
+[[rules.allowlists]]
+description = "placeholder account names in examples (/c/Users/me/...)"
+regexes = ['''(?i)users/(?:you|me|someone|username|<[^>]*>)$''']

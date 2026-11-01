@@ -30,18 +30,39 @@ plain Docker Compose (`deploy/dev/compose.yaml`). You need [Docker](https://docs
 
   On Linux add `--user "$(id -u):$(id -g)"` after `run`, so files written into the checkout are yours.
 
-Install the pre-push hook once per clone:
+Install the git hooks once per clone ([pre-commit](https://pre-commit.com); a worktree shares its clone's hooks):
 
 ```bash
-git config core.hooksPath .githooks
+uv tool install pre-commit==4.7.0   # on the host, once (the version uv.lock pins)
+pre-commit install                  # .pre-commit-config.yaml: the pre-commit and pre-push hooks
 ```
 
-It runs `scripts/prepush_scan.py` (standard library only; any Python 3.8+ or uv) and refuses a push whose commits
-carry an author or committer email other than a GitHub no-reply address, add a personal path (a Windows user
-profile), a `@gmail.com` address, a private key or a token, or that pushes a tag (release tags need
-`SETTLEVIEW_ALLOW_TAGS=1`). Set your no-reply address first:
-`git config user.email <id>+<user>@users.noreply.github.com` (GitHub → Settings → Emails). Details, the local
-patterns file and the opt-in Trivy scan: [docs/PUBLISHING.md](docs/PUBLISHING.md#the-pre-push-scan).
+On every commit they run gitleaks on the staged diff, Ruff, ShellCheck, hadolint, actionlint and the import
+contracts on the changed files; on every push, gitleaks on the branch's whole history. gitleaks (`.gitleaks.toml`:
+its default rules plus `@gmail.com` addresses and Windows user-profile paths) refuses a secret, a private key or a
+personal detail; a made-up placeholder carries `gitleaks:allow` on its line. Commit as your GitHub no-reply address
+(`git config user.email <id>+<user>@users.noreply.github.com`; GitHub → Settings → Emails, where "Block command line
+pushes that expose my email" should be on). Details and machine-local patterns:
+[docs/PUBLISHING.md](docs/PUBLISHING.md#secret-and-personal-data-scanning). hadolint is a system binary (in the dev
+container): a host without it fails the hadolint hook on a commit that changes a Dockerfile; run
+`pre-commit run --all-files` in the dev container first, then `SKIP=hadolint git commit ...` (pre-commit's own
+skip).
+
+## Commit messages: Conventional Commits
+
+Every commit (and every pull request title, which becomes the squash commit) follows
+[Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/): `<type>[(scope)][!]: <description>`.
+release-please reads them to choose the next version and write `CHANGELOG.md`, so the changelog is not edited by hand:
+
+| Type | Meaning | In the changelog / next version |
+|---|---|---|
+| `feat` | a user-visible feature | Features; minor (0.x: minor) |
+| `fix` | a user-visible bug fix | Bug Fixes; patch |
+| `perf` | faster, same behaviour | Performance Improvements; patch |
+| `feat!` / `fix!` / `BREAKING CHANGE:` footer | a breaking change | major (0.x: minor) |
+| `docs`, `test`, `refactor`, `build`, `ci`, `chore`, `style` | everything else | not listed; no release on their own |
+
+Write the description for a user ("Play shows the fee per contract", not "add fee field"); it is the changelog line.
 
 ## Before you open a pull request
 
@@ -51,6 +72,8 @@ All of these must pass (each runs in Linux containers, as CI does):
 pytest                                     # in the dev container: the suite (e2e and the import contracts included)
 docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest -m postgres -rs   # Postgres tests (throwaway 17)
 docker compose -f deploy/dev/compose.yaml --profile postgres down                  # ... then remove that Postgres
+pre-commit run --all-files                 # in the dev container: the quality gates (gitleaks, Ruff, ShellCheck,
+                                           # hadolint, actionlint, import contracts); CI runs it too, then Trivy
 ```
 
 and the quality gates (Ruff, import contracts, Hadolint, ShellCheck and Trivy, as CI runs them):

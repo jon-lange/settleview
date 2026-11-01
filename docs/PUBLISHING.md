@@ -8,65 +8,69 @@ checklist below; there is no separate public copy to build.
 
 1. Branch from an up-to-date `main` (`git fetch origin && git switch -c <type>/<topic> origin/main`; a worktree works
    the same way).
-2. Commit. Every commit's author and committer use the GitHub no-reply address: this clone's `user.email` is set to
-   it (`git config user.email` prints `<id>+<user>@users.noreply.github.com`). Check it in a new clone or worktree
-   before the first commit.
+2. Commit, with a [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) message (`feat: ...`,
+   `fix: ...`; CONTRIBUTING.md): release-please makes the releases and the changelog from them. Every commit's author
+   and committer use the GitHub no-reply address: this clone's `user.email` is set to it (`git config user.email`
+   prints `<id>+<user>@users.noreply.github.com`). Check it in a new clone or worktree before the first commit.
 3. Push the branch and open a pull request, or push `main` directly from the owner's own session. Pushes are the
    owner's call: coding agents and subagents never push (AGENTS.md, hard rule 5); the owner's main session pushes
    only with the owner's approval.
-4. The pre-push scan (below) runs on every push and refuses anything that must not reach GitHub.
+4. gitleaks (below) runs on every commit and push, and again in CI, and refuses anything that must not reach
+   GitHub. GitHub itself refuses a push whose commits carry the owner's private email (the account setting below).
 
 **Retired** (2026-11-01): the `public` orphan branch, cherry-picking commits onto it, and squashed "public snapshot"
 commits. Don't recreate them.
 
-**The old private history** is kept only as the local tag `archive/private-history-2026-11-01` in the owner's dev
-clone (it shares no commit with `main`). It is never pushed and never deleted; the scan refuses any `archive/*` tag
-and any commit from its history (the old local feature branches included).
+**The old private history** (before 2026-11-01; it shares no commit with `main`) is kept as a git bundle outside
+the repository, on the owner's machine. It is never pushed.
 
-## The pre-push scan
+## Secret and personal-data scanning
 
-`.githooks/pre-push` (POSIX sh) runs `scripts/prepush_scan.py` (standard library only) with any Python 3.8+ on the
-host, else `uv run --no-project python`. Install it once per clone (a worktree shares its clone's config):
+[gitleaks](https://github.com/gitleaks/gitleaks), run by [pre-commit](https://pre-commit.com)
+(`.pre-commit-config.yaml`; pre-commit is a dev dependency, in the dev container already). Install the git hooks once
+per clone (a worktree shares its clone's hooks):
 
 ```bash
-git config core.hooksPath .githooks
+uv tool install pre-commit==4.7.0   # on the host, once (the version uv.lock pins); or any pre-commit 4.x
+pre-commit install                  # the pre-commit and pre-push hooks (default_install_hook_types)
 ```
 
-For every ref being pushed it reads git's pre-push lines (`<local ref> <local sha> <remote ref> <remote sha>`) and
-checks the commits the remote doesn't have yet (`<remote sha>..<local sha>`; for a new branch, everything not on that
-remote's tracking refs; for a push to a bare URL, the whole history). A deletion has no commits to scan. It blocks:
+Then, with the config in `.gitleaks.toml` (gitleaks' default rules, extended):
 
-- **Tags**: an `archive/*` tag (pushed, deleted, or pushed under another name) always; any other tag unless
-  `SETTLEVIEW_ALLOW_TAGS=1` is set for that push. A commit that belongs to a local `archive/*` tag's history.
-- **Identity**: an author or committer email that is not a GitHub no-reply address. Bot no-reply addresses
-  (`49699333+dependabot[bot]@users.noreply.github.com`) and GitHub's own `noreply@github.com` (merges made on
-  github.com) pass.
-- **Content**, in the added lines of each commit's diff (binary files skipped) and in each commit message: any
-  `@gmail.com` address; Windows user-profile paths (a drive letter's `Users` folder, also as Git Bash and WSL write it,
-  under `/c/` or `/mnt/c/`); private key blocks (`-----BEGIN ... PRIVATE KEY-----`); common token shapes (GitHub, AWS,
-  Anthropic, OpenAI, Slack, Google, Stripe, Telegram); and this machine's own patterns:
-  - `.git/info/prepush-patterns` in the dev clone (untracked by nature; shared by its worktrees): one Python regex per
-    line, `#` comments, case-insensitive. Put your personal email address(es) and anything else private here.
-  - the global or system `git config user.email`, when it is not a no-reply address;
-  - the deploy checkout's folder name, read from the untracked `CLAUDE.local.md` (the sentence "The live stack's
-    deploy checkout is `<name>`"), at the top of the worktree or the dev clone.
+- **On every commit**: the staged diff (gitleaks' official hook).
+- **On every push**, and in `pre-commit run --all-files` (the quality gate, CI's `lint` job included): every commit
+  of the branch (`gitleaks git --log-opts=HEAD`), so a commit made without the hooks is caught before it leaves.
+- **What it refuses**: gitleaks' default rules (private keys; cloud, GitHub, AI-provider, Slack, Stripe and many
+  other tokens) and this project's: any `@gmail.com` / `@googlemail.com` address, and Windows user-profile paths (a
+  drive letter's `Users` folder, also as Git Bash and WSL write it, under `/c/` or `/mnt/c/`). Findings are redacted.
+- **Placeholders**: a line in docs or tests with a made-up value carries gitleaks' standard `gitleaks:allow` comment;
+  the usual placeholder accounts (`C:/Users/you`, `/c/Users/me`, `Someone`, `<name>`) are allowed by the rules'
+  allowlists. A reviewed false positive in history goes in `.gitleaksignore` (gitleaks' fingerprint file).
+- **Machine-local patterns** (your real name, LAN host names, the deploy checkout's folder name) never go in the
+  repository. Put them in an untracked gitleaks config outside it that extends the tracked one, and point gitleaks at
+  it with `GITLEAKS_CONFIG` (set in your shell profile; gitleaks reads it before `.gitleaks.toml`):
 
-Nothing personal is written in the committed files: the patterns come from the machine. A finding names the commit,
-`file:line` and the kind, with a masked excerpt (the first four characters and the length); a matched value is never
-printed in full. Nothing is pushed until every finding is fixed (amend or rebase the commits).
+  ```toml
+  # ~/.config/gitleaks/settleview.toml   (never committed)
+  [extend]
+  path = ".gitleaks.toml"   # the checkout's own config (hooks run at the checkout's top), which extends the defaults
 
-A placeholder in docs or tests (an example profile path, a made-up address) may carry `prepush-scan: allow` on its
-line; that passes the path, gmail and token-shape checks only, never a private key block or a local pattern. Tests
-build such values by concatenation instead where they can (`tests/test_prepush_scan.py`).
+  [[rules]]
+  id = "local-names"
+  description = "This machine's private names"
+  regex = '''(?i)\b(?:your-real-name|your-deploy-folder|your-nas-host)\b'''
+  keywords = ["your-real-name", "your-deploy-folder", "your-nas-host"]
+  ```
 
-Options: `SETTLEVIEW_PREPUSH_TRIVY=1` also runs the repository secret scan (`python scripts/quality.py --only
-trivy-fs`: Trivy in its pinned container over the working tree, not the pushed commits; off by default because it
-takes a while). `python scripts/prepush_scan.py --range origin/main..HEAD` scans a range without pushing. The
-history already on GitHub contains reviewed placeholders and dummy test tokens (the `.env.example` and
-`docs/operations.md` path examples, the fake keys in the redaction tests), so a scan of the whole history reports
-them; pushes to `origin` scan only new commits.
+**Commit emails**: GitHub's own account setting, not a hook. Turn on *Settings → Emails → "Keep my email addresses
+private"* and *"Block command line pushes that expose my email"*: GitHub then refuses any push whose commits carry the
+private address. Commits use the no-reply address (step 2 above).
 
-`git push --no-verify` skips the hook. Don't, except for a reviewed false positive, and say so in the pull request.
+**Tags**: release tags are made by release-please on GitHub (docs/operations.md, "Releases"); nobody pushes a tag by
+hand, and there is no local-only tag to protect.
+
+`git commit --no-verify` / `git push --no-verify` skip the hooks. Don't, except for a reviewed false positive, and say
+so in the pull request; CI runs the same scan anyway.
 
 ## Before making the repository public
 
@@ -75,7 +79,7 @@ Work through this before flipping the visibility. Nothing here runs automaticall
 ### 1. Scan for secrets across the full history
 
 A secret that was ever committed stays in history even after it is deleted from the tree. Scan what GitHub has
-(`origin/main` and every pushed branch), not the local archive tag:
+(`origin/main` and every pushed branch):
 
 ```bash
 gitleaks git --redact -v --log-opts="--remotes=origin" .
@@ -96,14 +100,15 @@ Search the tracked files and the pushed history and fix what you find:
   are made-up test values; check that nothing else is your real network.
 - **Personal paths**: `git grep -nE 'C:[\/]+Users'`. The hard-coded paths to your own `.env` files
   and research folder in `scripts/quick/*` and `scripts/perp_trend_backtest.py` were replaced on 2026-10-31
-  (`BTCFLOW_ENV_FILE`, required by the Polymarket penny scripts; the repo's own `data/research/`); the pre-push scan
-  keeps it that way. The example user folders in `.env.example` and `docs/operations.md`, and the one in
+  (`BTCFLOW_ENV_FILE`, required by the Polymarket penny scripts; the repo's own `data/research/`); gitleaks keeps it
+  that way. The example user folders in `.env.example` and `docs/operations.md`, and the one in
   `tests/evals/test_export_redaction.py`, are placeholders and fine.
 - **Account details in `docs/research/`**: search for balances, cash amounts, order ids, client order ids, fill ids
   and exact live-trade amounts (`git grep -niE 'balance|order[_ ]?id|fill[_ ]?id|penny'`). The penny-test notes in
   `docs/research/LEARNINGS.md` describe behaviour, not accounts; reread them anyway.
 - **Commit author email**: done 2026-11-01. Every commit on GitHub uses the no-reply address (the old history with
-  the personal address is the local archive tag only), and the pre-push scan refuses any other address.
+  the personal address is the bundle outside the repository only), and GitHub's "Block command line pushes that
+  expose my email" refuses a push that carries the private one.
 - **Agent and plan notes**: `AGENTS.md`, `CLAUDE.md` and `docs/plans/` describe the live setup generically ("a
   separate deploy checkout", "the owner", "a Windows ARM64 dev host"; decided 2026-11-01). Machine-specific notes
   for local agents (the deploy checkout's folder name) live in the git-ignored `CLAUDE.local.md`, never in tracked
@@ -151,7 +156,7 @@ Search the tracked files and the pushed history and fix what you find:
 ### 5. Flip the visibility
 
 Only after steps 1 to 4: Settings → General → Danger Zone → Change visibility → Public. The history, branches and
-pull requests that exist on GitHub become public as they are; the local archive tag stays local. Then add the support
+pull requests that exist on GitHub become public as they are; the old history's bundle stays offline. Then add the support
 links below.
 
 ## Later

@@ -16,15 +16,20 @@ concurrency:
 # Actions are pinned by full commit SHA (the version in the comment): a moved tag cannot change what runs here.
 
 jobs:
-  # Quality gates (scripts/quality.py runs the same checks locally, with the same pinned tools and flags).
-  # The `.venv` in these jobs is the runner's own throwaway environment (uv, Python 3.13 on Linux); locally nothing
-  # makes one: the same commands run in the dev container (.devcontainer/, deploy/dev/; the `test` job runs there).
+  # The quality gates: pre-commit's hooks (.pre-commit-config.yaml: gitleaks over the whole history, Ruff, ShellCheck,
+  # hadolint, actionlint, the import contracts) in the dev container, exactly as `pre-commit run --all-files` runs
+  # there locally; then Trivy (the next job). The `.venv` in the jobs below is the runner's own throwaway environment
+  # (uv, Python 3.13 on Linux); locally nothing makes one: the same commands run in the dev container (.devcontainer/,
+  # deploy/dev/; the `test` job runs there).
   lint:
-    name: Lint (Ruff, Hadolint, ShellCheck)
+    name: Quality gates (pre-commit in the dev container)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0  # gitleaks scans every commit of the branch, not only the checked-out tree
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
@@ -36,26 +41,22 @@ jobs:
       - name: Lock file matches pyproject.toml (uv lock --check)
         run: uv lock --check
 
-      # Only Ruff, at the version pyproject.toml's dev extra pins (one source of truth), not the whole project.
-      - name: Install Ruff
-        run: |
-          uv venv --python 3.13 .venv
-          uv pip install --python .venv "$(grep -o 'ruff==[0-9.]*' pyproject.toml)"
+      # The action uses an installed `devcontainer` and otherwise installs the newest 0.x: pin the CLI (as the test job).
+      - name: Install the Dev Containers CLI (pinned)
+        run: npm install -g @devcontainers/cli@0.89.0
 
-      - name: Ruff (ruff check)
-        run: .venv/bin/python scripts/quality.py --only ruff
-
-      - name: Hadolint (Dockerfile)
-        run: .venv/bin/python scripts/quality.py --only hadolint
-
-      - name: ShellCheck (deploy/**/*.sh at severity warning, .githooks/* at every severity)
-        run: .venv/bin/python scripts/quality.py --only shellcheck
+      - name: pre-commit run --all-files (in the dev container, devcontainers/ci)
+        uses: devcontainers/ci@513af61f4de4f75d37e4438f184ba4358f0fc1ca  # v0.3.1900000450
+        with:
+          push: never
+          runCmd: pre-commit run --all-files --show-diff-on-failure
 
   trivy:
-    # The app image (vulnerabilities with a fix, HIGH and CRITICAL, and secrets), the Dockerfile's misconfigurations and
-    # secrets in the repository: each fails the job on a finding. The SARIF reports go to code scanning where the repo
-    # has it (public repos, or private ones with GitHub Advanced Security); an upload refused for lack of it does not
-    # fail the job, a finding does.
+    # The app image (vulnerabilities with a fix, HIGH and CRITICAL, and secrets), the Dockerfiles' misconfigurations and
+    # secrets in the repository, with Aqua's official action at the pinned Trivy; each fails the job on a finding, and
+    # .trivyignore (when present: a reason, a date and an expiry per entry) is read from the checkout by Trivy itself.
+    # The same scans are then written as SARIF for code scanning where the repo has it (public repos, or private ones
+    # with GitHub Advanced Security); an upload refused for lack of it does not fail the job, a finding does.
     name: Trivy (image, config, secrets)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -63,26 +64,95 @@ jobs:
       contents: read
       security-events: write  # the SARIF upload; this job only
       actions: read  # upload-sarif reads this workflow run (GET .../actions/runs/{id}); a private repo must grant it
+    env:
+      TRIVY_VERSION: v0.76.0  # the Trivy release the scans run (setup-trivy installs it; the database is cached)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
       - name: Build the image (linux/amd64, as the image job; no push)
         run: |
-          docker buildx build --platform linux/amd64 --build-arg GIT_SHA="${{ github.sha }}" --cache-from type=gha \
-            --load -t settleview:trivy .
+          docker buildx build --platform linux/amd64 --build-arg GIT_SHA="${{ github.sha }}" --cache-from type=gha             --load -t settleview:trivy .
 
-      - name: Trivy image scan
-        run: python3 scripts/quality.py --only trivy-image --image settleview:trivy --sarif-dir sarif
+      - name: Trivy image scan (fixable HIGH / CRITICAL vulnerabilities, secrets)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          image-ref: settleview:trivy
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
 
-      - name: Trivy config scan (Dockerfile, compose.yaml, deploy/)
+      - name: Trivy config scan (the Dockerfiles; HIGH / CRITICAL)
         if: success() || failure()
-        run: python3 scripts/quality.py --only trivy-config --sarif-dir sarif
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: config
+          scan-ref: .
+          skip-dirs: .cache
+          severity: HIGH,CRITICAL
+          exit-code: "1"
 
       - name: Trivy secret scan (repository)
         if: success() || failure()
-        run: python3 scripts/quality.py --only trivy-fs --sarif-dir sarif
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: .cache
+          scanners: secret
+          exit-code: "1"
+
+      - name: SARIF of the image scan (the same scan, for code scanning)
+        if: success() || failure()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: image
+          image-ref: settleview:trivy
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: sarif/trivy-image.sarif
+          limit-severities-for-sarif: true
+
+      - name: SARIF of the config scan
+        if: success() || failure()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: config
+          scan-ref: .
+          skip-dirs: .cache
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: sarif/trivy-config.sarif
+          limit-severities-for-sarif: true
+
+      - name: SARIF of the secret scan
+        if: success() || failure()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: .cache
+          scanners: secret
+          format: sarif
+          output: sarif/trivy-fs.sarif
 
       - name: Upload the image scan to code scanning
         if: (success() || failure()) && hashFiles('sarif/trivy-image.sarif') != ''
@@ -114,7 +184,7 @@ jobs:
     # through the official Dev Containers action (it runs @devcontainers/cli: `devcontainer up`, then `exec`).
     # The tests build their own data (fixtures, fakes, in-memory exchanges): no keys, no network, no data/ folder.
     # No BTCFLOW_* settings and no .env exist here, so every Settings() sees its defaults.
-    name: Tests and import contracts (the dev container, Python 3.13, Linux)
+    name: Tests (the dev container, Python 3.13, Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -125,7 +195,7 @@ jobs:
       - name: Install the Dev Containers CLI (pinned)
         run: npm install -g @devcontainers/cli@0.89.0
 
-      # Import contracts (lint-imports); the OpenTelemetry tests, none may be skipped (the scrubbing tests fail if a
+      # The OpenTelemetry tests, none may be skipped (the scrubbing tests fail if a
       # token, key, cookie, signature or query secret reaches an exporter; the GenAI one runs the bundled Claude Code
       # CLI against a local fake API); then the whole suite.
       - name: Tests in the dev container (devcontainers/ci)
@@ -134,7 +204,6 @@ jobs:
           push: never
           runCmd: |
             set -e
-            python scripts/quality.py --only imports
             pytest tests/telemetry -rs > /tmp/otel.txt 2>&1 || { cat /tmp/otel.txt; exit 1; }
             cat /tmp/otel.txt
             if grep -q SKIPPED /tmp/otel.txt; then echo "OpenTelemetry tests were skipped"; exit 1; fi
