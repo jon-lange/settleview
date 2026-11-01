@@ -123,7 +123,7 @@ def test_session_and_journal_kind_indexes_on_fresh_and_upgraded_databases(tmp_pa
     migrate(path)
     con = sqlite3.connect(path)
     assert all(name in _indexes(con, table) for name, table in INDEXES_0022)
-    assert con.execute("select version_num from alembic_version").fetchone()[0] == HEAD == "0022"
+    assert con.execute("select version_num from alembic_version").fetchone()[0] == HEAD
     plan = " ".join(r[3] for r in con.execute(
         "explain query plan select * from trading_brackets where session_id in ('a', 'b')"))
     assert "ix_trading_brackets_session" in plan

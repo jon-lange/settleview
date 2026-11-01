@@ -119,6 +119,7 @@ def empty_pg_tables(engine) -> None:
     with engine.begin() as c:
         names = [f'app."{t.name}"' for t in metadata.sorted_tables]
         names += [f'{RESEARCH_SCHEMA}."{t}"' for t in inspect(c).get_table_names(schema=RESEARCH_SCHEMA)]
+        c.execute(text("set local session_replication_role = replica"))  # skips trading_audit's append-only trigger
         c.execute(text(f"truncate {', '.join(names)} restart identity"))
 
 

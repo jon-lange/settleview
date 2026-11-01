@@ -115,6 +115,9 @@ In order:
 4. **Release engineering** — images built in CI, pushed to GHCR, semver tags, SBOM (Trivy), cosign signatures; deploy
    by digest; one-command rollback.
 5. **Append-only audit** — INSERT-only role for `trading_audit`, per-row hash chain, nightly export to write-once storage.
+   Done 2026-11-01 with standard mechanisms only (owner decision: no home-made hash chain or export format): GRANT /
+   REVOKE (the app may SELECT and INSERT), an UPDATE/DELETE/TRUNCATE trigger, the nightly pg_dump; WORM object storage
+   deferred with off-site backups; pgaudit not in the pinned image (docs/operations.md, "Postgres: the append-only audit").
 6. **Agent evals** — see docs/plans/2026-10-31-1900-agent-evals-plan.md (user: "I can help define eval best
    practices; I'd like those in place").
 7. Before cloud / multi-user: OIDC + MFA and roles (viewer/trader/admin); HA design (active/passive with a Postgres

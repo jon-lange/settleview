@@ -333,7 +333,13 @@ def move(jobs: list[Job], url, *, force_tables: Iterable[str] = (), batch: int =
                     with engine.begin() as c:
                         c.execute(text(f'delete from "{job.schema}".{PROGRESS} where table_name = :t'), {"t": name})  # noqa: S608 - identifiers from code, values bound
                         if present:
+                            if name == "trading_audit":  # append-only (migration 0023): its owner may lift it here
+                                c.execute(text(f'alter table "{job.schema}".trading_audit disable trigger '
+                                               "trading_audit_append_only"))
                             c.execute(text(f'truncate "{job.schema}"."{name}"'))
+                            if name == "trading_audit":
+                                c.execute(text(f'alter table "{job.schema}".trading_audit enable trigger '
+                                               "trading_audit_append_only"))
                     copied = _copy_table(src, engine, job.schema, source, target, cols, batch) if rows else 0
                     if copied != rows:
                         raise MoveError(f"{res.table}: copied {copied} rows, the source has {rows} (written to?)")

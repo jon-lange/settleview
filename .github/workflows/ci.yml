@@ -379,6 +379,11 @@ jobs:
           test "$(ro 'select count(*) from app.alembic_version')" = "1"
           if ro "create table research.nope (i int)"; then echo "the research role could write"; exit 1; fi
           if ro "delete from app.alembic_version"; then echo "the research role could delete"; exit 1; fi
+          # the append-only audit (deploy/postgres/audit.sql at init, sealed by migration 0023): the app role only adds rows
+          app() { docker compose exec -T postgres sh -c "PGPASSWORD=\"\$(cat /run/secrets/pg_app_password)\" psql -h localhost -U settleview_app -d settleview -v ON_ERROR_STOP=1 -At -c \"$1\""; }
+          test "$(adm "select pg_get_userbyid(relowner) from pg_class where oid = 'app.trading_audit'::regclass")" = "settleview_audit"
+          if app "delete from app.trading_audit"; then echo "the app role could delete audit rows"; exit 1; fi
+          if app "drop table app.trading_audit"; then echo "the app role could drop the audit"; exit 1; fi
           docker compose run --rm --no-deps backup bash /usr/local/bin/settleview-backup --once
           bash deploy/postgres/restore-drill.sh
 

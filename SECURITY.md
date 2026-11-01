@@ -41,3 +41,21 @@ Out of scope:
 - Clear-text traffic on the LAN (a known, documented limitation).
 - Vulnerabilities in Kalshi, Polymarket US or their SDKs. Report those to the vendor.
 - Trading losses. The app is not financial advice and makes no promise of profit.
+
+## Threat model: the trading audit
+
+`trading_audit` records every approval, order, refusal, fill and limit change with who did it (`pc`, `phone:...`,
+`agent:...`, `system`). STRIDE note for it (the rest of the threat model is planned with P3 item 7):
+
+- **Tampering.** On Postgres the app's role may only `SELECT` and `INSERT` audit rows; the table, its trigger and the
+  schema `app` belong to a no-login role (`deploy/postgres/audit.sql`), and a trigger refuses `UPDATE`, `DELETE` and
+  `TRUNCATE` even for the owner and a superuser outside the documented maintenance transaction (docs/operations.md,
+  "Postgres: the append-only audit"). A bug, an agent or a leaked app password therefore cannot rewrite or erase the
+  record. SQLite installs refuse `UPDATE` and `DELETE` by trigger but have no roles: anyone who can write the file can
+  change it.
+- **Repudiation.** Rows cannot be removed by the app, and each carries its actor, so "the agent / the phone did not do
+  that" can be checked against a record the app could not have edited afterwards.
+- **Not covered.** A Postgres superuser (or root on the host) can still change anything; the maintenance transaction is
+  logged but not prevented. Tamper evidence beyond the host comes from the nightly `pg_dump` today and, next (deferred
+  with off-site backups), from copying those dumps to object storage with object lock (WORM). Statement-level database
+  audit logging (`pgaudit`) would need an image the project does not build yet.

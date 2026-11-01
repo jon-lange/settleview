@@ -359,7 +359,8 @@ on start). Each connection sets its schema, so no SQL names one. The roles, made
 
 | Role | Used by | Rights |
 |---|---|---|
-| `settleview_app` | the app, the `migrate` job, `ops migrate` | owns the schema `app`; `SELECT` on `research` (the data alert, freshness), nothing else there |
+| `settleview_app` | the app, the `migrate` job, `ops migrate` | owns the tables of the schema `app` except `trading_audit`, where it may only `SELECT` and `INSERT` (below); `USAGE` and `CREATE` on `app` (its owner until `audit.sql` runs); `SELECT` on `research` (the data alert, freshness), nothing else there |
+| `settleview_audit` | nobody (no login) | owns `app.trading_audit`, its trigger function and the schema `app` (`deploy/postgres/audit.sql`) |
 | `settleview_recorder` | both recorders | owns the schema `research` and its tables; no privilege on `app` (not even `USAGE`) |
 | `settleview_research` | research scripts, notebooks, ad-hoc `psql` | `SELECT` on both schemas (also on tables made later), every transaction read-only |
 | `settleview_backup` | the `backup` service | `pg_read_all_data`, read-only |
@@ -390,6 +391,62 @@ line needs `MSYS_NO_PATHCONV=1` in front ("Deploying", the least-privilege steps
 `docker compose exec postgres psql -U postgres -d settleview -c "\dn+ research"` names `settleview_recorder` as the
 owner. On Swarm run the same script with `docker exec` in the postgres task; on a managed server run the SQL inside
 `roles.sh` as the admin user (a member of `settleview_app` and `settleview_recorder`, so it may move the ownership).
+
+### Postgres: the append-only audit
+
+`trading_audit` (every approval, order, refusal, fill, limit change and stream flip, with who did it) is append-only
+in the database itself (review plan P3 item 5), with standard Postgres mechanisms only:
+
+- **Privileges** (`deploy/postgres/audit.sql`): the table, its id sequence, its trigger function and the schema `app`
+  belong to `settleview_audit`, a role nobody logs in as. `settleview_app` keeps `SELECT` and `INSERT` on it (and
+  `USAGE` on the sequence): no `UPDATE`, `DELETE` or `TRUNCATE`, and not being an owner it cannot drop the table,
+  disable the trigger or grant itself more. The schema moves too because a schema's owner may drop any table in it
+  ([docs/solutions/2026-11-01-append-only-needs-the-schema-too.md](solutions/2026-11-01-append-only-needs-the-schema-too.md));
+  the app's role keeps `USAGE` and `CREATE` on `app` and owns its other tables, so its migrations work as before.
+- **A trigger** (migration 0023): `BEFORE UPDATE OR DELETE OR TRUNCATE ... FOR EACH STATEMENT` raises, so the owner and
+  a superuser cannot change a row by accident either. It never fires on `INSERT`: measured on the test Postgres, an
+  audit insert as the app costs the same as one into an unguarded copy of the table (0.59 vs 0.58 ms p50).
+- **SQLite** (tests, hosts without Docker): `BEFORE UPDATE` and `BEFORE DELETE` triggers that `RAISE(ABORT)`.
+
+**On a new volume** nothing is manual: the image runs `audit.sql` at initdb (`30-audit.sql`), which defines
+`public.settleview_seal_audit()` (`SECURITY DEFINER`, executable by `settleview_app` only); migration 0023 calls it once
+it has made the trigger. **On an existing volume**, once, after the migrate job has run 0023 (the migration adds the
+trigger only; it changes no row and takes milliseconds):
+
+```bash
+docker compose up -d postgres     # recreated with the new pg_audit config (a few seconds' restart)
+docker compose exec -T postgres psql -U postgres -d settleview -v ON_ERROR_STOP=1 \
+  -f /docker-entrypoint-initdb.d/30-audit.sql      # "sealed: app.trading_audit is owned by settleview_audit ..."
+```
+
+It is idempotent. From Git Bash on Windows prefix `MSYS_NO_PATHCONV=1`. Check: `\dp app.trading_audit` shows
+`settleview_app=ar/...` (append, read). On a managed server run the SQL in `audit.sql` as the admin user (a member of
+`settleview_app` and `settleview_audit`).
+
+**Maintenance** (a correction an administrator has decided on; never the app): one transaction, as the superuser,
+with every statement in the server log and the reason recorded as a row of the audit itself:
+
+```sql
+BEGIN;
+SET LOCAL log_statement = 'all';  -- the server log keeps every statement of this transaction
+ALTER TABLE app.trading_audit DISABLE TRIGGER trading_audit_append_only;
+-- the change
+ALTER TABLE app.trading_audit ENABLE TRIGGER trading_audit_append_only;
+INSERT INTO app.trading_audit (ts, event, env, actor, reason)
+  VALUES ((extract(epoch from now()) * 1000)::bigint, 'maintenance', 'all', 'system', '<what and why>');
+COMMIT;
+```
+
+A later migration that must change the table's rows or definition runs the same way, as an administrator; on SQLite a
+batch (copy-and-move) alter drops the triggers with the old table, so it creates them again.
+
+**Tamper evidence and retention** come from standard tooling: the nightly `pg_dump` (`backup` service, 7 daily +
+4 weekly) holds every audit row, and the next step, deferred with the off-site backups, is to copy those dumps to object
+storage with object lock (S3 Object Lock / Azure immutable blob storage, WORM) through `BACKUP_HOOK`. Statement-level
+audit logging inside Postgres is the `pgaudit` extension; the pinned `postgres:17.10-bookworm` image does not ship it
+(checked 2026-11-01: no pgaudit in its extension or library folders), so it would need its own image
+(`postgresql-17-pgaudit` from the PGDG apt repository) or a managed server that offers it; not done. Threats covered
+and not: [SECURITY.md](../SECURITY.md), "Threat model: the trading audit".
 
 ### Postgres: migrations as a one-off job
 

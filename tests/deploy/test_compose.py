@@ -31,7 +31,7 @@ def _config(tmp_path: Path, **env: str) -> dict:
         pytest.skip("no docker CLI")
     (tmp_path / "deploy" / "postgres").mkdir(parents=True)
     shutil.copy(ROOT / "compose.yaml", tmp_path / "compose.yaml")
-    for f in ("initdb.sh", "roles.sh", "backup.sh"):
+    for f in ("initdb.sh", "roles.sh", "audit.sql", "backup.sh"):
         shutil.copy(ROOT / "deploy" / "postgres" / f, tmp_path / "deploy" / "postgres" / f)
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "openobserve.env").write_text("ZO_ROOT_USER_PASSWORD=dummy\n", encoding="utf-8")
@@ -124,7 +124,8 @@ def test_the_recorders_connect_as_the_recorder_role_and_the_app_as_the_app_role(
     pg = services["postgres"]
     assert {x["source"] for x in pg["secrets"]} >= {"pg_recorder_password"}
     assert {c["target"] for c in pg["configs"]} == {"/docker-entrypoint-initdb.d/10-settleview.sh",
-                                                     "/docker-entrypoint-initdb.d/20-roles.sh"}
+                                                     "/docker-entrypoint-initdb.d/20-roles.sh",
+                                                     "/docker-entrypoint-initdb.d/30-audit.sql"}
 
 
 def test_migrations_run_as_a_one_off_job_the_app_waits_for(tmp_path):

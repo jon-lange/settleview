@@ -226,6 +226,12 @@ services:
       # existing volume: docker compose exec -T postgres bash /docker-entrypoint-initdb.d/20-roles.sh (idempotent).
       - source: pg_roles
         target: /docker-entrypoint-initdb.d/20-roles.sh
+      # The append-only audit (the app's role may only add trading_audit rows): on the first start, and once by hand
+      # on an existing volume after migration 0023 (docs/operations.md, "Postgres: the append-only audit"):
+      #   docker compose exec -T postgres psql -U postgres -d settleview -v ON_ERROR_STOP=1 \
+      #     -f /docker-entrypoint-initdb.d/30-audit.sql
+      - source: pg_audit
+        target: /docker-entrypoint-initdb.d/30-audit.sql
     volumes:
       - settleview-pg:/var/lib/postgresql/data
     # Not published: only the services on this network reach it. For tools on this PC, uncomment (loopback only):
@@ -496,6 +502,8 @@ configs:
     file: ./deploy/postgres/initdb.sh
   pg_roles:
     file: ./deploy/postgres/roles.sh
+  pg_audit:
+    file: ./deploy/postgres/audit.sql
   pg_backup:
     file: ./deploy/postgres/backup.sh
 
