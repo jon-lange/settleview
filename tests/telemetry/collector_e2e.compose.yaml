@@ -24,7 +24,7 @@ services:
 
   e2e:
     profiles: [e2e]
-    image: settleview-dev:local  # scripts/dev.py builds it
+    image: settleview-dev:local  # `docker compose -f deploy/dev/compose.yaml build dev` builds it
     working_dir: /app
     volumes:
       - type: bind
