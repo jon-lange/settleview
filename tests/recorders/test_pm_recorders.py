@@ -316,3 +316,37 @@ def test_ops_alive_reads_only_the_heartbeat_file(tmp_path, monkeypatch, capsys):
     os.utime(p, (old, old))
     assert ops.main(["alive", "pm-quotes"]) == 1 and "limit 60 s" in capsys.readouterr().err
     assert ops.main(["alive", "pm-quotes", "--max-age", "300"]) == 0
+
+
+def test_a_main_loop_that_stops_beating_ends_the_process(tmp_path):
+    """The process-local watch: a heartbeat file older than the limit ends the process with 75 (Compose never acts
+    on an unhealthy container); a fresh file, no file, or a stopped watch never does."""
+    import os
+    import threading
+    import time
+
+    from btc_signal_engine.bootstrap import heartbeat
+
+    p = tmp_path / "rec.alive"
+    exits: list[int] = []
+    fired = threading.Event()
+
+    def exit_(code):
+        exits.append(code)
+        fired.set()
+
+    heartbeat.beat(p)
+    done = heartbeat.exit_when_stale(p, 60.0, check_s=0.01, exit=exit_)
+    time.sleep(0.1)
+    assert exits == []  # beaten just now
+    old = time.time() - 120
+    os.utime(p, (old, old))
+    assert fired.wait(5) and exits == [heartbeat.EX_STALLED] and heartbeat.EX_STALLED == 75
+    done.set()
+
+    exits.clear()
+    p.unlink()
+    done = heartbeat.exit_when_stale(p, 60.0, check_s=0.01, exit=exit_)
+    time.sleep(0.1)
+    done.set()
+    assert exits == []  # no file (the recorder removed it at its end): nothing to judge

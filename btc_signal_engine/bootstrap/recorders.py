@@ -12,8 +12,10 @@ set, the `research` schema of that Postgres database (same tables and columns). 
   --every S          pm-settle only: seconds between passes (default 5)
 
 Liveness: each recorder touches `<temp folder>/settleview-<name>.alive` from its main loop (bootstrap/heartbeat.py);
-the container healthcheck is `python -m btc_signal_engine.ops alive <name>`. Data freshness (`ops fresh`) is an alert
-and readiness signal, not a restart trigger.
+the container healthcheck is `python -m btc_signal_engine.ops alive <name>`, and a main loop that stops beating for
+heartbeat.STALE_EXIT_S ends the process with 75 by itself (Compose never restarts an unhealthy container); pm-quotes
+also exits 75 when one lane's own loop stops turning (adapters/polymarket_us/recorders.py, LANE_STUCK_S). Data
+freshness (`ops fresh`) is an alert and readiness signal, not a restart trigger.
 
 SIGTERM / SIGINT (and SIGBREAK on Windows) stop the recorder cleanly: it flushes what it holds, closes its sockets and
 exits 0. A configuration error exits 78 (the supervisor does not restart it); a bad OTEL_* setting is one too.
@@ -132,6 +134,7 @@ def main(argv: list[str] | None = None, *, settings: Settings | None = None) -> 
     alive = heartbeat.path(a.name)  # the healthcheck's liveness (`ops alive`), touched from the main loop
     beat = functools.partial(heartbeat.beat, alive)
     beat()
+    watch = heartbeat.exit_when_stale(alive, heartbeat.STALE_EXIT_S[a.name])  # a wedged main loop ends the process
     log.info("%s recorder writing %s", a.name, describe(db))
     try:
         from polymarket_us import PolymarketUS
@@ -147,6 +150,7 @@ def main(argv: list[str] | None = None, *, settings: Settings | None = None) -> 
             rec.run_settle(db, PolymarketUS(timeout=10.0), every_s=a.every, wait=stop.wait,  # public: no key
                            beat=beat)
     finally:
+        watch.set()
         if a.stop_file is not None:
             a.stop_file.unlink(missing_ok=True)
         alive.unlink(missing_ok=True)

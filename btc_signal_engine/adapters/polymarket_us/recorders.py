@@ -26,6 +26,9 @@ adapters/sqlite/research_tables.py). Moved from scripts/record_polymarket_us_ws.
       outage, raises `RecorderStalled`: the process exits non-zero (75) and its restart policy starts it again
       (plain Docker does not restart an unhealthy container; the healthcheck alone changes nothing). In a venue
       outage it stays up: a restart cannot bring the venue's book back, and the trades keep being recorded.
+    * one lane whose own loop has not turned for LANE_STUCK_S (3 min: a connect, subscribe or close that never
+      returns) raises `RecorderStalled` too, even while the other lanes record (the watchdog's heartbeat alone would
+      stay fresh on the working lanes).
 - Settlement (`run_settle`): once a window has closed, its terms via the public SDK client
   (`markets.retrieve_by_slug`: assetPriceTerms.priceToBeat / settlementPrice) into
     pm_windows(slug, span, window_start, window_end, price_to_beat, settlement_price, result, raw, fetched_ms)
@@ -79,6 +82,10 @@ NO_BOOK_S = 120  # no quote at all for this long while trades arrived: book sile
 VENUE_OUTAGE_AFTER = 3  # book silences in a row without a single quote: the venue's book feed is down
 BOOK_SILENT_BACKOFF_MAX_S = 120.0  # the longest wait between reconnects during a book silence
 STALL_EXIT_S = 600  # no quote from any lane for this long, and no venue outage: exit non-zero (restart)
+# A lane whose own loop has not turned for this long (a connect, subscribe or close that never returns: none of the
+# SDK's WebSocket calls has a timeout of its own) is wedged: exit non-zero, even while the other lanes record. A lane
+# turns every tick on a live connection, between reconnects and in each 1 s slice of a reconnect wait.
+LANE_STUCK_S = 180
 EX_STALLED = 75  # sysexits.h EX_TEMPFAIL: the supervisor and Docker's restart policy start it again
 SETTLE_AFTER_S = 30  # settles within about a minute of the close
 SETTLE_GIVE_UP_S = 1800  # give up on a window 30 minutes after its close
@@ -280,7 +287,7 @@ async def run_lane_once(rec: QuoteRecorder, client: Any, spans: set[str], *, sto
     docstring) or `stop()` (returns). `seen` (optional, filled in): what this connection received."""
     ms = lambda: int(now_s() * 1000)  # noqa: E731
     seen = {} if seen is None else seen
-    seen.update(started_ms=ms(), books=0, trades=0, book_ms=None, unbooked_ms=None, trade_ms=None)
+    seen.update(started_ms=ms(), turn_ms=ms(), books=0, trades=0, book_ms=None, unbooked_ms=None, trade_ms=None)
 
     def on_lite(d: dict) -> None:
         rec.on_lite(d)
@@ -328,6 +335,7 @@ async def run_lane_once(rec: QuoteRecorder, client: Any, spans: set[str], *, sto
                 subs[slug] = [f"p{n}", f"t{n}"]
                 log.info("subscribed %s", slug)
             await asyncio.sleep(tick_s)
+            seen["turn_ms"] = ms()  # this lane's loop turns (run_quotes' watchdog: LANE_STUCK_S)
             await rec.flush_async()  # a database outage keeps the rows and this socket
             if errors:
                 raise RuntimeError(errors[-1])
@@ -347,10 +355,11 @@ async def run_quotes(db_path: DbTarget, client_factory: Callable[[], Any], *, st
                      server_message: Callable[[Any], bool] = _is_server_message,
                      stall_exit_s: float = STALL_EXIT_S, venue_outage_after: int = VENUE_OUTAGE_AFTER,
                      state: dict | None = None, beat: Callable[[], None] | None = None,
-                     max_buffered: int = MAX_BUFFERED) -> None:
+                     max_buffered: int = MAX_BUFFERED, lane_stuck_s: float = LANE_STUCK_S) -> None:
     """Every span's lane until `stop()`; each lane reconnects `reconnect_s` after any failure (longer, doubling,
     during a book silence). Raises `RecorderStalled` when no quote was recorded for `stall_exit_s` and no lane is in
-    a venue outage (module docstring). `state` (optional, filled in): per lane {silences, venue_outage, reason}.
+    a venue outage (module docstring), or when one lane's own loop has not turned for `lane_stuck_s` (a wedged
+    connect, subscribe or close). `state` (optional, filled in): per lane {silences, venue_outage, reason, turn_ms}.
     `beat` (the process-local liveness) is called every tick from the watchdog."""
     db = open_db(db_path, QUOTES_TABLES)
     ms = lambda: int(now_s() * 1000)  # noqa: E731
@@ -362,17 +371,28 @@ async def run_quotes(db_path: DbTarget, client_factory: Callable[[], Any], *, st
         """The lane declared a venue-side book outage and its current connection has still had no quote."""
         return bool(st.get("venue_outage")) and not st.get("seen", {}).get("books")
 
-    async def wait(seconds: float) -> None:
+    async def wait(seconds: float, st: dict) -> None:
         waited = 0.0
         while waited < seconds and not stop():
             await asyncio.sleep(min(tick_s, seconds - waited) if tick_s > 0 else 0)
             waited += tick_s if tick_s > 0 else seconds
+            st["turn_ms"] = ms()
+
+    def wedged() -> tuple[str, float] | None:
+        """The first lane whose own loop has not turned for over `lane_stuck_s`, with how long; None when all turn."""
+        now = ms()
+        for span, st in state.items():
+            last = max(st.get("turn_ms") or started, st.get("seen", {}).get("turn_ms") or 0)
+            if now - last > lane_stuck_s * 1000:
+                return span, (now - last) / 1000
+        return None
 
     async def lane(span: str) -> None:
         # One connection per window length: the server caps subscriptions per connection, and 6 markets x 2 types
         # on one connection exceeded it ("max subscriptions per connection reached", 2026-10-29).
         st = state.setdefault(span, {"silences": 0, "venue_outage": False, "reason": None, "seen": {}})
         while not stop():
+            st["turn_ms"] = ms()
             seen: dict = {}
             st["seen"] = seen  # the live connection's counts: a quote on it ends a venue outage (venue_outage())
             delay = reconnect_s
@@ -402,10 +422,15 @@ async def run_quotes(db_path: DbTarget, client_factory: Callable[[], Any], *, st
                 if st["venue_outage"]:
                     log.warning("%s lane: quotes are flowing again", span)
                 st.update(silences=0, venue_outage=False, reason=None)
-            await wait(delay)
+            await wait(delay, st)
 
     async def watchdog() -> None:  # cancelled once every lane has stopped
         while True:
+            stuck = wedged()
+            if stuck is not None:
+                log.error("quotes recorder: the %s lane has not turned for %.0f s (a WebSocket call that never "
+                          "returns): exiting so the restart policy starts a fresh process", *stuck)
+                raise RecorderStalled(f"the {stuck[0]} lane has not turned for {stuck[1]:.0f} s")
             if beat is not None:
                 beat()
             await asyncio.sleep(tick_s)

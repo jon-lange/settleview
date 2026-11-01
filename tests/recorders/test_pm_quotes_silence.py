@@ -212,3 +212,27 @@ def test_the_data_alert_says_the_venue_sends_trades_but_no_quotes():
     (c,) = w.changes(now)
     assert change_text(c) == ("Quotes recorder silent", "no Polymarket quotes for 5 min")
     assert "reason" not in w.status(now)["recorders"]["pm-quotes"]
+
+
+def test_a_wedged_lane_stops_the_heartbeat_and_raises_stalled(tmp_path, caplog):
+    """One lane's connect never returns while the other lane records: the recorder exits 75 after LANE_STUCK_S
+    instead of beating (healthy) forever on the working lane."""
+    v = Venue(end_s=30 * 60)
+    markets = v.markets
+
+    class Hung(VenueWS):
+        async def connect(self):
+            await asyncio.Event().wait()  # a WebSocket handshake that never completes
+
+    def pick():
+        ws = markets()
+        if len(v.sockets) == 2:  # the second lane's first socket hangs
+            ws.__class__ = Hung
+        return ws
+
+    v.markets = pick
+    with caplog.at_level(logging.ERROR), pytest.raises(rec.RecorderStalled, match="lane has not turned for 18"):
+        asyncio.run(rec.run_quotes(tmp_path / rec.DB_NAME, lambda: v, stop=v.stop, spans=("5m", "15m"), tick_s=0.0,
+                                   now_s=lambda: v.t, server_message=lambda e: False))
+    assert NOW + rec.LANE_STUCK_S <= v.t < NOW + rec.LANE_STUCK_S + 5  # at the limit, not at the end
+    assert "lane has not turned for" in caplog.text and count(tmp_path / rec.DB_NAME, "pm_ws_quotes") > 100
