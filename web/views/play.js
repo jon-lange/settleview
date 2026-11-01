@@ -154,7 +154,7 @@
   }
   function contracts(stake, p, st) {
     if (!(stake > 0) || !(p > 0 && p < 1) || !st) return 0;
-    var rate = st.fee_rate, cent = st.fee_rounding === 'cent';
+    var rate = st.fee_rate, cent = st.fee_rounding === 'nearest_cent';
     var n = Math.floor(stake / (p * (1 + rate * (1 - p))) * 100 + 1e-9) / 100;
     while (n > 0 && n * p + fee(n, p, rate, false) > stake + 1e-9) n = Math.round((n - 0.01) * 100) / 100;
     if (st.whole_contracts) {
@@ -834,8 +834,8 @@
         }
         var cap = this.capFor(s), n = cap == null ? 0 : contracts(this.amount(), cap, st);
         if (!n) return null;
-        var avg = e.ask != null && e.ask <= cap ? e.ask : cap, f = fee(n, avg, st.fee_rate, st.fee_rounding === 'cent');
-        return { n: n, avg: avg, fee: f, cost: n * cap + fee(n, cap, st.fee_rate, st.fee_rounding === 'cent'), payout: n,
+        var avg = e.ask != null && e.ask <= cap ? e.ask : cap, f = fee(n, avg, st.fee_rate, st.fee_rounding === 'nearest_cent');
+        return { n: n, avg: avg, fee: f, cost: n * cap + fee(n, cap, st.fee_rate, st.fee_rounding === 'nearest_cent'), payout: n,
           worst: null, maxPrice: cap, fits: true };
       },
       previewText: function () {
@@ -1462,7 +1462,7 @@
         var p = this.pos(), a = (p && p.advice) || {}, st = this.v && this.v.stake, tp = this.tpCents / 100;
         if (this.tpCents >= 99) return 'Ride to settlement (recommended)';
         if (!p || !st || a.cost == null) return 'Sell at ' + c(tp);
-        var gain = p.held * tp - fee(p.held, tp, st.fee_rate, st.fee_rounding === 'cent') - a.cost;
+        var gain = p.held * tp - fee(p.held, tp, st.fee_rate, st.fee_rounding === 'nearest_cent') - a.cost;
         return 'Sell at ' + c(tp) + ' → ' + sUsd(gain) + ' after fees';
       },
       // Save the sheet: the stop first (no order involved), then the auto-sell (cancel/replace) if it changed.

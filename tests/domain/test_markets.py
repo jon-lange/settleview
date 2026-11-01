@@ -65,7 +65,7 @@ def test_play_tabs_come_from_the_table():
     assert play.VENUES == ("kalshi", "polymarket")
     assert play.SPANS == {"kalshi": ("15m",), "polymarket": ("15m", "5m")}
     assert play.VENUE_NAMES == {"kalshi": "Kalshi", "polymarket": "Polymarket"}
-    assert play.FEE_ROUNDING == {"kalshi": "up_0.0001", "polymarket": "cent"}
+    assert play.FEE_ROUNDING == {"kalshi": "up_0.0001", "polymarket": "nearest_cent"}
     assert [play.venue_key(m.venue, m.span) for m in M.phone_markets()] == ["kalshi", "polymarket", "polymarket_5m"]
     assert play.venue_key("kalshi", "5m") is None and play.venue_key("polymarket", "1h") is None
 

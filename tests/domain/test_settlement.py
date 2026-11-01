@@ -76,3 +76,19 @@ def test_taker_fee_matches_every_real_production_fill_rounded_up_to_4dp():
     from btc_signal_engine.domain.settlement.fees import kalshi_fee
     for c, p, charged in REAL_TAKER_FILLS:
         assert kalshi_fee(c, p) == charged, (c, p, charged)
+
+
+# Real Polymarket US production fills (2026-10-29; docs/research/LEARNINGS.md, "Polymarket US"): (contracts, price,
+# fee charged). 2 @ 22c is raw $0.0239 and 2 @ 17c raw $0.0196: both cost $0.02, so the fee is rounded to the NEAREST
+# cent, not up (up would be $0.03 for the first). 1-lots at 33c and 68c (raw $0.0154 / $0.0151) cost $0.02 as well.
+REAL_PM_TAKER_FILLS = [(2, 0.22, 0.02), (2, 0.17, 0.02), (1, 0.33, 0.02), (1, 0.68, 0.02)]
+
+
+def test_polymarket_fee_matches_real_fills_rounded_to_the_nearest_cent():
+    from btc_signal_engine.domain.markets import venue as venue_spec
+    from btc_signal_engine.domain.settlement.fees import polymarket_fee
+    assert venue_spec("polymarket").fee_rounding == "nearest_cent"
+    assert venue_spec("kalshi").fee_rounding == "up_0.0001"
+    for c, p, charged in REAL_PM_TAKER_FILLS:
+        assert polymarket_fee(c, p) == charged, (c, p, charged)
+    assert polymarket_fee(1, 0.98) == 0.0  # raw $0.0014: a 98c 1-lot pays no fee (nearest cent), not 1c

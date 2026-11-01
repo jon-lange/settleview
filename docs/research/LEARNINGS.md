@@ -97,8 +97,11 @@ The single place for what this project has learned: every hypothesis tested, its
 - **Down = BUY_SHORT / SELL_SHORT works** (1 contract each way filled); its execution prices come back in NO terms
   (bought at 66c with YES 34/35). Cancel answer and get_order-after-cancel agreed (`canceled`).
 - **A post-only (participateDontInitiate) buy at ask+2c rested instead of being rejected** — semantics unclear.
-- Fees: 1 contract at 33-68c cost $0.02 each (0.0695·P·(1−P) ≈ 1.5-1.6c, rounded up to the cent on 1-lots).
-- **Fees:** 2 contracts at 22c and 17c each cost $0.02, consistent with 0.0695·C·P·(1−P) rounded to the cent.
+- Fees: 1 contract at 33-68c cost $0.02 each (0.0695·P·(1−P) ≈ 1.5-1.7c, rounded to the nearest cent).
+- **Fees: rounded to the NEAREST cent (half up) per order, not up:** 2 contracts at 22c (raw $0.0239) and at 17c (raw
+  $0.0196) each cost $0.02; rounding up would have charged $0.03 for the 22c pair. The 1-lots above fit either rule.
+  Corollary: a 1-lot at 95-99c (raw < 0.5c) pays no fee. Code: `polymarket_fee`, `VenueSpec.fee_rounding = "nearest_cent"`
+  (wording corrected 2026-11-01; earlier docs said "rounded up").
 - **Settlement equals Kalshi KXBTC15M to the cent** (same CF Benchmarks BRTI 60 s average; 3,293/3,293 results since
   2026-09-24). History prices are 1-minute display snapshots ~1 min late: no fair backtests on them.
 

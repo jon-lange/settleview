@@ -5,7 +5,7 @@ the real book level by level within their limit; resting orders fill from public
 and latency, or by the book trading through them when the print feed cannot vouch for completeness), fed by
 `PolymarketMarketData`: `book_fn` = the live book in YES-bid / NO-bid form (a NO bid at 1 - p for each YES offer at
 p), `trades_fn` = the WebSocket prints, `market_fn` = the window from the slug. Taker fees are Polymarket's
-(`polymarket_fee`: 0.0695 x C x P x (1 - P), rounded to the cent); makers pay 0. Every event it emits is stamped
+(`polymarket_fee`: 0.0695 x C x P x (1 - P), rounded to the nearest cent); makers pay 0. Every event it emits is stamped
 env "pm_shadow". A book that is not servable (market_data.py's freshness rule) raises, so the shadow quote is refused like
 production's: nothing is ever priced from the cached REST BBO.
 

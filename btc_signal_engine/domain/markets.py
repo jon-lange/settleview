@@ -22,7 +22,11 @@ class UnknownMarket(ValueError):
 class VenueSpec:
     key: str  # "kalshi" | "polymarket" (the Play screens' venue)
     name: str  # display name ("No live Polymarket price ...")
-    fee_rounding: str  # how the venue rounds a fee (the stake box's maths): "up_0.0001" | "cent"
+    # How the venue rounds a taker fee (the stake box's maths; domain/settlement/fees.py computes it):
+    #   "up_0.0001":    up (ceiling) to $0.0001 per fill: Kalshi (kalshi_fee; 14/14 production fills)
+    #   "nearest_cent": to the NEAREST cent, half up, per order: Polymarket US (polymarket_fee; production fills
+    #                   2026-10-29: 2 @ 22c (raw $0.0239) and 2 @ 17c (raw $0.0196) each cost $0.02, so not rounded up)
+    fee_rounding: str
 
 
 @dataclass(frozen=True)
@@ -43,7 +47,7 @@ class MarketSpec:
 
 VENUES: dict[str, VenueSpec] = {
     "kalshi": VenueSpec("kalshi", "Kalshi", "up_0.0001"),
-    "polymarket": VenueSpec("polymarket", "Polymarket", "cent"),
+    "polymarket": VenueSpec("polymarket", "Polymarket", "nearest_cent"),
 }
 
 # Display order matters: a venue's Play tabs follow it.

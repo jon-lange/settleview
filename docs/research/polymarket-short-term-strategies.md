@@ -26,7 +26,7 @@ Two quick read-only checks on our own data were run while writing this (numbers 
 |---|---|---|---|
 | Settlement | Chainlink BTC/USD stream. Single print until 2026-08-06; **60 s Chainlink TWAP for both strike and close from 2026-08-07** (15m/4h); 5m moved from a 30 s to a 60 s TWAP on 2026-08-14 ([tradoxvps](https://tradoxvps.com/polymarket-twap-settlement/), [casatrick](https://casatrick.substack.com/p/polymarket-twap-latency-trading-bots), [onekey](https://onekey.so/blog/ecosystem/polymarket-to-upgrade-crypto-updown-market-settlements-from-single-price-snapshots-to-twap-20260730231730/)). Hourly/daily: Binance candles | CF Benchmarks BRTI, 60 s simple average, ≥ = Up | identical to PM US (3,293/3,293 results) |
 | Book | Separate Up and Down token books; complete sets can be minted/merged for $1 | **One book per market** (Down = BUY_SHORT at 1 − Up bid) | one book |
-| Fees | Taker fee on short crypto (peak ≈1.56–3.15% at 50¢, sources disagree), rebated to makers (100% at launch, reportedly ~20% later); 50–250 ms taker delay | taker 0.0695·C·P·(1−P), **rounded up to the cent on small lots** (1 contract at 33–68¢ cost 2¢); maker 0; no rebate below $10M/month | taker 0.07·C·P·(1−P) rounded up to $0.0001; maker 0 |
+| Fees | Taker fee on short crypto (peak ≈1.56–3.15% at 50¢, sources disagree), rebated to makers (100% at launch, reportedly ~20% later); 50–250 ms taker delay | taker 0.0695·C·P·(1−P), **rounded to the nearest cent per order** (1 contract at 33–68¢ cost 2¢; 2 at 22¢, raw 2.39¢, cost 2¢, not 3¢); maker 0; no rebate below $10M/month | taker 0.07·C·P·(1−P) rounded up to $0.0001; maker 0 |
 | Identities | public wallets (copy-trading possible) | no public wallets | none |
 
 Consequences: (1) "YES + NO asks < $1" cannot exist on a single book (Up ask + Down ask = Up ask + 1 − Up bid ≥ 1),
@@ -246,8 +246,9 @@ one market (impossible), settlement manipulation (off-limits), lotteries/streaks
 ## Pre-registered test specs
 
 Common rules (AGENTS.md): entries only at prices that really showed in the WebSocket book (`pm_ws_quotes`, ask for
-buys) at or after the decision time, plus 1¢ slippage per leg; **PM US fee 0.0695·C·P·(1−P) rounded UP to the cent
-per order** (we observed 2¢ on 1-lots — size used for scoring: 10 contracts, fee rounded up per 10-lot) and Kalshi
+buys) at or after the decision time, plus 1¢ slippage per leg; **PM US fee 0.0695·C·P·(1−P) rounded to the NEAREST
+cent per order** (half up; we observed 2¢ on 1-lots and 2¢ on 2 @ 22¢ — size used for scoring: 10 contracts, fee
+rounded to the nearest cent per 10-lot; corrected 2026-11-01 from "rounded UP", before any of these specs was scored) and Kalshi
 fee 0.07·C·P·(1−P) rounded up to $0.0001; official `pm_windows` / Kalshi results; one entry per window (per nested
 group for S1/S2); t clustered by window; chronological first 2/3 of days = train, last 1/3 = holdout; survivor only
 if holdout net > 0, both chronological holdout halves > 0, n ≥ 30 holdout trades, and t above the Bonferroni bar the

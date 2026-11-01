@@ -10,7 +10,7 @@ rules and the common rules in docs/research/polymarket-short-term-strategies.md 
 - The 5m studies the user shared (2026-10-31) describe **Polymarket international**. We trade **Polymarket US**:
   settlement is CF Benchmarks BRTI 60 s average before close ≥ 60 s average before open (flat = Up), the same index
   as Kalshi, not Chainlink; one book per market (no split/merge, no complete-set minting); taker fee
-  0.0695·C·P·(1−P) rounded up to the cent per order (2¢ on a 1-lot at 33–68¢), maker 0, no rebate at our size.
+  0.0695·C·P·(1−P) rounded to the nearest cent per order (2¢ on a 1-lot at 33–68¢; 2¢, not 3¢, on 2 @ 22¢), maker 0, no rebate at our size.
   So oracle-lag tricks, split/merge market making and rebate farming do not transfer.
 - Mapping of the six shared ideas: price-the-lead → **5M-LEAD** (new, below); spot latency → not ours (co-location
   race); two-sided maker → not now (no split/merge; needs fast cancel/reprice code); late 97–99¢ → **5M-FAV** (cheap
@@ -57,7 +57,7 @@ at that time, holds to settlement, by more than the fee.
   window. Final-minute projection is out of scope (needs the fast recorder of S3), so t_left stops at 60 s.
 - **Configurations (all counted in the multiple-testing bar):** (1) with the volatility split; (2) without it.
   Nothing else varies. Margin 3¢, bins and check times are fixed now.
-- **Scoring.** Primary: the $1 stake the agent would use (contracts = $1 / ask, fee rounded up per order, as live).
+- **Scoring.** Primary: the $1 stake the agent would use (contracts = $1 / ask, fee rounded to the nearest cent per order, as live).
   Secondary: 10-contract lots. Entries only at asks really shown in `pm_ws_quotes` at or after the check second,
   with ≥ the needed size displayed. Official `pm_windows` result. Report n, win % vs break-even %, net ¢/contract,
   t clustered by window, and how often each cell fired.
@@ -73,8 +73,8 @@ at that time, holds to settlement, by more than the fee.
 
 - **Rule.** First snapshot at or after T−60 s where one side's ask is in [95¢, 99¢]; buy it with $1; hold. A second,
   separately counted config at T−30 s.
-- **Why it is cheap to kill.** At $1 a 98¢ buy is one contract; the fee rounds up to 1¢, so a win nets ≈ +1¢ and a
-  loss −99¢: break-even ≈ 99%. Report win % vs that break-even.
+- **Why it is cheap to kill.** At $1 a 98¢ buy is one contract; the fee (raw 0.14¢) rounds to 0¢, so a win nets ≈ +2¢
+  and a loss −98¢: break-even ≈ 98%. Report win % vs that break-even.
 - **Pass bar and dates** as 5M-LEAD (standard bar; final read 2026-11-09).
 
 ## S1 PM-NEST, S4 ARGONA — re-dated
