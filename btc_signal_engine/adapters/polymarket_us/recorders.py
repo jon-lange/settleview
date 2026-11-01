@@ -32,7 +32,8 @@ adapters/sqlite/research_tables.py). Moved from scripts/record_polymarket_us_ws.
   (CF Benchmarks BRTI 60 s average, as Kalshi; flat = Up). `pm_quotes` is created for old readers, never written.
 
 A database outage never costs a WebSocket: a failed write keeps its rows for the next flush (each buffer capped at
-MAX_BUFFERED rows, the oldest dropped and counted, said at WARNING), the lane keeps its connection, and the socket is
+MAX_BUFFERED rows, the oldest dropped and counted: `dropped`, said at WARNING, and the OpenTelemetry counter
+`settleview.venue.dropped` {component pm_quotes_recorder, buffer quotes|trades}), the lane keeps its connection, and the socket is
 always closed first when a lane ends, whatever the last flush does. Writes run in a worker thread, so a slow database
 never stalls the lanes' event loop. Both recorders call `beat` from their main loop (the process-local liveness the
 container healthcheck reads; bootstrap/heartbeat.py).
@@ -56,6 +57,7 @@ from typing import Any
 from sqlalchemy import Engine, insert
 from sqlalchemy.dialects import postgresql, sqlite
 
+from btc_signal_engine.adapters import telemetry
 from btc_signal_engine.adapters.polymarket_us.markets import num, slug_for as _slug_for_ms, span_of
 from btc_signal_engine.adapters.sqlite.research import create_research_tables, research_write_engine
 from btc_signal_engine.adapters.sqlite.research_tables import (
@@ -168,6 +170,7 @@ class QuoteRecorder:
         while len(buf) > self.max_buffered:
             buf.popleft()
             self.dropped += 1
+            telemetry.dropped("pm_quotes_recorder", "quotes" if buf is self.q else "trades")
             if self.dropped == 1 or self.dropped % 10_000 == 0:
                 log.warning("quotes recorder: buffer full (%d rows) while the database is not taking writes; "
                             "dropping the oldest (%d dropped so far)", self.max_buffered, self.dropped)

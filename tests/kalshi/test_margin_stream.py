@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from btc_signal_engine.adapters import retry
 from btc_signal_engine.adapters.kalshi.margin_stream import MARGIN_WS_PATH, MARGIN_WS_URLS, MarginStream
 from btc_signal_engine.domain.markets import perp
 
@@ -33,6 +34,13 @@ def acks(*channels, start_sid=1):
 
 
 ALL_ACKS = acks("orderbook_delta", "ticker", "trade", "fill", "user_orders")
+
+
+@pytest.fixture(autouse=True)
+def top_of_the_jitter(monkeypatch):
+    """Reconnect waits are full-jitter draws (adapters/retry.py); at the top of each draw they are the backoff
+    ceilings themselves (1, 2, 4 ... 30 s), which these tests check exactly."""
+    monkeypatch.setattr(retry, "_uniform", lambda: 1.0)
 
 
 class FakeWS:
@@ -214,7 +222,9 @@ def test_a_sequence_gap_requests_a_snapshot_and_serves_no_quote_until_it_arrives
     run(go())
 
 
-def test_a_quote_older_than_two_seconds_on_the_wall_clock_is_not_served():
+def test_a_book_older_than_two_seconds_with_a_print_after_it_is_not_served():
+    """The capture ends on a trade after the last delta: within 2 s the book is fresh; past the 2 s grace with no book
+    update for that print, the book feed counts as broken (domain/book_freshness.py)."""
     async def go():
         rig = Rig(FakeWS(*CAPTURE))
         task = await rig.start()
@@ -224,7 +234,94 @@ def test_a_quote_older_than_two_seconds_on_the_wall_clock_is_not_served():
         rig.clock[0] = NOW + 3400
         assert rig.stream.quotes.quote() is None
         assert rig.stream.quotes.age_ms() == 3400
-        assert rig.stream.quotes.why_none() == "quote 3.4 s old"
+        assert rig.stream.quotes.why_none() == "book feed broken: trades for 3.4 s without a book update (grace 2 s)"
+        await rig.stop(task)
+    run(go())
+
+
+HEAD_NO_LAST_TRADE = CAPTURE[:-1]  # ends on orderbook_delta seq 41: no print after the book's last update
+TICKER_MSG = next(m for m in CAPTURE if m["type"] == "ticker")
+LAST_TRADE = CAPTURE[-1]
+
+
+async def at(rig, ws, ms, *msgs):
+    """Feed `msgs` at NOW + ms and wait until the stream has read them."""
+    rig.clock[0] = NOW + ms
+    before = rig.stream.quotes.last_msg_ms
+    ws.feed(*msgs)
+    if msgs:
+        await until(lambda: rig.stream.quotes.last_msg_ms != before or before == rig.clock[0])
+        await asyncio.sleep(0.01)
+
+
+def test_ticker_messages_never_make_a_frozen_book_fresh_and_a_print_without_a_book_update_refuses_it():
+    """B3#8 (the 2026-10-31 13:59 Polymarket failure, on perps): the ticker channel keeps sending every second while
+    orderbook_delta has stopped. A ticker message keeps the connection alive but never refreshes the book; the book is
+    served quiet only while no print arrived after it."""
+    async def go():
+        ws = FakeWS(*HEAD_NO_LAST_TRADE)
+        rig = Rig(ws)
+        task = await rig.start()
+        await until(lambda: rig.stream.health()["last_seq"].get(1) == 41)
+        q = rig.stream.quotes
+        await at(rig, ws, 1000, TICKER_MSG)
+        await at(rig, ws, 2500, TICKER_MSG)
+        assert q.quote() is not None and q.age_ms() == 2500  # quiet but current: nothing traded since the book
+        # a print arrives and no book update follows it: refused at once, broken after the 2 s grace
+        await at(rig, ws, 3000, {**LAST_TRADE, "seq": 4})
+        assert q.quote() is None and q.why_none() == ("a trade arrived after the last book update; waiting for its "
+                                                      "book update")
+        await at(rig, ws, 4000, TICKER_MSG)
+        await at(rig, ws, 5500, TICKER_MSG)  # tickers keep coming: still no book update
+        assert q.quote() is None and q.why_none().startswith("book feed broken: trades for 2.5 s")
+        # the book update for it arrives: fresh again
+        delta = next(m for m in CAPTURE if m["type"] == "orderbook_delta" and m["seq"] == 41)
+        await at(rig, ws, 5600, {**delta, "seq": 42, "msg": {**delta["msg"], "delta": "1.00"}})
+        assert q.quote() is not None and q.age_ms() == 0
+        await rig.stop(task)
+    run(go())
+
+
+def test_a_quiet_book_is_served_for_at_most_30_s_and_never_on_a_silent_connection():
+    async def go():
+        ws = FakeWS(*HEAD_NO_LAST_TRADE)
+        rig = Rig(ws)
+        task = await rig.start()
+        await until(lambda: rig.stream.health()["last_seq"].get(1) == 41)
+        q = rig.stream.quotes
+        for ms in range(1000, 30_001, 1000):
+            await at(rig, ws, ms, TICKER_MSG)
+        assert q.quote() is not None and q.quote().age_ms == 30_000
+        await at(rig, ws, 31_000, TICKER_MSG)
+        assert q.quote() is None and q.why_none() == "the order book is 31.0 s old (quiet limit 30 s)"
+        await rig.stop(task)
+    run(go())
+
+    async def silent():
+        ws = FakeWS(*HEAD_NO_LAST_TRADE)
+        rig = Rig(ws)
+        task = await rig.start()
+        await until(lambda: rig.stream.health()["last_seq"].get(1) == 41)
+        rig.clock[0] = NOW + 16_000  # nothing at all for 16 s: the socket may be dead
+        assert rig.stream.quotes.quote() is None
+        assert rig.stream.quotes.why_none().startswith("the perps connection silent for 16.0 s")
+        await rig.stop(task)
+    run(silent())
+
+
+def test_a_trade_sequence_gap_stops_vouching_for_the_quiet_book_until_the_next_book_update():
+    async def go():
+        ws = FakeWS(*HEAD_NO_LAST_TRADE)
+        rig = Rig(ws)
+        task = await rig.start()
+        await until(lambda: rig.stream.health()["last_seq"].get(1) == 41)
+        q = rig.stream.quotes
+        # trade seq 4 is lost (5 arrives next): a print may have been missed, so the quiet book is not vouched for
+        await at(rig, ws, 2500, {**LAST_TRADE, "seq": 5, "msg": {**LAST_TRADE["msg"], "market_ticker": "OTHER"}})
+        assert q.quote() is None and "has not covered the time since this order book arrived" in q.why_none()
+        delta = next(m for m in CAPTURE if m["type"] == "orderbook_delta" and m["seq"] == 41)
+        await at(rig, ws, 2600, {**delta, "seq": 42, "msg": {**delta["msg"], "delta": "1.00"}})
+        assert q.quote() is not None
         await rig.stop(task)
     run(go())
 

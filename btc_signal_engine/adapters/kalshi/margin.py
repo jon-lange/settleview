@@ -77,6 +77,7 @@ from typing import Any
 import httpx
 
 from btc_signal_engine.adapters.kalshi.auth import PrivateKey, sign
+from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
 from btc_signal_engine.domain.markets import PERP_ENVS, PERPS, PerpSpec, allowed_perp_tickers
 from btc_signal_engine.domain.order_resolution import definitive_status
 
@@ -394,14 +395,17 @@ class MarginClient:
             except httpx.TransportError as exc:  # may have reached Kalshi: same body again, never a second write
                 status, text = 0, f"{type(exc).__name__}: {exc}"
                 log.warning("margin %s %s transport error (%s); retry %d", method, path, text[:200], attempt + 1)
-                await self._sleep(0.2 * (attempt + 1))
+                if attempt + 1 < _RETRY:
+                    await self._sleep(retry_delay(attempt))
                 continue
             if 300 <= resp.status_code < 400:  # not followed; where it went is unknown, so not definitive
                 raise MarginUnknown(resp.status_code, resp.text)
-            if resp.status_code == 429 or resp.status_code >= 500:  # 429 carries no retry hint: back off here
+            if resp.status_code == 429 or resp.status_code >= 500:  # full jitter; a 429 honours its Retry-After
                 status, text = resp.status_code, resp.text
-                log.warning("margin %s %s HTTP %d; retry %d", method, path, status, attempt + 1)
-                await self._sleep(0.2 * (attempt + 1))
+                wait = retry_delay(attempt, status=status, retry_after=retry_after_s(header(resp.headers)))
+                log.warning("margin %s %s HTTP %d; retry %d in %.2f s", method, path, status, attempt + 1, wait)
+                if attempt + 1 < _RETRY:
+                    await self._sleep(wait)
                 continue
             return resp
         raise MarginUnknown(status, text or "request failed")

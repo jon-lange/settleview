@@ -17,7 +17,14 @@ polling stays the backup (TradingService re-polls on its own cadence and on ever
   start is immediate). A servable quiet book is no problem, so it never toggles the feed. While down, the service
   polls on its fast cadence (TradingService). Entries never depend on this state: every ticket prices from the
   market data's own servable check. Any change emits a `health` event; every (re)connect emits `resync` so the
-  service polls once for what it missed. Reconnects with exponential backoff (1 s doubling to 30 s).
+  service polls once for what it missed. Reconnects with exponential backoff (1 s doubling to 30 s, full jitter:
+  adapters/retry.py).
+* A refused private subscription is not a healthy feed (review fix plan 2026-10-31, B3#7). The server answers a
+  refused subscribe asynchronously, with an error message naming our request id (`pmpriv<n>`; the SDK emits it as a
+  `WebSocketError`, which alone is not a dead socket). Such a refusal ends the session (`PrivateSubscriptionRefused`)
+  and counts as a problem until a later session has held all its subscriptions for UP_AFTER_MS: the feed reads down
+  at once with the reason ("private ORDER subscription refused: ..."), the service polls on its fast cadence, and
+  the socket reconnects with backoff and subscribes again. A server message naming no request of ours is logged only.
 """
 
 from __future__ import annotations
@@ -31,12 +38,27 @@ from typing import Any
 from btc_signal_engine.adapters.polymarket_us.market_data import ws_error_is_fatal, PolymarketMarketData, PolymarketMarketStream
 from btc_signal_engine.adapters.polymarket_us.markets import is_series, num
 from btc_signal_engine.adapters.polymarket_us.trading import FILL_TYPES, PolymarketTrading, normalize_order
+from btc_signal_engine.adapters.retry import Backoff
 
 log = logging.getLogger(__name__)
 
 PRIVATE_SUBS = ("SUBSCRIPTION_TYPE_ORDER", "SUBSCRIPTION_TYPE_POSITION", "SUBSCRIPTION_TYPE_ACCOUNT_BALANCE")
 DOWN_AFTER_MS = 10_000  # a soft problem (a book not servable) must last this long to take the feed down
 UP_AFTER_MS = 5_000  # after a down, the feed must be problem-free this long to come back up
+REQUEST_PREFIX = "pmpriv"  # our private subscription request ids: pmpriv0 (ORDER), pmpriv1 (POSITION), ...
+
+
+class PrivateSubscriptionRefused(ConnectionError):
+    """The server refused one of our private subscriptions: the session ends and is reopened with backoff."""
+
+
+def _sub_name(e, rid: str) -> str:
+    """ORDER / POSITION / ACCOUNT_BALANCE: from the error's subscription type, else from our request id."""
+    typ = getattr(e, "subscription_type", None)
+    if not typ:
+        tail = rid.removeprefix(REQUEST_PREFIX)
+        typ = PRIVATE_SUBS[int(tail)] if tail.isdecimal() and int(tail) < len(PRIVATE_SUBS) else rid
+    return str(typ).removeprefix("SUBSCRIPTION_TYPE_")
 
 
 class PolymarketTradingStream:
@@ -66,6 +88,8 @@ class PolymarketTradingStream:
         self._bad_since: int | None = None  # first check of the current run of problems
         self._ok_since: int | None = None  # first check of the current run without any
         self._why = "starting"
+        self._refused: str | None = None  # the last private-subscription refusal, until a session holds (B3#7)
+        self.refusals = 0
         self._md.listeners.append(self._on_market)
 
     def __repr__(self) -> str:
@@ -84,7 +108,7 @@ class PolymarketTradingStream:
         now = self._clock()
         connected = self._connected and md["connected"]
         problems = list(md.get("problems") or [])
-        bad = (not connected) or md["stale"]
+        bad = (not connected) or md["stale"] or self._refused is not None
         if bad:
             self._ok_since = None
             self._bad_since = now if self._bad_since is None else self._bad_since
@@ -94,13 +118,21 @@ class PolymarketTradingStream:
         if not self._down:
             if not connected or (bad and now - self._bad_since >= DOWN_AFTER_MS):
                 self._down = True
-                self._why = ("private WebSocket down" if not self._connected
-                             else "; ".join(md.get("hard") or problems) or "market data down")
+                self._why = self._down_reason(md, problems)
+        elif bad and self._refused is not None:
+            self._why = self._refused  # still down: a refusal says why (not "starting")
         elif not bad and (not self._ever_up or now - self._ok_since >= UP_AFTER_MS):
             self._down, self._ever_up, self._why = False, True, ""
         last = max([x for x in (self._last_msg_ms, md["last_msg_ms"]) if x is not None], default=None)
-        reason = self._why if self._down else ("; ".join(problems)[:300] if bad else "")
+        reason = self._why if self._down else ((self._refused or "; ".join(problems))[:300] if bad else "")
         return {"connected": connected, "last_msg_ms": last, "stale": self._down, "reason": reason[:300]}
+
+    def _down_reason(self, md: dict, problems: list[str]) -> str:
+        if self._refused is not None:
+            return self._refused
+        if not self._connected:
+            return "private WebSocket down"
+        return "; ".join(md.get("hard") or problems) or "market data down"
 
     def close(self) -> None:
         self._closed = True
@@ -182,31 +214,38 @@ class PolymarketTradingStream:
 
     # -- connection -----------------------------------------------------------------------------------
     async def run(self) -> None:
-        delay = self._backoff[0]
+        backoff = Backoff(*self._backoff)
         while not self._closed:
             started = self._clock()
             try:
                 await self.run_once()
             except asyncio.CancelledError:
                 raise
+            except PrivateSubscriptionRefused as exc:
+                log.warning("polymarket private websocket: %s; reconnecting within %.0f s", exc, backoff.ceiling)
             except Exception as exc:
-                log.warning("polymarket private websocket stopped (%s); reconnecting in %.0f s",
-                            type(exc).__name__, delay)
+                log.warning("polymarket private websocket stopped (%s); reconnecting within %.0f s",
+                            type(exc).__name__, backoff.ceiling)
             self._connected = False
             self._health_changed()
             if self._closed:
                 break
             if self._clock() - started > 60_000:
-                delay = self._backoff[0]
-            await self._sleep(delay)
-            delay = min(delay * 2, self._backoff[1])
+                backoff.reset()
+            await self._sleep(backoff.next())
 
     async def run_once(self) -> None:
         ws = self._factory()
         failed: list[str] = []
+        refused: list[str] = []
         ws.on("message", self.on_message)
+
         def on_error(e=None) -> None:
             if e is not None and not ws_error_is_fatal(e):
+                rid = str(getattr(e, "request_id", None) or "")
+                if rid.startswith(REQUEST_PREFIX):  # one of OUR subscriptions was refused: not a healthy feed
+                    refused.append(f"private {_sub_name(e, rid)} subscription refused: {str(e)[:160]}")
+                    return
                 log.warning("polymarket private websocket server message: %s", str(e)[:200])
                 return
             failed.append(type(e).__name__ if e is not None else "error")
@@ -214,15 +253,23 @@ class PolymarketTradingStream:
         ws.on("error", on_error)
         ws.on("close", lambda *a: failed.append("closed"))
         await ws.connect()
-        for i, typ in enumerate(PRIVATE_SUBS):
-            await ws.subscribe(f"pmpriv{i}", typ)
-        self._connected = True
-        self._emit({"type": "resync", "reason": "connected"})
-        self._health_changed()
         try:
+            for i, typ in enumerate(PRIVATE_SUBS):
+                await ws.subscribe(f"{REQUEST_PREFIX}{i}", typ)
+            held_ms = self._clock()
+            if not refused:  # a refusal while subscribing (handlers run inline): never reported connected
+                self._connected = True
+                self._emit({"type": "resync", "reason": "connected"})
+                self._health_changed()
             while not self._closed:
                 if failed:
                     raise ConnectionError(failed[-1])
+                if refused:
+                    self.refusals += 1
+                    self._refused = refused[-1][:300]
+                    raise PrivateSubscriptionRefused(self._refused)
+                if self._refused is not None and self._clock() - held_ms >= UP_AFTER_MS:
+                    self._refused = None  # every subscription held: the last refusal is history
                 self._health_changed()
                 await self._sleep(0.5)
         finally:

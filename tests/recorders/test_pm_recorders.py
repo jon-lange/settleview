@@ -253,7 +253,9 @@ def test_the_socket_is_closed_even_when_the_last_flush_raises(monkeypatch):
     assert client.sockets[0].closed
 
 
-def test_buffers_are_capped_during_an_outage_and_count_what_they_drop(caplog):
+def test_buffers_are_capped_during_an_outage_and_count_what_they_drop(caplog, monkeypatch):
+    metered: list[tuple] = []  # each drop is also an OpenTelemetry count (settleview.venue.dropped)
+    monkeypatch.setattr(rec.telemetry, "dropped", lambda component, buffer, n=1: metered.append((component, buffer)))
     r = rec.QuoteRecorder(_DownEngine(), lambda: NOW * 1000, max_buffered=5)
     for i in range(12):
         r.on_lite({"marketDataLite": {"marketSlug": f"cpc-btc-updown-5m-x{i}", "bestBid": "0.4"}})
@@ -262,6 +264,7 @@ def test_buffers_are_capped_during_an_outage_and_count_what_they_drop(caplog):
         r.on_lite({"marketDataLite": {"marketSlug": f"cpc-btc-updown-5m-x{i}", "bestBid": "0.4"}})
     assert len(r.q) == 5 and r.dropped == 10
     assert [row[2] for row in r.q] == [f"cpc-btc-updown-5m-x{i}" for i in range(10, 15)]  # the newest kept
+    assert metered == [("pm_quotes_recorder", "quotes")] * 10
 
 
 def test_rows_kept_through_an_outage_are_written_once_it_ends(tmp_path):

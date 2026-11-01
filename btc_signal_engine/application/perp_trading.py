@@ -70,7 +70,10 @@ the position must not have moved in the order's direction beyond what we hold, o
 profit the user approved with it (saved on the order row, perp_orders.stop_loss / take_profit, before the send); if
 that write fails the position is `unprotected` with the no-stop warning, never plain "open". The approve holds the
 lock for at most `send_deadline_s` (30 s) of venue calls: an order past it is left unknown and resolved as above, a
-bracket write past it leaves the position unprotected. Stream fills count only with our subaccount on them; a fill
+bracket write past it leaves the position unprotected. Nothing queues behind that send (B3#12): another approval, an
+adopt or a mode change waits at most `lock_wait_s` (2 s) for the lock, then is refused `busy` with nothing sent, so
+no request hangs for the length of someone else's send. (The lock still covers the gate and the send together: that
+is what keeps two approvals from both passing the limits.) Stream fills count only with our subaccount on them; a fill
 without one triggers a reconcile instead (its post_position is never applied).
 
 Units: prices are dollars per contract (4 dp), counts whole contracts, money dollars, times UTC ms.
@@ -79,6 +82,7 @@ Units: prices are dollars per contract (4 dp), counts whole contracts, money dol
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -196,6 +200,9 @@ class PerpConfig:
     # the most an approval spends on venue calls while it holds the lock (the client's own retries and its 409 /
     # lost-reply list reads can add up to minutes); past it the order is left unknown and resolved by the monitor
     send_deadline_s: float = 30.0
+    # how long another write (an approval, adopt, a mode change) waits for the lock held by a send before it is
+    # refused `busy` (nothing sent); it never queues for the whole send
+    lock_wait_s: float = 2.0
 
 
 class SendDeadline(RuntimeError):
@@ -437,6 +444,24 @@ class PerpTradingService:
                 log.warning("perps notify failed", exc_info=True)
         return row
 
+    @contextlib.asynccontextmanager
+    async def _write_lock(self):
+        """The service lock for a write path, waited for at most `lock_wait_s`: yields True once held, False when a
+        send still holds it (the caller refuses `busy`; B3#12)."""
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=float(self.config.lock_wait_s))
+        except TimeoutError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            self._lock.release()
+
+    def _busy(self, now: int) -> dict:
+        return self._refuse(GateResult(False, "busy", "Another perps order is still being sent; nothing was sent. "
+                                                      "Try again in a moment."), now)
+
     def _refuse(self, r: GateResult, now: int, detail: dict | None = None) -> dict:
         self._audit("refused", now, code=r.code, reason=r.reason, detail=detail)
         return {"ok": False, "code": r.code, "reason": r.reason}
@@ -493,7 +518,9 @@ class PerpTradingService:
     async def set_mode(self, mode: str, now: int, confirm: str | None = None) -> dict:
         if mode not in MODES:
             return {"ok": False, "code": "invalid", "reason": f"mode must be {', '.join(MODES)}"}
-        async with self._lock:
+        async with self._write_lock() as held:
+            if not held:
+                return self._busy(now)
             # Leaving production with a real position open (or an order still being resolved) would stop watching it
             # here: refused until it is closed (the user's call, 2026-10-30). Switching to production again is a no-op.
             if self.mode == "perp_prod" and mode != "perp_prod" and self._pos is not None:
@@ -1086,8 +1113,10 @@ class PerpTradingService:
             if ticket["action"] == "trigger":
                 await self._read_triggers(now)  # a newer edit made elsewhere must refuse (KTD9); outside the lock
                 steps.mark("trigger read")
-            async with self._lock:
+            async with self._write_lock() as held:
                 steps.mark("lock")
+                if not held:
+                    return self._busy(now)
                 _, r = self._gate(ticket, now, approving=True)
                 steps.mark("gate")
                 if not r.ok:
@@ -1490,7 +1519,9 @@ class PerpTradingService:
     async def adopt(self, size_shown: float, now: int) -> dict:
         """R17: take Kalshi's position in the configured subaccount as Settleview's (size_shown: the signed size the
         screen showed)."""
-        async with self._lock:
+        async with self._write_lock() as held:
+            if not held:
+                return self._busy(now)
             r = self._mode_ready()
             if not r.ok:
                 return self._refuse(r, now)

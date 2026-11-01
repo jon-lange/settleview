@@ -194,3 +194,34 @@ def test_stream_fill_mid_send_then_a_lost_reply_is_applied_once(store):
         v = svc.view(NOW + 2_000)
         assert (v["position"]["size"], v["position"]["state"]) == (3.0, "open") and fx.held() == 3
     run(go())
+
+
+# -- B3#12: nothing queues behind a send that holds the lock ---------------------------------------------------------
+def test_writes_do_not_queue_behind_an_approval_still_sending_they_are_refused_busy(store):
+    async def go():
+        from btc_signal_engine.application.perp_trading import PerpConfig
+
+        fx = FakeMargin()
+        svc = await ready(service(store, fx, config=PerpConfig(prod_enabled=True, lock_wait_s=0.05)))
+        release = asyncio.Event()
+
+        async def hold(coid):  # Kalshi takes its time answering the first entry
+            fx.before_create = None
+            await release.wait()
+        fx.before_create = hold
+        a, b = await svc.prepare(entry(), NOW), await svc.prepare(entry(), NOW)
+        first = asyncio.ensure_future(approve(svc, a))
+        while not fx.writes():
+            await asyncio.sleep(0.001)
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        second = await approve(svc, b)
+        adopt = await svc.adopt(0, NOW)
+        mode = await svc.set_mode("off", NOW)
+        assert loop.time() - t0 < 1.0  # three refusals in ~0.15 s, not a wait for the whole send
+        for out in (second, adopt, mode):
+            assert out["ok"] is False and out["code"] == "busy" and "nothing was sent" in out["reason"]
+        assert len([w for w in fx.writes() if w[0] == "create_order"]) == 1  # the busy approval sent nothing
+        release.set()
+        assert (await first)["ok"]
+    run(go())

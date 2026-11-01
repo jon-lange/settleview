@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
 from btc_signal_engine.domain.models.events import Trade
 
 log = logging.getLogger(__name__)
@@ -49,13 +50,15 @@ async def get_with_retry(
     sleep: Callable[[float], Awaitable[None]],
     max_attempts: int = 8,
 ) -> httpx.Response:
-    """GET, retrying the same request on 429/5xx with 1s, 2s, 4s ... (max 30s) back-off."""
+    """GET, retrying the same request on 429/5xx: full jitter over 1s, 2s, 4s ... (max 30s), and at least a 429's
+    Retry-After (adapters/retry.py)."""
     for attempt in range(max_attempts):
         resp = await client.get(path, params=params)
         if resp.status_code != 429 and resp.status_code < 500:
             break
-        delay = min(30.0, 2.0**attempt)
-        log.warning("GET %s -> HTTP %s; retrying in %.0fs", path, resp.status_code, delay)
+        delay = retry_delay(attempt, status=resp.status_code, base_s=1.0, cap_s=30.0,
+                            retry_after=retry_after_s(header(resp.headers)))
+        log.warning("GET %s -> HTTP %s; retrying in %.1fs", path, resp.status_code, delay)
         await sleep(delay)
     resp.raise_for_status()
     return resp

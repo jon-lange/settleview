@@ -58,6 +58,7 @@ from typing import Any
 
 from btc_signal_engine.adapters.kalshi.auth import PrivateKey, load_private_key, sign
 from btc_signal_engine.adapters.kalshi.trading import TradingAuth, TradingViolation, normalize_order
+from btc_signal_engine.adapters.retry import Backoff
 
 log = logging.getLogger(__name__)
 
@@ -142,11 +143,16 @@ class WsOnlyAuth:
                 "KALSHI-ACCESS-SIGNATURE": sign(self._key, ts + method + path)}
 
 
+# The largest WebSocket frame accepted (B3#11): an orderbook_snapshot of a busy market is tens of KB; anything near
+# this is not a Kalshi message we use, and an unbounded frame would be read whole into memory first.
+MAX_FRAME_BYTES = 8 * 1024 * 1024
+
+
 async def _ws_connect(url: str, headers: dict[str, str]):
     import websockets
 
     # compression=None: inflating large frames on the loop thread stalled the app (KTD2).
-    return await websockets.connect(url, additional_headers=headers, max_size=None, ping_interval=10,
+    return await websockets.connect(url, additional_headers=headers, max_size=MAX_FRAME_BYTES, ping_interval=10,
                                     ping_timeout=10, open_timeout=10, compression=None)
 
 
@@ -443,7 +449,7 @@ class KalshiStream:
                 await ws.close()
 
     async def run(self) -> None:
-        backoff = self._backoff0
+        backoff = Backoff(self._backoff0, self._backoff_max)  # full jitter: streams never reconnect in lockstep
         while not self._closed:
             started = self._clock()
             try:
@@ -451,14 +457,13 @@ class KalshiStream:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # never log headers or key material
-                log.warning("kalshi %s stream dropped (%s); reconnecting in %.1fs", self.env, type(exc).__name__,
-                            backoff)
+                log.warning("kalshi %s stream dropped (%s); reconnecting within %.1fs", self.env,
+                            type(exc).__name__, backoff.ceiling)
             if self._closed:
                 break
             if self._clock() - started > 60_000:
-                backoff = self._backoff0  # it ran a while: start the backoff over
-            await self._sleep(backoff)
-            backoff = min(backoff * 2, self._backoff_max)
+                backoff.reset()  # it ran a while: start the backoff over
+            await self._sleep(backoff.next())
 
 
 def market_stream_from_settings(key_id: str | None, key_path: str | Path | None, on_event: Emit, *,

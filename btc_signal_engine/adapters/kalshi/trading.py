@@ -50,6 +50,7 @@ import httpx
 from btc_signal_engine.adapters.kalshi.auth import PrivateKey, load_private_key, sign
 from btc_signal_engine.adapters.kalshi.backend import Backend, HttpxBackend, SdkBackend, TransportFailure
 from btc_signal_engine.adapters.kalshi.client import book_top, iso_to_ms
+from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
 from btc_signal_engine.domain.markets import allowed_series
 from btc_signal_engine.domain.order_resolution import TS_SLACK_MS, candidate_orders, definitive_status
 
@@ -247,14 +248,19 @@ class KalshiTrading:
                 cause = exc.__cause__ or exc  # TransportFailure wraps aiohttp's error: name the real one
                 log.warning("%s transport error (%s: %s: %s); retry %d", op, type(exc).__name__,
                             type(cause).__name__, str(cause)[:200], attempt + 1)
-                await self._sleep(0.2 * (attempt + 1))
+                if attempt + 1 < _RETRY:
+                    await self._sleep(retry_delay(attempt))
                 continue
             if resp.status_code == 429 or resp.status_code >= 500:
                 try:
                     resp.raise_for_status()
                 except Exception as exc:
                     last = exc
-                await self._sleep(0.2 * (attempt + 1))
+                if attempt + 1 < _RETRY:  # full jitter; a 429 waits at least its Retry-After (adapters/retry.py)
+                    wait = retry_delay(attempt, status=resp.status_code,
+                                       retry_after=retry_after_s(header(getattr(resp, "headers", None))))
+                    log.warning("%s HTTP %d; retry %d in %.2f s", op, resp.status_code, attempt + 1, wait)
+                    await self._sleep(wait)
                 continue
             return resp
         raise last if last else RuntimeError("request failed")

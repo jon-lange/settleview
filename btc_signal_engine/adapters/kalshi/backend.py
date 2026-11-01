@@ -89,9 +89,13 @@ class KalshiHTTPError(RuntimeError):
 class Reply:
     """An SDK response read raw: the shape of `httpx.Response` our clients use."""
 
-    def __init__(self, status_code: int, content: bytes) -> None:
+    def __init__(self, status_code: int, content: bytes, headers: Any = None) -> None:
         self.status_code = status_code
         self.content = content
+        try:  # e.g. a 429's Retry-After (adapters/retry.py); never an error of its own
+            self.headers = {str(k): str(v) for k, v in dict(headers or {}).items()}
+        except (TypeError, ValueError):
+            self.headers = {}
 
     @property
     def text(self) -> str:
@@ -281,7 +285,7 @@ class SdkBackend:
         try:
             resp = await fn(*args, _request_timeout=self.timeout, **kw)
             try:
-                reply = Reply(resp.status, await resp.read())
+                reply = Reply(resp.status, await resp.read(), getattr(resp, "headers", None))
             finally:
                 resp.release()
         except (aiohttp.ClientError, TimeoutError) as exc:
@@ -292,7 +296,7 @@ class SdkBackend:
             raise
         except ApiException as exc:  # raised before any HTTP status exists (e.g. a body it cannot encode)
             if exc.status:
-                return Reply(int(exc.status), (exc.body or "").encode("utf-8"))
+                return Reply(int(exc.status), (exc.body or "").encode("utf-8"), getattr(exc, "headers", None))
             raise RequestNotSent(str(exc.reason or exc)) from exc
         except (ValidationError, OpenApiException) as exc:  # a model refused a field value: nothing was sent
             raise RequestNotSent(f"Kalshi SDK refused the request: {exc}") from exc

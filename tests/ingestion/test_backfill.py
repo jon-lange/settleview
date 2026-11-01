@@ -142,9 +142,11 @@ def test_429_backs_off_and_retries_without_skipping_a_page(store, monkeypatch):
     trades = _synthetic(range(1, 10), T0, 1000)
     fake = FakeCoinbase([_wire(t) for t in trades], fail_once={"7": 429})
     sleeps: list[float] = []
+    from btc_signal_engine.adapters import retry
     from btc_signal_engine.adapters.coinbase import backfill as bf
 
     monkeypatch.setattr(bf, "PAGE_SIZE", 3)
+    monkeypatch.setattr(retry, "_uniform", lambda: 1.0)  # the top of the jitter: the full 1 s first backoff
     asyncio.run(backfill(store, _rest(fake, sleeps), days=10_000, now_ms=T0 + 10**9))
 
     assert [r.get("after") for r in fake.trade_requests()] == [None, "7", "7", "4", "1"]

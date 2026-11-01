@@ -41,8 +41,14 @@ Emitted events (one callback, plain dicts, `env` on each):
   {"type": "book_top", "ticker", "bid", "ask", "ts_ms"}   whenever the best bid or ask changes (the push trigger)
   {"type": "ticker", "ticker", "ts_ms"}                    on every ticker message (mark, funding: read the cache)
 
-`PerpQuoteCache` (stream.quotes) answers None when its newest message is more than 2 s old on the wall clock, while
-the book is resyncing, or while disconnected; `age_ms()` stays readable so the view can say "quote 3.4 s old".
+`PerpQuoteCache` (stream.quotes) judges freshness by BOOK updates (the snapshot and each delta), never by any message:
+the ticker channel sends one message a second even when the book has stopped, so a frozen `orderbook_delta`
+subscription used to be served as fresh (review fix plan 2026-10-31, B3#8; the 2026-10-31 13:59 Polymarket outage was
+the same failure). The rule is the one the Polymarket book uses (domain/book_freshness.py): a book updated within 2 s
+is served; an older, quiet book is served (at most 30 s) only while the connection is alive (any message within
+15 s), the `trade` subscription has been confirmed since before the book's last update, and no print for the market
+has arrived after it (a print without a book update within 2 s is a broken book feed). It answers None while the book
+is resyncing or while disconnected; `age_ms()` (the book's age) stays readable so the view can say how old it is.
 Per message the work is a dict update and, only when the best level empties, one scan of that side.
 """
 
@@ -58,6 +64,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from btc_signal_engine.adapters.kalshi.stream import _ws_connect
+from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.domain.book_freshness import unservable_reason
 from btc_signal_engine.domain.markets import PerpSpec
 
 log = logging.getLogger(__name__)
@@ -223,7 +231,7 @@ class PerpQuote:
     ask: float | None
     bid_size: float | None
     ask_size: float | None
-    age_ms: int  # wall-clock age of the newest message on the connection
+    age_ms: int  # wall-clock age of the book's newest update (snapshot or delta)
     # from the ticker channel, None when its last message is older than the max age
     last_price: float | None
     reference_price: float | None
@@ -254,14 +262,38 @@ class PerpQuoteCache:
         self._last_ms: int | None = None
         self._tick: dict | None = None
         self._tick_ms: int | None = None
+        self._n = 0  # every message gets the next number: "a print after this book update" is exact
+        self._book_ms: int | None = None  # the book's newest update (snapshot or delta): local ms, message number
+        self._book_seq = 0
+        self._trade_seq: int | None = None  # the newest print's message number
+        self._unbooked_ms: int | None = None  # the first print since the book's last update (None: one followed)
+        self._covered_ms: int | None = None  # every print since this local time was received (trade sub confirmed)
 
     # fed by the stream
     def heard(self, now_ms: int) -> None:
+        """Any message on the connection (keeps it alive; never makes the book fresh)."""
         self._last_ms = now_ms
+        self._n += 1
 
     def set_book(self, book: PerpBook | None, why: str = "") -> None:
         self._book = book
         self._why = why
+        if book is None:
+            self._book_ms = None
+
+    def book_updated(self, now_ms: int) -> None:
+        """A snapshot or a delta for the market was applied (after `heard` for the same message)."""
+        self._book_ms, self._book_seq, self._unbooked_ms = now_ms, self._n, None
+
+    def traded(self, now_ms: int) -> None:
+        """A print for the market arrived (after `heard` for the same message)."""
+        self._trade_seq = self._n
+        if self._unbooked_ms is None:
+            self._unbooked_ms = now_ms
+
+    def cover_trades(self, since_ms: int | None) -> None:
+        """The trade subscription is confirmed and every print since `since_ms` was received (None: not covered)."""
+        self._covered_ms = since_ms
 
     def on_ticker(self, msg: dict, now_ms: int) -> None:
         """Parse a ticker msg; a malformed one raises MarginMessageError and leaves the previous one in place."""
@@ -280,21 +312,23 @@ class PerpQuoteCache:
     # reads
     @property
     def last_msg_ms(self) -> int | None:
-        """Local wall-clock time of the newest message on the connection."""
+        """Local wall-clock time of the newest message on the connection (any kind)."""
         return self._last_ms
 
     def age_ms(self) -> int | None:
-        """Wall-clock age of the newest message on the connection (None before any)."""
-        return None if self._last_ms is None else self._clock() - self._last_ms
+        """Wall-clock age of the book's newest update (None before any)."""
+        return None if self._book_ms is None else self._clock() - self._book_ms
 
     def why_none(self) -> str | None:
-        """Why quote() answers None, in plain English (None while a quote is served)."""
+        """Why quote() answers None, in plain English (None while a quote is served): the module docstring."""
         if self._book is None:
             return self._why
-        age = self.age_ms()
-        if age is None or age > self.max_age_ms:
-            return "no quote yet" if age is None else f"quote {age / 1000:.1f} s old"
-        return None
+        if self._book_ms is None:
+            return "no order book update yet"
+        return unservable_reason(now_ms=self._clock(), book_ms=self._book_ms, book_seq=self._book_seq,
+                                 conn_last_ms=self._last_ms, last_trade_seq=self._trade_seq,
+                                 unbooked_ms=self._unbooked_ms, covered_since_ms=self._covered_ms,
+                                 what="order book", conn="the perps connection", max_age_ms=self.max_age_ms)
 
     def quote(self) -> PerpQuote | None:
         if self.why_none() is not None:
@@ -303,7 +337,7 @@ class PerpQuoteCache:
         bid, ask, bq, aq = self._book.top()
         t_age = None if self._tick_ms is None else now - self._tick_ms
         tick = self._tick if t_age is not None and t_age <= self.max_age_ms else {}
-        return PerpQuote(self.ticker, bid, ask, bq, aq, now - self._last_ms,
+        return PerpQuote(self.ticker, bid, ask, bq, aq, now - self._book_ms,
                          tick.get("last_price"), tick.get("reference_price"), tick.get("settlement_mark"),
                          tick.get("liquidation_mark"), tick.get("funding_rate"), tick.get("next_funding_ms"), t_age)
 
@@ -355,6 +389,7 @@ class MarginStream:
         self._top: tuple | None = None
         self._book_why = "waiting for the order book snapshot"
         self.quotes.set_book(None, f"not connected ({self._down})")
+        self.quotes.cover_trades(None)  # a new connection's prints are vouched for only once its trade sub is acked
 
     # -- port -------------------------------------------------------------------------------------
     def health(self) -> dict:
@@ -428,8 +463,12 @@ class MarginStream:
                 log.warning("margin %s stream: seq gap on sid %s (%s -> %s)", self.env, sid, last, seq)
                 if sid == self._sids.get("orderbook_delta"):
                     await self._book_lost("order book resyncing after a sequence gap")
+                elif sid == self._sids.get("trade"):  # prints before now may be missing: vouch only from now
+                    self.quotes.cover_trades(now)
         if kind == "subscribed":
             self._sids[msg.get("channel")] = msg.get("sid")
+            if msg.get("channel") == "trade":
+                self.quotes.cover_trades(now)
             if not self._connected and all(c in self._sids for c in PUBLIC + PRIVATE):
                 self._connected = True
                 if self._book is None:
@@ -449,6 +488,7 @@ class MarginStream:
                 else:
                     self._book = book
                     self.quotes.set_book(book)
+                    self.quotes.book_updated(now)
                     self._top_changed()
         elif kind == "orderbook_delta":
             if self._book is not None and msg.get("market_ticker") == self.ticker:
@@ -458,6 +498,7 @@ class MarginStream:
                     log.warning("margin %s stream: bad delta (%s)", self.env, exc)
                     await self._book_lost(f"order book resyncing ({exc})")
                 else:
+                    self.quotes.book_updated(now)
                     self._top_changed()
         elif kind == "ticker":
             if msg.get("market_ticker") == self.ticker:
@@ -468,6 +509,8 @@ class MarginStream:
                 else:
                     self._emit({"type": "ticker", "ticker": self.ticker, "ts_ms": now})
         elif kind == "trade":
+            if msg.get("market_ticker") == self.ticker:
+                self.quotes.traded(now)  # a print after the book's last update: the quiet path needs a newer one
             try:
                 self._emit(trade_event(msg))
             except MarginMessageError as exc:
@@ -523,7 +566,7 @@ class MarginStream:
                 await ws.close()
 
     async def run(self) -> None:
-        backoff = self._backoff0
+        backoff = Backoff(self._backoff0, self._backoff_max)  # full jitter (adapters/retry.py)
         while not self._closed:
             self._opened_ms: int | None = None
             reason = "closed"
@@ -534,14 +577,14 @@ class MarginStream:
                 raise
             except MarginStreamError as exc:
                 reason = str(exc)
-                log.warning("margin %s stream: %s; reconnecting in %.1fs", self.env, exc, backoff)
+                log.warning("margin %s stream: %s; reconnecting within %.1fs", self.env, exc, backoff.ceiling)
             except Exception as exc:  # never log headers or key material
                 reason = type(exc).__name__
-                log.warning("margin %s stream dropped (%s); reconnecting in %.1fs", self.env, reason, backoff)
+                log.warning("margin %s stream dropped (%s); reconnecting within %.1fs", self.env, reason,
+                            backoff.ceiling)
             await self._teardown(reason)
             if self._closed:
                 break
             if self._opened_ms is not None and self._clock() - self._opened_ms >= RESET_AFTER_MS:
-                backoff = self._backoff0  # it ran a while: start the backoff over
-            await self._sleep(backoff)
-            backoff = min(backoff * 2, self._backoff_max)
+                backoff.reset()  # it ran a while: start the backoff over
+            await self._sleep(backoff.next())

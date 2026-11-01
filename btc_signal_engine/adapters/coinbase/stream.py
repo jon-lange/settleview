@@ -11,7 +11,16 @@ Two interchangeable transports share the same normalization helpers:
 
 `CoinbaseStream.events()` yields deduped `Trade`s as they arrive and, once per completed
 second, the aggregator's `BookSecond` and `IndexSecond` rows. It reconnects with backoff
-(1.5s doubling to 30s) and after 15s of socket silence, recording gaps via `GapRecorder`.
+(1.5s doubling to 30s, full jitter: adapters/retry.py) and after 15s of socket silence, recording gaps via
+`GapRecorder`.
+
+Bounds (review fix plan 2026-10-31, B3#11): the transport hands updates to the consumer through a queue of at most
+`queue_max` (QUEUE_MAX) items. The consumer awaits store writes and the engine, so a slow consumer must not grow the
+queue without limit: when it is full the OLDEST update is dropped (counted in `dropped`, logged at WARNING on the
+first drop and every 1,000th, and the OpenTelemetry counter `settleview.venue.dropped` {component coinbase_stream,
+buffer updates}). A dropped trade is a trade-id jump, so `GapRecorder` records the gap and the repair job fills it
+from Coinbase's trade history; a dropped book update is superseded by the next one. The raw ws-feed accepts frames
+up to MAX_FRAME_BYTES (16 MB: a full level2 snapshot of BTC-USD is a few MB).
 """
 
 from __future__ import annotations
@@ -24,8 +33,10 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime, timedelta, UTC
 from typing import Any
 
+from btc_signal_engine.adapters import telemetry
 from btc_signal_engine.adapters.coinbase.aggregator import BookMetrics, SecondAggregator, book_metrics
 from btc_signal_engine.adapters.coinbase.gaps import GapRecorder
+from btc_signal_engine.adapters.retry import Backoff
 from btc_signal_engine.application.ports import Clock
 from btc_signal_engine.domain.models.events import BookSecond, IndexSecond, Trade
 
@@ -34,6 +45,8 @@ log = logging.getLogger(__name__)
 WS_URL = "wss://ws-feed.exchange.coinbase.com"
 PRODUCT = "BTC-USD"
 SYMBOL = "BTC/USD"
+QUEUE_MAX = 10_000  # transport -> consumer updates held at most (a few seconds of a busy book); oldest dropped
+MAX_FRAME_BYTES = 16 * 1024 * 1024  # the largest ws-feed frame read (a level2 snapshot is a few MB)
 
 Update = Trade | BookMetrics | None  # None = liveness only (heartbeat, subscription ack)
 Transport = Callable[[Callable[[Update], None]], Awaitable[None]]
@@ -115,7 +128,7 @@ def raw_ws_transport(clock: Clock) -> Transport:
         import websockets
 
         # compression=None: inflating large level2 frames on the loop thread stalled the app (KTD2).
-        async with websockets.connect(WS_URL, max_size=None, ping_interval=20, compression=None) as ws:
+        async with websockets.connect(WS_URL, max_size=MAX_FRAME_BYTES, ping_interval=20, compression=None) as ws:
             await ws.send(json.dumps({"type": "subscribe", "product_ids": [PRODUCT],
                                       "channels": ["matches", "level2_batch", "heartbeat"]}))
             book = LocalBook()
@@ -186,6 +199,8 @@ class CoinbaseStream:
         transport: Transport | None = None,
         poll_s: float = 0.25,
         backoff: tuple[float, float] = (1.5, 30.0),
+        queue_max: int = QUEUE_MAX,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._clock = clock
         self._agg = aggregator
@@ -193,16 +208,39 @@ class CoinbaseStream:
         self._transport = transport or (ccxt_transport(clock) if use_ccxt else raw_ws_transport(clock))
         self._poll_s = poll_s
         self._backoff0, self._backoff_max = backoff
+        self._queue_max = int(queue_max)
+        self._sleep = sleep
+        self.dropped = 0
         self._closed = False
+
+    def _putter(self, queue: asyncio.Queue) -> Callable[[Update], None]:
+        """The transport's `put`: never blocks and never grows the queue past its bound (drop the oldest)."""
+        def put(update: Update) -> None:
+            while True:
+                try:
+                    queue.put_nowait(update)
+                    return
+                except asyncio.QueueFull:
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:  # (cannot happen on one loop; never spin)
+                        return
+                    self.dropped += 1
+                    telemetry.dropped("coinbase_stream", "updates")
+                    if self.dropped == 1 or self.dropped % 1000 == 0:
+                        log.warning("coinbase feed: the consumer is behind; queue full (%d), dropping the oldest "
+                                    "update (%d dropped so far; trade gaps are recorded and repaired)",
+                                    self._queue_max, self.dropped)
+        return put
 
     def close(self) -> None:
         self._closed = True
 
     async def events(self) -> AsyncIterator[Trade | BookSecond | IndexSecond]:
-        backoff = self._backoff0
+        backoff = Backoff(self._backoff0, self._backoff_max)
         while not self._closed:
-            queue: asyncio.Queue[Update] = asyncio.Queue()
-            task = asyncio.create_task(self._transport(queue.put_nowait))
+            queue: asyncio.Queue[Update] = asyncio.Queue(maxsize=self._queue_max)
+            task = asyncio.create_task(self._transport(self._putter(queue)))
             self._gaps.on_message(self._clock.now_ms())  # silence is measured from connect
             try:
                 while not self._closed and not (task.done() and queue.empty()):
@@ -214,7 +252,7 @@ class CoinbaseStream:
                     now = self._clock.now_ms()
                     if got:
                         self._gaps.on_message(now)
-                        backoff = self._backoff0
+                        backoff.reset()
                         if isinstance(update, Trade):
                             if self._agg.add_trade(update):
                                 self._gaps.on_trade(update)
@@ -236,6 +274,6 @@ class CoinbaseStream:
                     log.warning("coinbase transport failed: %r", exc)
             if self._closed:
                 break
-            log.info("coinbase reconnecting in %.1fs", backoff)
-            await asyncio.sleep(backoff)
-            backoff = min(max(backoff * 2, self._backoff0), self._backoff_max)
+            wait = backoff.next()
+            log.info("coinbase reconnecting in %.1fs", wait)
+            await self._sleep(wait)

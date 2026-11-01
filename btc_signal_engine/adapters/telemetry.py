@@ -59,6 +59,20 @@ writer_dead_lettered = _meter.create_counter(
     "settleview.writer.dead_lettered", unit="{write}",
     description="Writes moved to the dead-letter file, by reason (data, overflow, shutdown); replayable.")
 
+# -- venue feeds (adapters/polymarket_us/recorders.py, adapters/coinbase/stream.py) --------------------------------------
+venue_dropped = _meter.create_counter(
+    "settleview.venue.dropped", unit="{message}",
+    description="Venue messages or rows dropped by a full bounded buffer (oldest first), by component and buffer: "
+                "e.g. the quotes recorder during a database outage, the Coinbase feed's queue behind a slow consumer.")
+
+
+def dropped(component: str, buffer: str, n: int = 1) -> None:
+    """Count `n` items a bounded buffer dropped (never raises: telemetry must not break a feed)."""
+    try:
+        venue_dropped.add(int(n), {"settleview.component": component, "settleview.buffer": buffer})
+    except Exception:  # noqa: S110 - a metrics failure is never a feed failure
+        pass
+
 
 def _base(model: str) -> dict[str, Any]:
     return {"gen_ai.operation.name": "invoke_agent", "gen_ai.provider.name": PROVIDER, "gen_ai.system": PROVIDER,

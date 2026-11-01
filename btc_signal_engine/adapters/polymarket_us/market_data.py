@@ -46,7 +46,8 @@ subscribes MARKET_DATA + MARKET_DATA_LITE + TRADE for the current and next windo
 trading service watches, puts each new market on a connection with room (opening another when none has room), drops
 markets no longer wanted (the next window was subscribed a whole window ahead, so a roll never leaves a gap), and
 closes a connection once it carries nothing. Each connection reconnects on its own with exponential backoff (1 s
-doubling to 30 s, reset after a minute connected) and only its own markets go stale meanwhile.
+doubling to 30 s, full jitter so the pool's sockets never reconnect in lockstep, reset after a minute connected;
+adapters/retry.py) and only its own markets go stale meanwhile.
 
 A refused subscription is never left looking live: a server error naming one of our request ids marks that market
 unsubscribed on its connection (quote None, trades_since None, listed under health()["unsubscribed"]), its other
@@ -68,14 +69,16 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from btc_signal_engine.adapters.polymarket_us.markets import current_slugs, is_series, num, window_of
+from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.domain.book_freshness import (CONN_LIVE_MS, QUIET_MAX_MS,  # noqa: F401 - TRADE_GRACE_MS: re-exported
+                                                    TRADE_GRACE_MS, unservable_reason)
 
 log = logging.getLogger(__name__)
 
 # Freshness (the module docstring, "Servable"). Every limit is on the cache's own (wall) clock.
 MAX_AGE_MS = 2_000  # a book / top this recent is servable outright (the rule before 2026-10-31)
-QUIET_MAX_MS = 30_000  # a quiet book is never served older than this (the REST BBO's own staleness: no better than it)
-CONN_LIVE_MS = 15_000  # a connection with no message at all (trade, book, heartbeat) for this long is not alive
-TRADE_GRACE_MS = 2_000  # a print not followed by a book update within this means the book feed is broken
+# QUIET_MAX_MS (30 s: the REST BBO's own staleness, no better than it), CONN_LIVE_MS (15 s) and TRADE_GRACE_MS (2 s)
+# come from domain/book_freshness.py, the rule shared with the Kalshi perps book.
 SUB_TYPES = ("SUBSCRIPTION_TYPE_MARKET_DATA", "SUBSCRIPTION_TYPE_MARKET_DATA_LITE", "SUBSCRIPTION_TYPE_TRADE")
 MAX_SUBS_PER_CONN = 10  # server limit per markets WebSocket (measured live 2026-10-29, see the module docstring)
 MARKETS_PER_CONN = MAX_SUBS_PER_CONN // len(SUB_TYPES)  # 3 markets = 9 subscriptions, one spare
@@ -353,30 +356,14 @@ class PolymarketMarketData:
             return f"its connection {cid} is down"
         if self.managed and self._subscribed.get(slug) != cid:
             return f"not subscribed on its connection {cid}"
-        age = now - rec["ms"]
-        if age <= self.max_age_ms:
-            return None  # (a) fresh
-        if not self._conn_alive(cid, now):
-            silent = None if c["last_msg_ms"] is None else now - c["last_msg_ms"]
-            return (f"connection {cid} silent for {silent / 1000:.1f} s (alive means a message within "
-                    f"{CONN_LIVE_MS // 1000} s)" if silent is not None else f"connection {cid} has sent nothing")
         lt = self._last_trade.get(slug)
-        if lt is not None and lt[0] > rec["seq"]:
-            first = self._unbooked.get(slug)
-            if first is None:  # a newer book / top message followed the print; this older record did not
-                return f"a trade arrived after this {what}, which no update of its own followed"
-            since = now - first[1]
-            if since > TRADE_GRACE_MS:
-                return (f"book feed broken: trades for {since / 1000:.1f} s without a book update (grace "
-                        f"{TRADE_GRACE_MS // 1000} s)")
-            return "a trade arrived after the last book update; waiting for its book update"
+        first = self._unbooked.get(slug)
         cov = self._covered.get(slug)
-        if cov is None or cov[1] != cid or cov[0] > rec["ms"]:
-            return (f"its trade subscription on {cid} has not covered the time since this {what} arrived (a quiet "
-                    f"book is served only while a print would show it is outdated)")
-        if age > QUIET_MAX_MS:
-            return f"the {what} is {age / 1000:.1f} s old (quiet limit {QUIET_MAX_MS // 1000} s)"
-        return None  # (b) quiet but current
+        return unservable_reason(  # the shared rule (domain/book_freshness.py), also the perps book's
+            now_ms=now, book_ms=rec["ms"], book_seq=rec["seq"], conn_last_ms=c["last_msg_ms"],
+            last_trade_seq=None if lt is None else lt[0], unbooked_ms=None if first is None else first[1],
+            covered_since_ms=cov[0] if cov is not None and cov[1] == cid else None, what=what,
+            conn=f"connection {cid}", sub_on=cid, max_age_ms=self.max_age_ms)
 
     def _servable(self, slug: str, rec: dict | None, now: int) -> bool:
         return self._why_not(slug, rec, now) is None
@@ -612,7 +599,7 @@ class PolymarketMarketStream:
 
     # -- one connection ------------------------------------------------------------------------------
     async def _run_conn(self, c: _Conn) -> None:
-        delay = self._backoff[0]
+        backoff = Backoff(*self._backoff)
         try:
             while not (self._closed or c.closing):
                 started = self._clock()
@@ -621,8 +608,8 @@ class PolymarketMarketStream:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # reconnect after any failure; the error text never carries key material
-                    log.warning("polymarket markets websocket %s stopped (%s: %s); reconnecting in %.0f s",
-                                c.id, type(exc).__name__, str(exc)[:120], delay)
+                    log.warning("polymarket markets websocket %s stopped (%s: %s); reconnecting within %.0f s",
+                                c.id, type(exc).__name__, str(exc)[:120], backoff.ceiling)
                     # A socket that never opened is registered only now (down): opening a new pool socket does not
                     # flag the whole feed stale while it connects, but one that fails does.
                     self.cache.set_connected(False, c.id)
@@ -631,9 +618,8 @@ class PolymarketMarketStream:
                 c.reconnects += 1
                 self.reconnects += 1
                 if self._clock() - started > 60_000:
-                    delay = self._backoff[0]
-                await self._sleep(delay)
-                delay = min(delay * 2, self._backoff[1])
+                    backoff.reset()
+                await self._sleep(backoff.next())
         finally:
             self.cache.drop_conn(c.id)
 

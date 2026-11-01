@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, UTC
 import httpx
 
 from btc_signal_engine.adapters.kalshi.backend import Backend, HttpxBackend, SdkBackend
+from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
 from btc_signal_engine.domain.markets import market
 
 log = logging.getLogger(__name__)
@@ -81,8 +82,9 @@ class KalshiClient:
             resp = await getattr(self._backend, op)(**params)
             if resp.status_code != 429 and resp.status_code < 500:
                 break
-            delay = min(30.0, 2.0**attempt)
-            log.warning("%s -> HTTP %s; retrying in %.0fs", op, resp.status_code, delay)
+            delay = retry_delay(attempt, status=resp.status_code, base_s=1.0, cap_s=30.0,  # full jitter
+                                retry_after=retry_after_s(header(getattr(resp, "headers", None))))
+            log.warning("%s -> HTTP %s; retrying in %.1fs", op, resp.status_code, delay)
             await self._sleep(delay)
         resp.raise_for_status()
         return resp.json()

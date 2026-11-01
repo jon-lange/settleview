@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 
 from btc_signal_engine.adapters.kalshi.backfill import backfill_kalshi
+from btc_signal_engine.adapters import retry
 from btc_signal_engine.adapters.kalshi.client import KalshiClient
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -23,7 +24,7 @@ def _client(handler, sleeps: list[float] | None = None) -> KalshiClient:
     return KalshiClient(http, sleep=sleep)
 
 
-def _paged(fail_first: int | None = None):
+def _paged(fail_first: int | None = None, headers: dict | None = None):
     page = json.loads((FIXTURES / "kalshi_settled_page_recorded.json").read_text())
     requests: list[dict[str, str]] = []
 
@@ -31,7 +32,7 @@ def _paged(fail_first: int | None = None):
         params = dict(request.url.params)
         requests.append(params)
         if fail_first and len(requests) == 1:
-            return httpx.Response(fail_first, json={"error": "busy"})
+            return httpx.Response(fail_first, json={"error": "busy"}, headers=headers)
         if params.get("cursor"):
             return httpx.Response(200, json={"markets": [], "cursor": ""})
         return httpx.Response(200, json=page)
@@ -60,7 +61,8 @@ def test_settled_page_stores_strike_expiration_and_result_for_each_finalized_mar
     assert len(store.select("kalshi_markets")) == 3
 
 
-def test_kalshi_429_and_5xx_back_off_and_retry_the_same_page(store):
+def test_kalshi_429_and_5xx_back_off_and_retry_the_same_page(store, monkeypatch):
+    monkeypatch.setattr(retry, "_uniform", lambda: 1.0)  # the top of the jitter: the full 1 s first backoff
     for status in (429, 503):
         handler, requests = _paged(fail_first=status)
         sleeps: list[float] = []
@@ -68,3 +70,11 @@ def test_kalshi_429_and_5xx_back_off_and_retry_the_same_page(store):
         assert requests[0] == requests[1]  # same page retried
         assert any(s >= 1.0 for s in sleeps)
         assert len(store.select("kalshi_markets")) == 3
+
+
+def test_a_kalshi_429_waits_at_least_its_retry_after(store, monkeypatch):
+    monkeypatch.setattr(retry, "_uniform", lambda: 0.0)  # no jitter on top: the wait is the venue's own
+    handler, requests = _paged(fail_first=429, headers={"Retry-After": "7"})
+    sleeps: list[float] = []
+    asyncio.run(backfill_kalshi(store, _client(handler, sleeps)))
+    assert requests[0] == requests[1] and 7.0 in sleeps
