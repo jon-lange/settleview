@@ -148,3 +148,24 @@ def test_cli_help(argv):
     with pytest.raises(SystemExit) as e:
         ops.main(argv)
     assert e.value.code == 0
+
+
+@pytest.mark.skipif(processes.WINDOWS, reason="zombies are a POSIX state; Windows has no unreaped exited process")
+def test_an_exited_unreaped_child_is_not_alive_on_this_os():
+    """macOS has no /proc: the zombie check there asks ps (a zombie counted as alive made `ops stop` wait it out)."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        end = time.monotonic() + 30
+        while processes.pid_alive(proc.pid) and time.monotonic() < end:
+            time.sleep(0.05)
+        assert not processes.pid_alive(proc.pid)  # exited, and still not reaped: we have not waited on it
+    finally:
+        proc.wait(timeout=30)
+
+
+@pytest.mark.parametrize(("stdout", "code", "alive"), [("S\n", 0, True), ("R+", 0, True), ("Z\n", 0, False),
+                                                       ("Z+", 0, False), ("", 1, False)])
+def test_the_ps_state_check(monkeypatch, stdout, code, alive):
+    monkeypatch.setattr(processes.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], code, stdout=stdout, stderr=""))
+    assert processes._ps_alive(4242) is alive

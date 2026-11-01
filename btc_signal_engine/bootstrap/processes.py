@@ -65,11 +65,25 @@ def pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    try:  # a zombie (exited, not yet reaped) is not alive
-        with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as f:
-            return f.read().rsplit(")", 1)[-1].split()[0] != "Z"
-    except OSError:
-        return True
+    # A zombie (exited, not yet reaped by its parent) still answers kill(pid, 0) but is not alive.
+    if Path("/proc/self/stat").exists():  # Linux
+        try:
+            with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as f:
+                return f.read().rsplit(")", 1)[-1].split()[0] != "Z"
+        except OSError:
+            return True
+    return _ps_alive(pid)  # macOS / BSD: no /proc
+
+
+def _ps_alive(pid: int) -> bool:
+    """ps's state column: Z = zombie, no row = gone (ps exits non-zero)."""
+    try:
+        res = subprocess.run(["ps", "-o", "stat=", "-p", str(int(pid))], capture_output=True, text=True,  # noqa: S603, S607 - the OS's own ps, fixed argv and an int pid
+                             timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return True  # cannot tell: kill(pid, 0) said it exists
+    state = res.stdout.strip()
+    return bool(state) and not state.startswith("Z")
 
 
 def _windows_table(pid: int | None) -> list[Proc]:
