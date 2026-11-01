@@ -166,6 +166,37 @@ def migrate(target: DbTarget) -> None:
         engine.dispose()
 
 
+class SchemaNotMigrated(RuntimeError):
+    """The database's schema is not at the latest revision and this process may not migrate it
+    (BTCFLOW_DB_MIGRATE=check: the one-off `migrate` job does)."""
+
+
+def require_head(target: DbTarget) -> str:
+    """The database's revision when it is the latest one; `SchemaNotMigrated` otherwise (a missing database, an
+    older revision, or one this code does not know). Reads only: never creates or changes anything."""
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+    if is_postgres(target):
+        engine = pg_engine(target, APP_SCHEMA, read_only=True, name="settleview-schema-check", pool_size=1)
+    else:
+        if not Path(target).exists():
+            raise SchemaNotMigrated(f"no database at {target}: run the migrate job first (`ops migrate`)")
+        engine = create_engine(f"sqlite:///{Path(target).as_posix()}", hide_parameters=True)
+    try:
+        with engine.connect() as conn:
+            current = MigrationContext.configure(conn).get_current_revision()
+    finally:
+        engine.dispose()
+    if current != head:
+        raise SchemaNotMigrated(f"the database schema is at revision {current or 'none'}, this code needs {head}: "
+                                "run the migrate job first (`python -m btc_signal_engine.ops migrate`)")
+    return current
+
+
 # Backoff between migration attempts that hit a lock: 1, 2, 4, 5, 5, ... seconds.
 MIGRATION_RETRY_FIRST_S = 1.0
 MIGRATION_RETRY_MAX_S = 5.0
@@ -313,6 +344,7 @@ def archive_trades_pg(engine: Engine, cutoff_ms: int, *, batch: int = ARCHIVE_BA
     return moved
 
 
-__all__ = ["APP_SCHEMA", "KEEPALIVES", "RESEARCH_SCHEMA", "DbTarget", "archive_trades", "archive_trades_pg",
-           "describe", "ensure_schema", "is_lock_timeout", "is_postgres", "lock_holders", "lock_key", "migrate", "online_backup", "pg_connect_args",
-           "pg_engine", "read_engine", "write_engine"]
+__all__ = ["APP_SCHEMA", "KEEPALIVES", "RESEARCH_SCHEMA", "DbTarget", "SchemaNotMigrated", "archive_trades",
+           "archive_trades_pg", "describe", "ensure_schema", "is_lock_timeout", "is_postgres", "lock_holders",
+           "lock_key", "migrate", "online_backup", "pg_connect_args", "pg_engine", "read_engine", "require_head",
+           "write_engine"]

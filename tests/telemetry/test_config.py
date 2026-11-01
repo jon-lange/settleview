@@ -91,8 +91,9 @@ def test_service_version_names_the_commit(monkeypatch):
     assert "+" not in telemetry.service_version()
 
 
-def test_make_secrets_writes_the_openobserve_password_and_a_matching_otlp_header(tmp_path, capsys):
-    import base64
+def test_make_secrets_writes_the_openobserve_password_and_an_empty_otlp_header(tmp_path, capsys):
+    """The services' header is the ingest-only token (deploy/openobserve/ingest_token.py,
+    tests/deploy/test_ingest_token.py), never derived from the root password: make_secrets.py leaves it empty."""
     import importlib.util
     import re
     from pathlib import Path
@@ -103,11 +104,9 @@ def test_make_secrets_writes_the_openobserve_password_and_a_matching_otlp_header
     assert ms.main(["make_secrets", str(tmp_path)]) == 0
     pw = (tmp_path / "openobserve.env").read_text(encoding="ascii").strip().removeprefix("ZO_ROOT_USER_PASSWORD=")
     assert re.search(r"[A-Z]", pw) and re.search(r"[a-z]", pw) and re.search(r"\d", pw) and re.search(r"[^\w]", pw)
-    headers = plan({**EP, "OTEL_EXPORTER_OTLP_HEADERS_FILE": str(tmp_path / "otlp_headers")}).headers
-    scheme, b64 = headers["authorization"].split(" ")
-    assert scheme == "Basic" and base64.b64decode(b64).decode() == f"{ms.O2_ROOT_EMAIL}:{pw}"
+    assert plan({**EP, "OTEL_EXPORTER_OTLP_HEADERS_FILE": str(tmp_path / "otlp_headers")}).headers == {}
     first = {p.name: p.read_text() for p in tmp_path.iterdir()}
     assert ms.main(["make_secrets", str(tmp_path)]) == 0  # a second run keeps every file
     assert {p.name: p.read_text() for p in tmp_path.iterdir()} == first
     out = capsys.readouterr().out
-    assert pw not in out and b64 not in out  # file names only, never a value
+    assert pw not in out  # file names only, never a value

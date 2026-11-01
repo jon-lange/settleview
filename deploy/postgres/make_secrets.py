@@ -4,14 +4,17 @@ OpenObserve already uses it), so running it again only adds what is missing. Pri
 `secrets/` is git- and docker-ignored.
 
   pg_superuser_password   the `postgres` superuser (administration only; no service uses it)
-  pg_app_password         settleview_app: the app and the recorders
+  pg_app_password         settleview_app: the app and the migrate job
+  pg_recorder_password    settleview_recorder: the research recorders (the schema research only;
+                          deploy/postgres/roles.sh)
   pg_research_password    settleview_research: read-only, for research scripts
   pg_backup_password      settleview_backup: the backup service
   openobserve.env         OpenObserve's root password (ZO_ROOT_USER_PASSWORD=...), the `openobserve` service's env file
                           (profile `observability`; its image has no shell, so it cannot read a secret file itself)
-  otlp_headers            the OTLP Authorization header for that root user (Authorization=Basic ...), mounted into the
-                          app and the recorders and read through OTEL_EXPORTER_OTLP_HEADERS_FILE; derived from
-                          openobserve.env. For another backend, write its own headers into this file instead.
+  otlp_headers            the OTLP headers, mounted into the app and the recorders and read through
+                          OTEL_EXPORTER_OTLP_HEADERS_FILE: created EMPTY here. Once OpenObserve runs,
+                          deploy/openobserve/ingest_token.py writes its ingest-only organization token into it (the
+                          services never hold the root password). For another backend, write its headers instead.
   polymarket_key_id, polymarket_secret_key, anthropic_api_key, telegram_bot_token, kalshi_key_id,
   trading_demo_key_id, trading_prod_key_id
                           the venue / API secrets compose mounts into the app (the Polymarket pair also into
@@ -21,25 +24,23 @@ OpenObserve already uses it), so running it again only adds what is missing. Pri
 
 To change a Postgres password later: ALTER ROLE ... PASSWORD in psql first, then write the new value to its file and
 restart the services that use it (docs/operations.md, "Postgres"). OpenObserve keeps the root password it first started
-with in its own volume: change it in its UI, then delete both OpenObserve files here and run this again with the new
+with in its own volume: change it in its UI, then delete secrets/openobserve.env and run this again with the new
 password in O2_ROOT_PASSWORD (docs/operations.md, "Observability").
 """
 
 from __future__ import annotations
 
-import base64
 import os
 import secrets
 import sys
 from pathlib import Path
 
-NAMES = ("pg_superuser_password", "pg_app_password", "pg_research_password", "pg_backup_password")
+NAMES = ("pg_superuser_password", "pg_app_password", "pg_research_password", "pg_backup_password",
+         "pg_recorder_password")
 # The venue / API secrets (each the file of a BTCFLOW_<NAME>_FILE setting in compose.yaml); the same list as
 # deploy/secrets_from_env.py's.
 APP_SECRETS = ("polymarket_key_id", "polymarket_secret_key", "anthropic_api_key", "telegram_bot_token", "kalshi_key_id",
                "trading_demo_key_id", "trading_prod_key_id")
-# The OpenObserve root user's e-mail: the same literal as ZO_ROOT_USER_EMAIL in compose.yaml (a login name, not a secret).
-O2_ROOT_EMAIL = "admin@settleview.local"
 O2_ENV = "openobserve.env"
 OTLP_HEADERS = "otlp_headers"
 
@@ -80,17 +81,7 @@ def main(argv: list[str]) -> int:
     if not _kept(env_file):
         _write(env_file, f"ZO_ROOT_USER_PASSWORD={os.environ.get('O2_ROOT_PASSWORD') or o2_password()}\n")
         print(f"created {env_file}")
-    headers = root / OTLP_HEADERS
-    if not _kept(headers):
-        pw = next((line.split("=", 1)[1].strip() for line in env_file.read_text(encoding="ascii").splitlines()
-                   if line.startswith("ZO_ROOT_USER_PASSWORD=")), "")
-        if not pw:
-            print(f"error   {env_file} has no ZO_ROOT_USER_PASSWORD line", file=sys.stderr)
-            return 1
-        basic = base64.b64encode(f"{O2_ROOT_EMAIL}:{pw}".encode("ascii")).decode("ascii")
-        _write(headers, f"Authorization=Basic%20{basic}\n")
-        print(f"created {headers}")
-    for name in APP_SECRETS:
+    for name in (OTLP_HEADERS, *APP_SECRETS):
         f = root / name
         if f.exists():
             print(f"kept    {f}")

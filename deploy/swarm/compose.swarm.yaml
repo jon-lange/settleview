@@ -19,6 +19,11 @@ services:
     depends_on: !reset {}
   backup:
     depends_on: !reset {}
+  migrate:
+    # A one-shot task (deploy.restart_policy on-failure in compose.yaml): it migrates and exits 0. Swarm ignores
+    # depends_on, so the app checks the revision itself (BTCFLOW_DB_MIGRATE=check) and its task is restarted until the
+    # job has run. Run it first on an update: docker service update --force settleview_migrate, then the app.
+    depends_on: !reset {}
   rec-pm-quotes:
     depends_on: !reset {}
   rec-pm-settle:

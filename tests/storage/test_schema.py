@@ -161,3 +161,91 @@ def test_session_and_journal_kind_indexes_on_postgres(pg_admin_url):
         assert present() == {n for n, _ in INDEXES_0022}
     finally:
         e.dispose()
+
+
+def _schema_diff(conn) -> list:
+    """What a database migrated to head lacks or has beyond tables.py (Alembic's autogenerate comparison, in the
+    connection's search_path schema)."""
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+
+    opts = {"compare_type": False}  # types: SQLite reflects its own names; the DDL is covered by the dialect tests
+    return compare_metadata(MigrationContext.configure(conn, opts=opts), metadata)
+
+
+def test_the_initial_migration_is_frozen():
+    """0001 writes its tables out: it imports nothing from the app, so changing tables.py can never change it."""
+    from btc_signal_engine.adapters.sqlite.db import MIGRATIONS_DIR
+    src = (MIGRATIONS_DIR / "versions" / "0001_initial.py").read_text(encoding="utf-8")
+    assert "btc_signal_engine" not in src and "import" in src
+
+
+def test_a_fresh_database_migrated_to_head_has_exactly_the_app_schema(tmp_path):
+    """Every table, column and index of tables.py, and nothing else (the frozen 0001 plus each later revision)."""
+    from sqlalchemy import create_engine
+    path = tmp_path / "fresh.db"
+    migrate(path)
+    e = create_engine(f"sqlite:///{path.as_posix()}")
+    try:
+        with e.connect() as c:
+            assert _schema_diff(c) == []
+    finally:
+        e.dispose()
+
+
+@pytest.mark.postgres
+def test_a_fresh_postgres_database_migrated_to_head_has_exactly_the_app_schema(pg_admin_url):
+    from sqlalchemy import create_engine
+
+    from tests.conftest import fresh_pg_database
+    url = fresh_pg_database(pg_admin_url, "settleview_test_fresh_schema")
+    migrate(url)
+    e = create_engine(url, connect_args={"options": "-c search_path=app"})
+    try:
+        with e.connect() as c:
+            assert _schema_diff(c) == []
+    finally:
+        e.dispose()
+
+
+def test_check_mode_starts_only_on_a_schema_at_head(tmp_path):
+    """BTCFLOW_DB_MIGRATE=check (compose: the one-off `migrate` service owns the schema): the app reads the revision
+    and refuses a missing or older database instead of migrating it; `auto` (the default) migrates as before."""
+    from alembic import command
+    from alembic.config import Config
+    from pydantic import ValidationError
+
+    from btc_signal_engine.adapters.sqlite.db import MIGRATIONS_DIR, SchemaNotMigrated, require_head
+    from btc_signal_engine.bootstrap.app import Runtime
+    from btc_signal_engine.bootstrap.config import Settings
+    from tests.storage.test_strategy_tables import HEAD
+
+    db = tmp_path / "btcflow.db"
+    with pytest.raises(SchemaNotMigrated, match="no database"):
+        Runtime(Settings(_env_file=None, db_path=db, db_migrate="check", trading_stream=False))
+    assert not db.exists()  # nothing was created
+    cfg = Config()
+    cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db.as_posix()}")
+    command.upgrade(cfg, "0021")
+    with pytest.raises(SchemaNotMigrated, match=f"revision 0021, this code needs {HEAD}"):
+        require_head(db)
+    migrate(db)  # the migrate job
+    assert require_head(db) == HEAD
+    rt = Runtime(Settings(_env_file=None, db_path=db, db_migrate="check", trading_stream=False))
+    rt.store._write.dispose()
+    rt.store._read.dispose()
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, db_migrate="never")  # no silent fallback to a default
+
+
+@pytest.mark.postgres
+def test_check_mode_reads_the_revision_on_postgres(pg_admin_url):
+    from btc_signal_engine.adapters.sqlite.db import SchemaNotMigrated, require_head
+    from tests.conftest import fresh_pg_database
+    from tests.storage.test_strategy_tables import HEAD
+    url = fresh_pg_database(pg_admin_url, "settleview_test_check")
+    with pytest.raises(SchemaNotMigrated, match="revision none"):
+        require_head(url)
+    migrate(url)
+    assert require_head(url) == HEAD

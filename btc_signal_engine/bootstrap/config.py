@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     db_long_statement_timeout_ms: int = Field(600_000, ge=0)
     db_pool_timeout_s: float = Field(5.0, gt=0)
     db_migration_lock_wait_s: float = Field(120.0, ge=0, le=3_600)
+    # Who migrates the database's schema (BTCFLOW_DB_MIGRATE): `auto`, the app at its start (development, the
+    # supervisor, a single process); `check`, a one-off job did (compose's `migrate` service, a Swarm / ACA job), so
+    # the app only checks that the schema is at the latest revision and refuses to start otherwise (a Swarm task
+    # started before the job finished exits and is started again). Any other value is a configuration error.
+    db_migrate: Literal["auto", "check"] = "auto"
     # Where the research recorders write (polymarket_us.db) and the app reads their freshness (read-only). None = a
     # `research` folder next to the database (BTCFLOW_RESEARCH_DIR).
     research_dir: Path | None = None

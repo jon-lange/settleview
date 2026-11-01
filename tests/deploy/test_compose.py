@@ -22,8 +22,8 @@ DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 SECRET_SETTINGS = ("BTCFLOW_POLYMARKET_KEY_ID", "BTCFLOW_POLYMARKET_SECRET_KEY", "BTCFLOW_ANTHROPIC_API_KEY",
                    "BTCFLOW_TELEGRAM_BOT_TOKEN", "BTCFLOW_KALSHI_KEY_ID", "BTCFLOW_TRADING_DEMO_KEY_ID",
                    "BTCFLOW_TRADING_PROD_KEY_ID", "BTCFLOW_DATABASE_PASSWORD", "POSTGRES_PASSWORD", "PGPASSWORD")
-PYTHON_SERVICES = ("app", "rec-pm-quotes", "rec-pm-settle")
-ALL_SERVICES = ("postgres", "backup", "app", "rec-pm-quotes", "rec-pm-settle", "openobserve")
+PYTHON_SERVICES = ("migrate", "app", "rec-pm-quotes", "rec-pm-settle")
+ALL_SERVICES = ("postgres", "backup", "migrate", "app", "rec-pm-quotes", "rec-pm-settle", "openobserve")
 
 
 def _config(tmp_path: Path, **env: str) -> dict:
@@ -31,7 +31,7 @@ def _config(tmp_path: Path, **env: str) -> dict:
         pytest.skip("no docker CLI")
     (tmp_path / "deploy" / "postgres").mkdir(parents=True)
     shutil.copy(ROOT / "compose.yaml", tmp_path / "compose.yaml")
-    for f in ("initdb.sh", "backup.sh"):
+    for f in ("initdb.sh", "roles.sh", "backup.sh"):
         shutil.copy(ROOT / "deploy" / "postgres" / f, tmp_path / "deploy" / "postgres" / f)
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "openobserve.env").write_text("ZO_ROOT_USER_PASSWORD=dummy\n", encoding="utf-8")
@@ -63,9 +63,10 @@ def test_no_secret_is_an_environment_value_or_interpolated(tmp_path):
     assert {k for k in q["environment"] if k.startswith("BTCFLOW_")} == {
         "BTCFLOW_DATABASE_URL", "BTCFLOW_DATABASE_PASSWORD_FILE", "BTCFLOW_POLYMARKET_KEY_ID_FILE",
         "BTCFLOW_POLYMARKET_SECRET_KEY_FILE"}
-    assert {s["source"] for s in q["secrets"]} == {"pg_app_password", "otlp_headers", "polymarket_key_id",
+    assert {s["source"] for s in q["secrets"]} == {"pg_recorder_password", "otlp_headers", "polymarket_key_id",
                                                    "polymarket_secret_key"}
-    assert {s["source"] for s in services["rec-pm-settle"]["secrets"]} == {"pg_app_password", "otlp_headers"}
+    assert {s["source"] for s in services["rec-pm-settle"]["secrets"]} == {"pg_recorder_password", "otlp_headers"}
+    assert {s["source"] for s in services["migrate"]["secrets"]} == {"pg_app_password"}
     assert "${BTCFLOW_POLYMARKET" not in COMPOSE  # nothing from `.env` interpolated into a service
 
 
@@ -108,3 +109,31 @@ def test_text_checks():
         in DOCKERFILE
     for setting in SECRET_SETTINGS[:7]:
         assert f"{setting}:" not in COMPOSE
+
+
+def test_the_recorders_connect_as_the_recorder_role_and_the_app_as_the_app_role(tmp_path):
+    """Least privilege (B4#4): the recorders' role owns only the schema research (deploy/postgres/roles.sh); only
+    the app and the migrate job hold the app role's password."""
+    services = _config(tmp_path)["services"]
+    for name in ("rec-pm-quotes", "rec-pm-settle"):
+        env = services[name]["environment"]
+        assert env["BTCFLOW_DATABASE_URL"] == "postgresql://settleview_recorder@postgres:5432/settleview", name
+        assert env["BTCFLOW_DATABASE_PASSWORD_FILE"] == "/run/secrets/pg_recorder_password", name
+    holders = {n for n, svc in services.items() if "pg_app_password" in {x["source"] for x in svc.get("secrets", [])}}
+    assert holders == {"postgres", "migrate", "app"}
+    pg = services["postgres"]
+    assert {x["source"] for x in pg["secrets"]} >= {"pg_recorder_password"}
+    assert {c["target"] for c in pg["configs"]} == {"/docker-entrypoint-initdb.d/10-settleview.sh",
+                                                     "/docker-entrypoint-initdb.d/20-roles.sh"}
+
+
+def test_migrations_run_as_a_one_off_job_the_app_waits_for(tmp_path):
+    services = _config(tmp_path)["services"]
+    m = services["migrate"]
+    assert m["command"] == ["python", "-m", "btc_signal_engine.ops", "migrate"] and m["restart"] == "no"
+    assert m["deploy"]["restart_policy"]["condition"] == "on-failure"  # Swarm: a one-shot task
+    app = services["app"]
+    assert app["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
+    assert app["environment"]["BTCFLOW_DB_MIGRATE"] == "check"  # and never migrates itself
+    for name in ("rec-pm-quotes", "rec-pm-settle"):
+        assert "migrate" not in services[name]["depends_on"], name  # their own tables; trading's schema is not theirs

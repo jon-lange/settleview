@@ -81,7 +81,14 @@ from btc_signal_engine.adapters.polymarket_us.shadow import SHADOW_ENV as PM_SHA
 from btc_signal_engine.adapters.polymarket_us.stream import PolymarketTradingStream
 from btc_signal_engine.adapters.polymarket_us.trading import PolymarketTrading
 from btc_signal_engine.adapters.ruleset_files import read_seed_files
-from btc_signal_engine.adapters.sqlite.db import describe, migrate, read_engine, write_engine
+from btc_signal_engine.adapters.sqlite.db import (
+    SchemaNotMigrated,
+    describe,
+    migrate,
+    read_engine,
+    require_head,
+    write_engine,
+)
 from btc_signal_engine.adapters.sqlite.store import SqliteStore
 from btc_signal_engine.adapters.sqlite.urls import use_pg_timeouts
 from btc_signal_engine.adapters.sqlite.writer import BufferedStore, is_transient
@@ -346,7 +353,10 @@ class Runtime:
         db = settings.database  # the Postgres URL (BTCFLOW_DATABASE_URL) or the SQLite file (BTCFLOW_DB_PATH)
         data_dir = settings.data_dir  # logs, pid and stop files: a local folder either way
         log.info("database: %s", describe(db))
-        migrate(db)
+        if settings.db_migrate == "check":  # the one-off migrate job owns the schema (compose's `migrate` service)
+            log.info("database schema at revision %s (migrated by the migrate job)", require_head(db))
+        else:
+            migrate(db)
         we = write_engine(db)
         self.store = SqliteStore(we, read_engine(db))
         # A database outage is retried until it ends; only a refused write (or, past the queue cap, market data) goes
@@ -1884,5 +1894,8 @@ def main(argv: list[str] | None = None) -> None:
             asyncio.run(rt.run())
     except KeyboardInterrupt:
         pass
+    except SchemaNotMigrated as exc:  # BTCFLOW_DB_MIGRATE=check and the migrate job has not run (yet)
+        log.error("not starting: %s", exc)
+        raise SystemExit(75) from None  # EX_TEMPFAIL: the restart policy tries again once the job has run
     finally:
         tel.shutdown()  # the last spans, metrics and logs go out (at most a few seconds)

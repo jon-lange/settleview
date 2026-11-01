@@ -13,18 +13,23 @@
 #
 #   postgres       Postgres 17: the app's data (schema app) and the recorders' (schema research)   not published
 #   backup         nightly pg_dump -Fc to the settleview-backups volume (7 daily + 4 weekly)
+#   migrate        a one-off job: the app's schema to the latest revision, then exits; the app starts after it
 #   app            the Play app (collector, engine, API, web app)    8000: phones (PIN); 127.0.0.1:8001: this PC
 #                  (a paired browser: `docker compose exec app python -m btc_signal_engine.ops pair-pc` once);
 #                  127.0.0.1:8002: external agents' tool API
-#   rec-pm-quotes  Polymarket US quotes + trades (WebSocket)                                      writes schema research
-#   rec-pm-settle  Polymarket US settlement terms (public, no keys)                               writes schema research
+#   rec-pm-quotes  Polymarket US quotes + trades (WebSocket)        writes schema research (settleview_recorder)
+#   rec-pm-settle  Polymarket US settlement terms (public, no keys) writes schema research (settleview_recorder)
 #   openobserve    logs, metrics and traces (OpenTelemetry), profile `observability` only    127.0.0.1:5080: this PC
 #
 # Observability (docs/operations.md, "Observability"): every Python service exports OpenTelemetry over OTLP/HTTP once
 # OTEL_EXPORTER_OTLP_ENDPOINT is set in `.env` next to this file; unset, nothing is exported. The local backend is opt-in:
 #   echo OTEL_EXPORTER_OTLP_ENDPOINT=http://openobserve:5080/api/default >> .env
 #   docker compose --profile observability up -d          # then http://localhost:5080 (admin@settleview.local)
-# Its credential (and any other backend's) is the secret file secrets/otlp_headers, never an environment value.
+#   python deploy/openobserve/ingest_token.py               # once it runs: secrets/otlp_headers, ingest-only
+#   docker compose up -d --force-recreate app rec-pm-quotes rec-pm-settle
+# The services' credential (and any other backend's) is the secret file secrets/otlp_headers, never an environment
+# value: OpenObserve's organization ingestion token, which can send telemetry and nothing else (no reading, no
+# administration); the root password stays in secrets/openobserve.env, mounted into OpenObserve only.
 #
 # Resources: every service has a memory limit (a leak or a runaway agent CLI stops at its own service) and a CPU cap,
 # sized for one small host from measurements (docs/operations.md, "Resource limits and Postgres settings"). Raise them,
@@ -37,7 +42,8 @@
 # *_FILE form of any setting (a Docker / Swarm secret mounted under /run/secrets). Every secret is a file under
 # ./secrets, never an environment value: the database passwords, and the venue / API keys (Polymarket key id and
 # secret, Kalshi key ids, the Anthropic key, the Telegram bot token), so `docker inspect` and child processes never
-# see them. The recorders get only the Polymarket key files and the database.
+# see them. The recorders get only the Polymarket key files and the database as settleview_recorder, a role that owns
+# the schema research and has no privilege on the app's schema (deploy/postgres/roles.sh).
 #
 # Hardening (docs/operations.md, "Docker: hardening"): the Python services run as a non-root user with a read-only
 # root filesystem (writes go to /data and to small tmpfs mounts at /tmp and the home folder), every Linux capability
@@ -96,7 +102,7 @@ x-service: &service
     rollback_config:
       order: stop-first
 
-# The app's and the recorders' database connection: the settleview_app role; its password is a secret file.
+# The app's and the migrate job's database connection: the settleview_app role; its password is a secret file.
 x-database: &database
   BTCFLOW_DATABASE_URL: postgresql://settleview_app@postgres:5432/settleview
   BTCFLOW_DATABASE_PASSWORD_FILE: /run/secrets/pg_app_password
@@ -105,9 +111,16 @@ x-database: &database
   # UTC, and an unknown name stops the start. Set TZ in `.env` next to this file.
   TZ: ${TZ:-UTC}
 
+# The recorders' connection: the settleview_recorder role (owns the schema research, nothing on the app's schema;
+# deploy/postgres/roles.sh).
+x-recorder-database: &recorder-database
+  <<: *database
+  BTCFLOW_DATABASE_URL: postgresql://settleview_recorder@postgres:5432/settleview
+  BTCFLOW_DATABASE_PASSWORD_FILE: /run/secrets/pg_recorder_password
+
 # OpenTelemetry for the app and the recorders (bootstrap/telemetry.py): inert while OTEL_EXPORTER_OTLP_ENDPOINT is empty
 # (the default). The backend's credential is read from the otlp_headers secret file (OTEL_EXPORTER_OTLP_HEADERS_FILE),
-# never from the environment; deploy/postgres/make_secrets.py writes it for the local OpenObserve.
+# never from the environment; deploy/openobserve/ingest_token.py writes it for the local OpenObserve.
 x-otel: &otel
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
   OTEL_EXPORTER_OTLP_HEADERS_FILE: /run/secrets/otlp_headers
@@ -134,6 +147,13 @@ x-needs-postgres: &needs-postgres
   postgres:
     condition: service_healthy
     restart: true
+
+x-needs-migrated: &needs-migrated
+  <<: *needs-postgres
+  # The app starts only after the migrate job exited 0 (it checks the revision itself too: BTCFLOW_DB_MIGRATE=check,
+  # so on Swarm, which ignores depends_on, an app task that starts first exits and is started again).
+  migrate:
+    condition: service_completed_successfully
 
 # The image compose and the backup / restore drill use; an exact version (17.10, released 2026-08), never "latest".
 x-postgres-image: &postgres-image postgres:17.10-bookworm
@@ -194,11 +214,15 @@ services:
       - shared_preload_libraries=pg_stat_statements
       - -c
       - pg_stat_statements.track=top
-    secrets: [pg_superuser_password, pg_app_password, pg_research_password, pg_backup_password]
+    secrets: [pg_superuser_password, pg_app_password, pg_research_password, pg_backup_password, pg_recorder_password]
     configs:
-      # Roles (settleview_app, settleview_research, settleview_backup) and schemas, on the first start only.
+      # Roles (settleview_app, settleview_research, settleview_backup) and the schema app, on the first start only.
       - source: pg_initdb
         target: /docker-entrypoint-initdb.d/10-settleview.sh
+      # The recorders' role and schema (settleview_recorder, research): on the first start, and once by hand on an
+      # existing volume: docker compose exec -T postgres bash /docker-entrypoint-initdb.d/20-roles.sh (idempotent).
+      - source: pg_roles
+        target: /docker-entrypoint-initdb.d/20-roles.sh
     volumes:
       - settleview-pg:/var/lib/postgresql/data
     # Not published: only the services on this network reach it. For tools on this PC, uncomment (loopback only):
@@ -263,6 +287,28 @@ services:
         limits: {cpus: "1.0", memory: 512m}  # pg_dump streams; 10 MiB idle
         reservations: {memory: 64m}
 
+  # The schema migrations as a one-off job (`python -m btc_signal_engine.ops migrate`): runs at every `up`, exits 0
+  # at the latest revision (a no-op when nothing is new), and the app waits for it. A failed migration stops here,
+  # before the app starts on a half-new schema; its log says why (`docker compose logs migrate`). On Swarm a service
+  # with restart_policy on-failure (deploy/swarm/compose.swarm.yaml); on ACA / ECS a job run before the new revision.
+  migrate:
+    <<: *service
+    command: ["python", "-m", "btc_signal_engine.ops", "migrate"]
+    restart: "no"
+    environment:
+      <<: *database
+    secrets: [pg_app_password]
+    depends_on: *needs-postgres
+    deploy:
+      <<: *deploy
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits: {cpus: "1.0", memory: 512m}
+        reservations: {memory: 128m}
+
   app:
     <<: *service
     env_file:
@@ -271,6 +317,7 @@ services:
     environment:
       <<: [*database, *otel, *app-secret-files]
       BTCFLOW_DB_PATH: /data/btcflow.db  # its folder (/data) holds the logs, pid and stop files; the data is in Postgres
+      BTCFLOW_DB_MIGRATE: check  # the migrate job owns the schema: the app only checks it is at the latest revision
       BTCFLOW_API_HOST: 0.0.0.0
       BTCFLOW_FILE_LOG: "false"
       # Who is the PC (docs/operations.md, "Running in Docker: who counts as the PC"): a PAIRED BROWSER on the PC
@@ -286,7 +333,7 @@ services:
       OTEL_SERVICE_NAME: settleview-app
     secrets: [pg_app_password, otlp_headers, polymarket_key_id, polymarket_secret_key, anthropic_api_key,
               telegram_bot_token, kalshi_key_id, trading_demo_key_id, trading_prod_key_id]
-    depends_on: *needs-postgres
+    depends_on: *needs-migrated
     deploy:
       <<: *deploy
       resources:
@@ -319,9 +366,9 @@ services:
     command: ["python", "-m", "btc_signal_engine.recorders", "pm-quotes"]
     # Only what this recorder needs: the database and the Polymarket US key (read-only market data), as secret files.
     environment:
-      <<: [*database, *otel, *polymarket-secret-files]
+      <<: [*recorder-database, *otel, *polymarket-secret-files]
       OTEL_SERVICE_NAME: settleview-rec-pm-quotes
-    secrets: [pg_app_password, otlp_headers, polymarket_key_id, polymarket_secret_key]
+    secrets: [pg_recorder_password, otlp_headers, polymarket_key_id, polymarket_secret_key]
     depends_on: *needs-postgres
     deploy:
       <<: *deploy
@@ -331,8 +378,10 @@ services:
     healthcheck:
       # Liveness: the recorder's own loop touched its heartbeat file within 60 s (bootstrap/heartbeat.py). Not the
       # data's freshness: a venue or database outage is not cured by a restart; the app's `data` alert and
-      # `python -m btc_signal_engine.ops fresh pm-quotes` report that (and the recorder exits by itself when it
-      # records nothing for 10 minutes without a venue outage).
+      # `python -m btc_signal_engine.ops fresh pm-quotes` report that. Compose never restarts an unhealthy
+      # container, so the recorder also exits by itself (75, then the restart policy): when it records nothing for
+      # 10 minutes without a venue outage, when one lane's loop stops turning for 3 minutes, or when its main loop
+      # has not beaten for 5 minutes.
       test: ["CMD", "python", "-m", "btc_signal_engine.ops", "alive", "pm-quotes", "--max-age", "60"]
       interval: 30s
       timeout: 10s
@@ -343,9 +392,9 @@ services:
     <<: *service
     command: ["python", "-m", "btc_signal_engine.recorders", "pm-settle"]
     environment:
-      <<: [*database, *otel]
+      <<: [*recorder-database, *otel]
       OTEL_SERVICE_NAME: settleview-rec-pm-settle
-    secrets: [pg_app_password, otlp_headers]
+    secrets: [pg_recorder_password, otlp_headers]
     depends_on: *needs-postgres
     deploy:
       <<: *deploy
@@ -408,8 +457,9 @@ services:
 
 secrets:
   # Files written by deploy/postgres/make_secrets.py (Swarm: `docker secret create`, then `external: true`).
-  # otlp_headers: the OTLP backend's headers (OpenObserve's Basic credential by default); mounted into the app and the
-  # recorders and read only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+  # otlp_headers: the OTLP backend's headers (OpenObserve's ingest-only organization token, written by
+  # deploy/openobserve/ingest_token.py); mounted into the app and the recorders and read only when
+  # OTEL_EXPORTER_OTLP_ENDPOINT is set.
   otlp_headers:
     file: ./secrets/otlp_headers
   pg_superuser_password:
@@ -420,6 +470,8 @@ secrets:
     file: ./secrets/pg_research_password
   pg_backup_password:
     file: ./secrets/pg_backup_password
+  pg_recorder_password:
+    file: ./secrets/pg_recorder_password
   # Venue / API secrets (empty file = not configured). Mounted into the app; the Polymarket pair into rec-pm-quotes.
   polymarket_key_id:
     file: ./secrets/polymarket_key_id
@@ -439,6 +491,8 @@ secrets:
 configs:
   pg_initdb:
     file: ./deploy/postgres/initdb.sh
+  pg_roles:
+    file: ./deploy/postgres/roles.sh
   pg_backup:
     file: ./deploy/postgres/backup.sh
 

@@ -2,9 +2,11 @@
 # Settleview's roles and schemas, made once when the `settleview-pg` volume is new (the official postgres image runs
 # /docker-entrypoint-initdb.d/*.sh on an empty data directory only; compose.yaml mounts this file there).
 #
-#   settleview_app       the app and the recorders: owns the schemas `app` and `research` (reads and writes)
+#   settleview_app       the app and the migrate job: owns the schema `app` (reads and writes)
 #   settleview_research  research scripts: read-only (SELECT on both schemas, every transaction read-only)
 #   settleview_backup    the backup service: pg_read_all_data, read-only (pg_dump)
+# The recorders' role (settleview_recorder) and their schema `research` come next, from roles.sh (20-roles.sh), which
+# an existing volume runs once by hand.
 #
 # Passwords come from secret files (compose `secrets:`, mounted under /run/secrets); they are read by psql itself
 # (\set with a backtick command), so they never appear on a command line or in the log. Nobody else may connect to the
@@ -41,13 +43,12 @@ GRANT CONNECT, TEMPORARY ON DATABASE :"db" TO settleview_app;
 GRANT CONNECT ON DATABASE :"db" TO settleview_research, settleview_backup;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
--- The app's tables (Alembic) and the recorders' tables; the app's role owns both, so migrations and recorders run as it.
+-- The app's tables (Alembic): the app's role owns them, so the migrate job runs as it. (`research`: roles.sh.)
 CREATE SCHEMA app AUTHORIZATION settleview_app;
-CREATE SCHEMA research AUTHORIZATION settleview_app;
 
 -- Research: read-only, on every table settleview_app makes now and later.
-GRANT USAGE ON SCHEMA app, research TO settleview_research;
-ALTER DEFAULT PRIVILEGES FOR ROLE settleview_app IN SCHEMA app, research GRANT SELECT ON TABLES TO settleview_research;
+GRANT USAGE ON SCHEMA app TO settleview_research;
+ALTER DEFAULT PRIVILEGES FOR ROLE settleview_app IN SCHEMA app GRANT SELECT ON TABLES TO settleview_research;
 ALTER ROLE settleview_research SET default_transaction_read_only = on;
 ALTER ROLE settleview_research SET search_path = research, app;
 
@@ -62,4 +63,4 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 GRANT pg_read_all_stats TO settleview_research;
 SQL
 
-echo "settleview initdb: roles settleview_app, settleview_research, settleview_backup and schemas app, research created"
+echo "settleview initdb: roles settleview_app, settleview_research, settleview_backup and schema app created"
