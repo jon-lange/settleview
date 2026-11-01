@@ -28,6 +28,13 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+        with:
+          version: "0.13.1"  # the uv the Dockerfiles pin
+
+      # uv.lock (every dependency, pinned with sha256 hashes) must match pyproject.toml: a pin changed without
+      # `uv lock` fails here, before any install.
+      - name: Lock file matches pyproject.toml (uv lock --check)
+        run: uv lock --check
 
       # Only Ruff, at the version pyproject.toml's dev extra pins (one source of truth), not the whole project.
       - name: Install Ruff
@@ -115,24 +122,32 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
+          version: "0.13.1"  # the uv the Dockerfiles pin
           enable-cache: true
-          cache-dependency-glob: pyproject.toml
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
 
       - name: Create the Python 3.13 environment
         run: uv venv --python 3.13 .venv
 
+      # Hash-checked: the pins and sha256 hashes come from uv.lock (`uv export --locked` fails if it no longer matches
+      # pyproject.toml), installed with --require-hashes and without resolving anything; then the project itself, without
+      # dependencies or build isolation (its build backend, setuptools, is a locked dependency already installed).
       # ta-lib (the Python wrapper) needs the TA-Lib C library. Recent ta-lib releases ship manylinux wheels with the
       # library bundled, so the first install normally just works. If pip has to build from source instead, install
       # the C library from the official TA-Lib release and try again.
       # The `otel` extra too: the OpenTelemetry tests (tests/telemetry) run here and in the Postgres job.
       - name: Install the project and dev tools
         run: |
-          if ! uv pip install --python .venv -e ".[dev,otel]"; then
+          uv export --locked --extra dev --extra otel --no-emit-project --format requirements.txt -o /tmp/requirements.txt
+          if ! uv pip install --python .venv --require-hashes --no-deps -r /tmp/requirements.txt; then
             echo "::warning::Install failed (likely no ta-lib wheel); installing the TA-Lib C library and retrying"
             curl -fsSL -o /tmp/ta-lib.deb https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib_0.6.4_amd64.deb
             sudo apt-get install -y /tmp/ta-lib.deb
-            uv pip install --python .venv -e ".[dev,otel]"
+            uv pip install --python .venv --require-hashes --no-deps -r /tmp/requirements.txt
           fi
+          uv pip install --python .venv --no-deps --no-build-isolation -e .
 
       - name: Import contracts (lint-imports)
         run: .venv/bin/python scripts/quality.py --only imports
@@ -173,20 +188,25 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
+          version: "0.13.1"  # the uv the Dockerfiles pin
           enable-cache: true
-          cache-dependency-glob: pyproject.toml
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
 
       - name: Create the Python 3.13 environment
         run: uv venv --python 3.13 .venv
 
       - name: Install the project, dev tools and the Postgres driver
         run: |
-          if ! uv pip install --python .venv -e ".[dev,postgres,otel]"; then
+          uv export --locked --extra dev --extra postgres --extra otel --no-emit-project --format requirements.txt -o /tmp/requirements.txt
+          if ! uv pip install --python .venv --require-hashes --no-deps -r /tmp/requirements.txt; then
             echo "::warning::Install failed (likely no ta-lib wheel); installing the TA-Lib C library and retrying"
             curl -fsSL -o /tmp/ta-lib.deb https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib_0.6.4_amd64.deb
             sudo apt-get install -y /tmp/ta-lib.deb
-            uv pip install --python .venv -e ".[dev,postgres,otel]"
+            uv pip install --python .venv --require-hashes --no-deps -r /tmp/requirements.txt
           fi
+          uv pip install --python .venv --no-deps --no-build-isolation -e .
 
       - name: Postgres-only tests (none may be skipped)
         run: |
@@ -216,14 +236,20 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
+          version: "0.13.1"  # the uv the Dockerfiles pin
           enable-cache: true
-          cache-dependency-glob: pyproject.toml
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
 
       - name: Create the Python 3.13 environment
         run: uv venv --python 3.13 .venv
 
       - name: Install the project and dev tools
-        run: uv pip install --python .venv -e ".[dev]"
+        run: |
+          uv export --locked --extra dev --no-emit-project --format requirements.txt -o requirements-ci.txt
+          uv pip install --python .venv --require-hashes --no-deps -r requirements-ci.txt
+          uv pip install --python .venv --no-deps --no-build-isolation -e .
 
       - name: Supervisor, ops, recorders and settings tests
         run: |

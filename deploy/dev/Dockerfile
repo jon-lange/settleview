@@ -3,8 +3,8 @@
 # developer's CPU or OS never decides which wheels the code is tested against.
 #
 # The source is NOT copied: deploy/dev/compose.yaml bind-mounts the checkout at /app, so an edit needs no rebuild. The
-# image holds the dependencies of pyproject.toml (every extra: dev, postgres, otel) and Playwright's Chromium for the
-# e2e tests; it is rebuilt only when pyproject.toml or this file changes (`python scripts/dev.py build`; every dev.py
+# image holds the dependencies of uv.lock (every extra: dev, postgres, otel) and Playwright's Chromium for the
+# e2e tests; it is rebuilt only when pyproject.toml, uv.lock or this file changes (`python scripts/dev.py build`; every dev.py
 # command runs the build first, a no-op from the layer cache).
 #
 # Base: the root Dockerfile's image, pinned by the same multi-arch digest (refresh both together).
@@ -23,14 +23,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# The dependencies only (the layer is keyed on pyproject.toml, not on the code): every extra, at pyproject.toml's pins.
+# The dependencies only (the layer is keyed on pyproject.toml and uv.lock, not on the code): every extra, from uv.lock,
+# hash-checked (`--locked`: the lock must match pyproject.toml; `--require-hashes`: every file must match its sha256 in
+# the lock), as the root Dockerfile and CI install them.
 # Then Playwright's Chromium and the system libraries it needs (Playwright's own installer, at the pinned playwright).
 # `apt-get upgrade`: Debian's security fixes since the base image (as in the root Dockerfile; DL3008 for the same reason).
 # hadolint ignore=DL3008
 RUN --mount=type=bind,source=pyproject.toml,target=/tmp/build/pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=/tmp/build/uv.lock \
     --mount=type=cache,target=/root/.cache/uv \
     apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends tini \
-    && UV_CACHE_DIR=/root/.cache/uv uv pip install -r /tmp/build/pyproject.toml --extra dev --extra postgres --extra otel \
+    && UV_CACHE_DIR=/root/.cache/uv uv export --project /tmp/build --locked --all-extras --no-emit-project \
+       --format requirements.txt -o /tmp/requirements.txt \
+    && UV_CACHE_DIR=/root/.cache/uv uv pip install --require-hashes --no-deps -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt \
     && python -m playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /cache/uv && chmod 1777 /cache/uv \

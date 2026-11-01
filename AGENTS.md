@@ -104,7 +104,8 @@ environment); `scripts/dev.py` (standard library only) drives the dev container 
   `SETTLEVIEW_DEV_PROJECT=settleview-dev-<name>` so the two never share a test Postgres.
 
 The host's CPU or OS never shapes a dependency: one pin per package, no platform markers. Do not add packages without
-the user's OK. The research data exists only on the machine that recorded it (`data/` is git-ignored).
+the user's OK. Dependencies install from the hashed `uv.lock`: after changing a pin in pyproject.toml, run
+`python scripts/dev.py run sh -c "UV_CACHE_DIR=/tmp/uv uv lock"` and commit both (docs/operations.md, "The lock file"). The research data exists only on the machine that recorded it (`data/` is git-ignored).
 
 ## Venue APIs
 

@@ -15,12 +15,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 # README.md, LICENSE and NOTICE: pyproject.toml names them (readme, license-files), so the build needs them (the
 # vendored libraries' licenses come with web/).
-COPY pyproject.toml README.md LICENSE NOTICE alembic.ini ./
+COPY pyproject.toml uv.lock README.md LICENSE NOTICE alembic.ini ./
 COPY btc_signal_engine ./btc_signal_engine
 COPY rulesets ./rulesets
 COPY web ./web
 # The agent's default system prompt: read at startup when agent mode is on (bootstrap/app.py AGENT_DEFAULT_PROMPT)
 COPY docs/agent/default-system-prompt.md ./docs/agent/default-system-prompt.md
+# The dependencies come from uv.lock, hash-checked: `uv export --locked` fails if the lock no longer matches
+# pyproject.toml, and every wheel or sdist installed must match a sha256 recorded in the lock (`--require-hashes`), so a
+# changed or substituted file on the index fails the build. uv is mounted for these steps only (pinned by version and
+# multi-arch digest, as deploy/dev/Dockerfile; not in the final image). The project itself is then installed without
+# dependencies and without build isolation: its build backend (setuptools, a locked dependency) is the hashed one
+# already installed, so nothing unhashed is fetched.
 # Editable install with the `postgres` extra (psycopg 3, the Postgres driver) and the `otel` extra (the OpenTelemetry SDK,
 # OTLP/HTTP exporter and instrumentations; inert until OTEL_EXPORTER_OTLP_ENDPOINT is set): the code runs from /app,
 # where the app finds web/ (adapters/http/app.py: WEB_DIR) and the migrations next to it. A plain install would copy the
@@ -40,7 +46,12 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 # pip is removed after the install: nothing runs it at run time (the root filesystem is read-only), and its vendored
 # copies of msgpack, urllib3 and setuptools are older than the fixed releases (Trivy, 2026-10-31; no pip release vendors
 # fixed ones yet). The app's own urllib3 and setuptools are pinned in pyproject.toml.
-RUN pip install --no-cache-dir -e ".[postgres,otel]" && pip uninstall --yes pip \
+RUN --mount=from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336,source=/uv,target=/usr/local/bin/uv \
+    uv export --no-cache --locked --extra postgres --extra otel --no-emit-project --format requirements.txt \
+       -o /tmp/requirements.txt \
+    && uv pip install --system --no-cache --require-hashes --no-deps -r /tmp/requirements.txt \
+    && uv pip install --system --no-cache --no-deps --no-build-isolation -e . \
+    && rm /tmp/requirements.txt && pip uninstall --yes pip \
     && useradd --create-home --uid 10001 app && mkdir -p /data /research && chown app /data /research
 
 # Which commit this image is (after the install, so a new commit does not rebuild the dependency layer):

@@ -704,6 +704,24 @@ put its digest in the Dockerfile, rebuild with `--pull --no-cache`, and run the 
 after the install: its vendored msgpack, urllib3 and setuptools copies were the Python findings Trivy reported
 ([docs/solutions/2026-10-31-trivy-findings-in-pips-vendored-packages.md](solutions/2026-10-31-trivy-findings-in-pips-vendored-packages.md)).
 
+**The lock file** (`uv.lock`): every dependency, direct and transitive, at one version with the sha256 of each file
+for every platform. pyproject.toml keeps the pins people choose; uv.lock records the full resolution. The image
+(`Dockerfile`), the dev container (`deploy/dev/Dockerfile`) and CI all install from it the same way:
+`uv export --locked` (fails if the lock no longer matches pyproject.toml), then `uv pip install --require-hashes
+--no-deps` (fails if any downloaded file's hash differs from the lock), then the project itself with `--no-deps
+--no-build-isolation`, so its build backend is the locked setuptools and nothing unhashed is fetched. CI's `lint` job
+also runs `uv lock --check`. uv is pinned at 0.13.1 everywhere (the Dockerfiles by digest, CI's `setup-uv` by
+version). To change a dependency, edit its pin in pyproject.toml and re-lock in the dev container:
+
+```bash
+python scripts/dev.py run sh -c "UV_CACHE_DIR=/tmp/uv uv lock"                        # after a pin change
+python scripts/dev.py run sh -c "UV_CACHE_DIR=/tmp/uv uv lock --upgrade-package NAME==X.Y"  # move a transitive one
+```
+
+`uv lock` keeps every version already in the lock unless told otherwise, so an unpinned transitive dependency does
+not drift on its own. Commit pyproject.toml and uv.lock together. Dependabot reads and updates `uv.lock` (its `uv`
+ecosystem), so its security updates keep working.
+
 ## Deploying
 
 **Docker**: `git pull`, then `docker compose up -d --build` (with `GIT_SHA=$(git rev-parse HEAD)` in the shell, the
