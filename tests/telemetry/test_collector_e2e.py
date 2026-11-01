@@ -89,8 +89,9 @@ def _search(stream_type: str, sql: str, minutes: int = 30) -> list[dict]:
     now = int(time.time() * 1_000_000)
     body = json.dumps({"query": {"sql": sql, "start_time": now - minutes * 60_000_000, "end_time": now + 60_000_000,
                                  "from": 0, "size": 500}}).encode()
-    req = urllib.request.Request(f"{O2}/api/default/_search?type={stream_type}", data=body, method="POST",
-                                 headers={"Authorization": _auth(), "Content-Type": "application/json"})
+    url = f"{O2}/api/default/_search?type={stream_type}"
+    headers = {"Authorization": _auth(), "Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)  # noqa: S310 - the throwaway's http URL
     try:
         with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 - the throwaway OpenObserve's http URL
             return json.loads(r.read())["hits"]
@@ -125,7 +126,7 @@ def run() -> str:
 
 
 def test_the_collector_reports_healthy():
-    with urllib.request.urlopen(os.environ["SETTLEVIEW_E2E_COLLECTOR_HEALTH"], timeout=10) as r:  # noqa: S310
+    with urllib.request.urlopen(os.environ["SETTLEVIEW_E2E_COLLECTOR_HEALTH"], timeout=10) as r:  # noqa: S310 - throwaway
         assert r.status == 200
 
 

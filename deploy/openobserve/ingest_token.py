@@ -37,7 +37,7 @@ from pathlib import Path
 ROOT_EMAIL = "admin@settleview.local"
 INGEST_LABEL = "otlp@settleview.local"  # the collector's basicauth username; the token, not the name, is checked
 O2_ENV = "openobserve.env"
-INGEST_TOKEN = "openobserve_ingest_token"  # the collector's password_file
+INGEST_TOKEN = "openobserve_ingest_token"  # noqa: S105 - a file name (the collector's password_file), not a secret
 TIMEOUT_S = 15
 
 

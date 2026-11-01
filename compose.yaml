@@ -31,7 +31,8 @@
 # (deploy/otel-collector/config.yaml) and forwards to OpenObserve. The local backend is opt-in:
 #   echo OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 >> .env
 #   docker compose --profile observability up -d          # then http://localhost:5080 (admin@settleview.local)
-#   python deploy/openobserve/ingest_token.py               # once it runs: secrets/openobserve_ingest_token, ingest-only
+#   python deploy/openobserve/ingest_token.py               # once it runs: the collector's ingest-only token
+#   docker compose --profile observability up -d --force-recreate otel-collector   # it reads the token at its start
 #   python deploy/openobserve/alerts.py apply                # the SLO alerts -> Telegram (docs/operations.md, "Alerting")
 # Only the collector holds the backend credential (the secret file secrets/openobserve_ingest_token, never an
 # environment value): OpenObserve's organization ingestion token, which can send telemetry and nothing else (no
@@ -494,10 +495,12 @@ services:
   # The OpenTelemetry Collector (profile observability): the services' OTLP/HTTP in on otel-collector:4318 (this
   # network only, nothing published, no credential), secrets and personal data removed by its standard processors
   # (deploy/otel-collector/config.yaml: redaction, transform, attributes; memory_limiter and batch), OTLP/HTTP out to
-  # OpenObserve with the ingest-only token (secrets/openobserve_ingest_token; recreate it after a rotation). The official
-  # contrib image at an exact release and its digest (0.162.0, 2026-09-29; a deliberate bump moves both).
+  # OpenObserve with the ingest-only token (secrets/openobserve_ingest_token; recreate it after a rotation). The
+  # official contrib image at an exact release and its digest (0.164.0, 2026-10-26; a deliberate bump moves both).
+  # Trivy (2026-11-01): one fixed HIGH, go-jose parsing JWKs, which this configuration never does (no OIDC or JWT
+  # auth).
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
+    image: otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
     profiles: [observability]
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     restart: unless-stopped

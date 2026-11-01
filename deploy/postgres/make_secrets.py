@@ -43,7 +43,7 @@ NAMES = ("pg_superuser_password", "pg_app_password", "pg_research_password", "pg
 APP_SECRETS = ("polymarket_key_id", "polymarket_secret_key", "anthropic_api_key", "telegram_bot_token", "kalshi_key_id",
                "trading_demo_key_id", "trading_prod_key_id")
 O2_ENV = "openobserve.env"
-O2_INGEST_TOKEN = "openobserve_ingest_token"
+O2_INGEST_TOKEN = "openobserve_ingest_token"  # noqa: S105 - a file name, not a secret
 
 
 def _write(f: Path, text: str) -> None:

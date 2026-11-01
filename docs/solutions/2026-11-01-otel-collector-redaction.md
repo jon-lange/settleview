@@ -5,7 +5,7 @@ framework of ours) and gave every service the backend's credential. The owner's 
 shelf. The OpenTelemetry Collector's contrib distribution has a standard `redaction` processor; the services now send
 to the collector (`deploy/otel-collector/config.yaml`), which alone holds OpenObserve's ingest-only token.
 
-**What we found** (otel/opentelemetry-collector-contrib 0.162.0, OpenObserve v1.1.1, 2026-11-01, checked with the
+**What we found** (otel/opentelemetry-collector-contrib 0.162.0 and 0.164.0, OpenObserve v1.1.1, 2026-11-01, checked with the
 `debug` exporter and then `tests/telemetry/test_collector_e2e.py`):
 
 1. The `redaction` processor (`allow_all_keys: true` + `blocked_values` + `blocked_key_patterns`) covers span,
