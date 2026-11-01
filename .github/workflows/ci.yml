@@ -290,10 +290,10 @@ jobs:
 
       # Swarm drops the 127.0.0.1 of a publish, so the stack file must not publish the PC listener (8001), the agent
       # listener (8002) or OpenObserve (5080) at all: the renderer refuses them, and Swarm's own reading of the file
-      # (`docker stack config`) is checked again, with and without the observability profile.
+      # (`docker stack config`) is checked again, with and without the observability and tailscale profiles.
       - name: Check the Swarm stack publishes no PC-only port
         run: |
-          for profile in "" "--profile observability"; do
+          for profile in "" "--profile observability" "--profile tailscale"; do
             python3 deploy/swarm/render_stack.py $profile --out /tmp/settleview-stack.json
             docker stack config -c /tmp/settleview-stack.json > /tmp/settleview-stack.yaml
             if grep -En 'published: "?(8001|8002|5080)"?$' /tmp/settleview-stack.yaml; then
@@ -411,6 +411,9 @@ jobs:
       - name: Staging up (offline), waiting for every healthcheck
         run: |
           python3 deploy/postgres/make_secrets.py deploy/staging/secrets
+          # The images it does not build (postgres), while the daemon can still reach the registry: `up` never pulls.
+          docker compose -p settleview-staging --env-file deploy/staging/staging.env -f compose.yaml \
+            -f deploy/staging/compose.staging.yaml -f deploy/staging/compose.offline.yaml pull --quiet --ignore-buildable
           docker compose -p settleview-staging --env-file deploy/staging/staging.env -f compose.yaml \
             -f deploy/staging/compose.staging.yaml -f deploy/staging/compose.offline.yaml \
             up -d --wait --wait-timeout 300 --no-build --pull never

@@ -232,6 +232,9 @@ class Deployer:
         if p.image is None:
             self.must(["docker", "build", "--build-arg", f"GIT_SHA={p.sha}", "-t", p.target_image, "."],
                       "docker build", timeout=3600)
+            # The other images (postgres, ...): `up --pull never` (and an offline staging) cannot fetch them.
+            self.must(p.compose(p.staging_project, "pull", "--quiet", "--ignore-buildable"), "docker compose pull",
+                      timeout=3600)
             return
         self.must(["cosign", "verify", "--certificate-oidc-issuer", OIDC_ISSUER,
                    "--certificate-identity-regexp", self.cosign_identity(), p.target_image], "cosign verify",
@@ -285,7 +288,8 @@ class Deployer:
     def describe(self) -> list[str]:
         """The commands it would run (--dry-run)."""
         p = self.plan
-        image = ([f"docker build --build-arg GIT_SHA={p.sha} -t {p.target_image} ."] if p.image is None else
+        pull_others = " ".join(p.compose(p.staging_project, "pull", "--quiet", "--ignore-buildable"))
+        image = ([f"docker build --build-arg GIT_SHA={p.sha} -t {p.target_image} .", pull_others] if p.image is None else
                  [f"cosign verify --certificate-oidc-issuer {OIDC_ISSUER} --certificate-identity-regexp "
                   rf"'^https://github\.com/<origin>/\.github/workflows/release\.yml@refs/...' {p.image}",
                   " ".join(p.compose(p.staging_project, "pull", "--quiet"))])

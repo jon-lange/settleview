@@ -92,7 +92,8 @@ def test_the_whole_gate_in_order_staging_before_production():
     prod_up = f.index("-p", "settleview", "up")
     prod_smoke = f.index("smoke", "settleview")
     local = f.index("docker", "tag", "settleview:aaaaaaaaaaaa", "settleview:local")
-    assert build < stg_up < stg_smoke < dump < migrate < prod_up < prod_smoke < local
+    pull = f.index("-p", "settleview-staging", "pull", "--quiet", "--ignore-buildable")  # postgres etc., not the build
+    assert build < pull < stg_up < stg_smoke < dump < migrate < prod_up < prod_smoke < local
     assert f.calls[build][-4:] == ["GIT_SHA=" + SHA, "-t", "settleview:aaaaaaaaaaaa", "."]
     for i in (stg_up, migrate, prod_up):  # every stack step runs exactly the built image
         assert f.envs[i]["SETTLEVIEW_IMAGE"] == "settleview:aaaaaaaaaaaa"

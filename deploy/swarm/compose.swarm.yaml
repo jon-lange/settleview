@@ -34,3 +34,11 @@ services:
     environment:
       ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-}
     ports: !reset []  # never 5080 on every node; reach the UI through an SSH tunnel to the node
+
+networks:
+  tailscale-edge:
+    # Swarm's stack schema takes only a subnet (an overlay network: Swarm picks the gateway and every task's address;
+    # it has no ip_range and ignores a service's ipv4_address). Same subnet as compose.yaml.
+    ipam: !override
+      config:
+        - subnet: 10.89.250.0/29
