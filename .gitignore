@@ -56,3 +56,6 @@ evals/review/*
 
 # Local, per-machine agent notes (never published)
 CLAUDE.local.md
+
+# scripts/deploy.py: the deploy checkout's record of production deploys and rollbacks
+.deploy-history.jsonl
