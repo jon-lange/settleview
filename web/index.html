@@ -19,7 +19,7 @@
 <link rel="stylesheet" href="proposal.css">
 <link rel="stylesheet" href="agent.css">
 </head>
-<body x-data>
+<body x-data="shell">
 <!-- the logo mark (B "Strike eye": a lens on the price-to-beat line; currentColor) and the tab bar's icons -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
   <defs>
@@ -1040,329 +1040,329 @@
      status, positions, Latest, and rows that open their own screens (note, settings, scorecard, instructions,
      Telegram); All activity spans every run of the agent. New agent: one market first; a slide starts it.
      Desktop (>=1000px) while an agent's run is live: three columns (status | activity | scorecard). ================= -->
-<section id="panel-agent" class="pl ag" aria-label="Agents" x-show="$store.app.view === 'agent'" x-cloak x-data="agentView()">
+<section id="panel-agent" class="pl ag" aria-label="Agents" x-show="isAgentView" x-cloak x-data="agentView">
   <div class="nv-titlebar ag-titlebar">
-    <button type="button" class="ag-back ag-top-back" x-show="page !== 'fleet'" @click="toFleet()">‹ Agents</button>
-    <h1 class="nv-title" x-text="titleText()"></h1>
-    <span class="nv-titlesub" x-show="subText()" x-text="subText()"></span>
-    <button type="button" class="ag-plus" x-show="page === 'fleet' && $store.agent.enabled" @click="openNew()" aria-label="New agent"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M11 3 V19 M3 11 H19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+    <button type="button" class="ag-back ag-top-back" x-show="notFleetPage" @click="toFleetAll">‹ Agents</button>
+    <h1 class="nv-title" x-text="titleText"></h1>
+    <span class="nv-titlesub" x-show="subText" x-text="subText"></span>
+    <button type="button" class="ag-plus" x-show="plusOn" @click="openNew" aria-label="New agent"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M11 3 V19 M3 11 H19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
   </div>
-  <div class="pl-choose" x-show="$store.agent.enabled === false" role="status">
+  <div class="pl-choose" x-show="agentOff" role="status">
     <h2>Agent mode is off (BTCFLOW_AGENT_ENABLED)</h2>
     <p>The server has no agent routes. Set BTCFLOW_AGENT_ENABLED=true in its settings and restart it to launch agents.</p>
   </div>
-  <p class="pl-note muted" x-show="$store.agent.enabled === null && !$store.agent.statusErr">Reading the agent status…</p>
-  <p class="error-box" x-show="$store.agent.statusErr" x-text="'Could not read the agent status: ' + $store.agent.statusErr" role="alert"></p>
-  <p class="error-box" x-show="$store.agent.fleetErr" x-text="'Could not read the agents: ' + $store.agent.fleetErr" role="alert"></p>
-  <p class="error-box" x-show="page === 'agent' && $store.agent.selErr" x-text="'Could not read this agent: ' + $store.agent.selErr" role="alert"></p>
-  <template x-for="w in $store.agent.settleWarnings()" :key="w.id"><p class="warn" role="alert" x-text="w.venue_label + ': ' + w.message"></p></template>
+  <p class="pl-note muted" x-show="statusReading">Reading the agent status…</p>
+  <p class="error-box" x-show="$store.agent.statusErr" x-text="statusErrText" role="alert"></p>
+  <p class="error-box" x-show="$store.agent.fleetErr" x-text="fleetErrText" role="alert"></p>
+  <p class="error-box" x-show="selErrOn" x-text="selErrText" role="alert"></p>
+  <template x-for="w in settleWarnings" :key="w.id"><p class="warn" role="alert" x-text="wText"></p></template>
   <!-- an action's error stays here; every other message is a toast -->
-  <p class="pl-msg" x-show="$store.agent.msg && $store.agent.msgCls === 'red'" :class="$store.agent.msgCls" x-text="$store.agent.msg" role="alert"></p>
+  <p class="pl-msg" x-show="msgErrOn" :class="$store.agent.msgCls" x-text="$store.agent.msg" role="alert"></p>
 
-  <div class="ag-page" x-show="$store.agent.enabled" :class="wideLive() ? 'ag-3col' : 'ag-1col'" :data-mode="mode()" :data-screen="screen">
+  <div class="ag-page" x-show="$store.agent.enabled" :class="pageCols" :data-mode="mode" :data-screen="screen">
 
     <!-- ===== column 1 / the page ===== -->
-    <div class="ag-colA ag-main" x-show="mainOn()">
+    <div class="ag-colA ag-main" x-show="mainOn">
 
       <!-- ===== THE FLEET ===== -->
-      <div class="ag-fleet" x-show="mode() === 'fleet'">
+      <div class="ag-fleet" x-show="isFleet">
         <div class="ag-card ag-sum" role="region" aria-label="All agents today">
-          <div class="ag-sumhead num"><b class="ag-hero" :class="clsOf(heroNet())" x-text="netOf(heroNet())" data-flash></b><span x-text="heroSub()"></span></div>
+          <div class="ag-sumhead num"><b class="ag-hero" :class="heroCls" x-text="heroText" data-flash></b><span x-text="heroSub"></span></div>
           <div class="ag-tiles num">
-            <div class="ag-tile ag-t-win"><span>Winning</span><b x-text="tileWin()"></b><span x-text="tileOf()"></span></div>
-            <div class="ag-tile ag-t-budget"><span>Budget</span><b x-text="tileBudget()"></b><span x-text="tileBudgetOf()"></span></div>
-            <div class="ag-tile ag-t-api"><span>API</span><b x-text="tileApi()"></b><span x-text="tileApiOf()"></span></div>
+            <div class="ag-tile ag-t-win"><span>Winning</span><b x-text="tileWin"></b><span x-text="tileOf"></span></div>
+            <div class="ag-tile ag-t-budget"><span>Budget</span><b x-text="tileBudget"></b><span x-text="tileBudgetOf"></span></div>
+            <div class="ag-tile ag-t-api"><span>API</span><b x-text="tileApi"></b><span x-text="tileApiOf"></span></div>
           </div>
           <small class="ag-quiet">Today: every agent’s trades closed since midnight (your local time, as Record), after every fee. Budget and API: the running agents.</small>
         </div>
         <div class="ag-mktbar" x-show="mkt" role="status">
-          <span x-text="'Only ' + mktLabel(mkt)"></span><button type="button" class="ag-link" @click="mkt = null">Show all</button>
+          <span x-text="mktOnly"></span><button type="button" class="ag-link" @click="showAllMkts">Show all</button>
         </div>
 
-        <span class="ag-eyebrow ag-need-h" x-show="needRows().length" x-text="'Needs you · ' + needRows().length"></span>
-        <div class="ag-need ag-agents num" x-show="needRows().length" role="list" aria-label="Agents that need you">
-          <template x-for="r in needRows()" :key="r.id">
-            <button type="button" class="ag-ag" role="listitem" @click="openRow(r)" :aria-label="r.name + ': ' + needSub(r)">
+        <span class="ag-eyebrow ag-need-h" x-show="needAny" x-text="needHead"></span>
+        <div class="ag-need ag-agents num" x-show="needAny" role="list" aria-label="Agents that need you">
+          <template x-for="r in needRows" :key="r.id">
+            <button type="button" class="ag-ag" role="listitem" @click="openThisRow" :aria-label="rNeedAria">
               <span class="ag-nm"><i class="is-warn" aria-hidden="true"></i><span x-text="r.name"></span></span>
-              <span class="ag-agsub" x-text="needSub(r)"></span>
-              <span class="ag-r"><b :class="needRight(r) === 'Review' ? '' : clsOf(r.net)" x-text="needRight(r)"></b></span>
+              <span class="ag-agsub" x-text="rNeedSub"></span>
+              <span class="ag-r"><b :class="rNeedCls" x-text="rNeedRight"></b></span>
             </button>
           </template>
         </div>
 
         <!-- a few agents: one row each; many: by market, and one sentence for the rest -->
-        <div class="ag-group ag-agents num" x-show="!grouped() && okRows().length" role="list" aria-label="Agents">
-          <template x-for="r in okRows()" :key="r.id">
-            <button type="button" class="ag-ag" role="listitem" @click="openRow(r)">
-              <span class="ag-nm"><i :class="dotCls(r)" aria-hidden="true"></i><span x-text="r.name"></span></span>
+        <div class="ag-group ag-agents num" x-show="okRowsOn" role="list" aria-label="Agents">
+          <template x-for="r in okRows" :key="r.id">
+            <button type="button" class="ag-ag" role="listitem" @click="openThisRow">
+              <span class="ag-nm"><i :class="rDotCls" aria-hidden="true"></i><span x-text="r.name"></span></span>
               <span class="ag-agsub" x-text="r.line"></span>
-              <span class="ag-r"><b :class="clsOf(r.net)" x-text="netOf(r.net)"></b>
-                <svg class="ag-spark" :class="sparkCls(r)" viewBox="0 0 56 18" width="56" height="18" role="img" :aria-label="sparkAria(r)"><path :d="sparkPath(r.spark)" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span class="ag-r"><b :class="rNetCls" x-text="rNetText"></b>
+                <svg class="ag-spark" :class="rSparkCls" viewBox="0 0 56 18" width="56" height="18" role="img" :aria-label="rSparkAria"><path :d="rSparkPath" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
             </button>
           </template>
         </div>
-        <template x-if="grouped()">
+        <template x-if="grouped">
           <div class="ag-grouped">
             <span class="ag-eyebrow">By market</span>
             <div class="ag-group ag-bymkt num" role="list">
-              <template x-for="m in byMarket()" :key="m.market">
-                <button type="button" class="ag-row" role="listitem" @click="mkt = m.market"><span x-text="m.market_label"></span><span class="ag-sp"></span><span class="ag-val"><span x-text="m.count + ' · '"></span><span :class="clsOf(m.net)" x-text="netOf(m.net)"></span></span><span class="ag-chev" aria-hidden="true">›</span></button>
+              <template x-for="m in byMarket" :key="m.market">
+                <button type="button" class="ag-row" role="listitem" @click="pickThisMkt"><span x-text="m.market_label"></span><span class="ag-sp"></span><span class="ag-val"><span x-text="mCountText"></span><span :class="mNetCls" x-text="mNetText"></span></span><span class="ag-chev" aria-hidden="true">›</span></button>
               </template>
             </div>
-            <p class="ag-foot ag-normal" x-text="normalLine()"></p>
+            <p class="ag-foot ag-normal" x-text="normalLine"></p>
           </div>
         </template>
-        <p class="ag-ask" x-show="$store.agent.fleet && !liveRows().length"><svg class="ag-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="ag-ask-t" x-text="mkt ? 'No agent is running on ' + mktLabel(mkt) + '.' : 'No agent is running.'"></span></p>
+        <p class="ag-ask" x-show="noLiveOn"><svg class="ag-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="ag-ask-t" x-text="noLiveText"></span></p>
 
-        <span class="ag-eyebrow" x-show="idleAgents().length">Not running</span>
-        <div class="ag-group ag-agents ag-idle num" x-show="idleAgents().length" role="list" aria-label="Agents not running">
-          <template x-for="a in idleAgents()" :key="a.id">
-            <button type="button" class="ag-ag" role="listitem" @click="openAgent(a.id)">
+        <span class="ag-eyebrow" x-show="idleAny">Not running</span>
+        <div class="ag-group ag-agents ag-idle num" x-show="idleAny" role="list" aria-label="Agents not running">
+          <template x-for="a in idleAgents" :key="a.id">
+            <button type="button" class="ag-ag" role="listitem" @click="openThisAgent">
               <span class="ag-nm"><i class="is-off" aria-hidden="true"></i><span x-text="a.name"></span></span>
-              <span class="ag-agsub" x-text="idleSub(a)"></span>
-              <span class="ag-r"><b :class="clsOf(a.last_run && a.last_run.net)" x-text="netOf(a.last_run && a.last_run.net)"></b><small>last run</small></span>
+              <span class="ag-agsub" x-text="aIdleSub"></span>
+              <span class="ag-r"><b :class="aLastCls" x-text="aLastText"></b><small>last run</small></span>
             </button>
           </template>
         </div>
 
         <div class="ag-group ag-rows" role="list">
-          <button type="button" class="ag-row ag-new-row" role="listitem" @click="openNew()"><span>New agent</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <button type="button" class="ag-row ag-limits-row" role="listitem" @click="openLimits()"><span>Fleet limits</span><span class="ag-sp"></span><span class="ag-val" x-text="limitsVal()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <button type="button" class="ag-row ag-audit-row" role="listitem" @click="openAudit()"><span>All agents’ activity</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row ag-new-row" role="listitem" @click="openNew"><span>New agent</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row ag-limits-row" role="listitem" @click="openLimits"><span>Fleet limits</span><span class="ag-sp"></span><span class="ag-val" x-text="limitsVal"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row ag-audit-row" role="listitem" @click="openAudit"><span>All agents’ activity</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
         </div>
         <div class="ag-group ag-rows" role="list">
-          <button type="button" class="ag-row" role="listitem" @click="open('score')"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <button type="button" class="ag-row" role="listitem" @click="open('prompts')"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <button type="button" class="ag-row" role="listitem" @click="open('telegram')"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val" x-text="tgLine()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="openScore"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="openPrompts"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="openTelegram"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val" x-text="tgLine"></span><span class="ag-chev" aria-hidden="true">›</span></button>
         </div>
         <small class="ag-killnote">Each agent trades one market inside its own limits and touches only its own positions. The kill switch (KILL at the top of Play) blocks all new orders, everywhere, and pauses every agent.</small>
       </div>
 
       <!-- external agent's token: shown once -->
-      <div class="ag-card ag-token" x-show="token && page === 'agent'" role="alert">
+      <div class="ag-card ag-token" x-show="tokenOn" role="alert">
         <span class="ag-eyebrow">External agent token</span>
         <code class="mono ag-tok" x-text="token"></code>
         <div class="ag-btns">
-          <button type="button" class="ag-btn" @click="copyToken()">Copy</button>
-          <button type="button" class="ag-btn" @click="token = ''; copied = ''">Hide it</button>
+          <button type="button" class="ag-btn" @click="copyToken">Copy</button>
+          <button type="button" class="ag-btn" @click="hideToken">Hide it</button>
         </div>
         <small>Shown once; if lost, stop the agent and start it again.</small>
         <small x-show="copied" x-text="copied"></small>
       </div>
-      <p class="pl-note muted" x-show="page === 'agent' && !mode() && !$store.agent.selErr">Reading this agent…</p>
+      <p class="pl-note muted" x-show="selReading">Reading this agent…</p>
 
       <!-- ===== ONE AGENT: RUNNING / PAUSED ===== -->
-      <div class="ag-live" x-show="mode() === 'live'">
-        <div id="proposal-cards" x-init="window.proposalCards.mount($el, { session: function () { return $store.agent.selSid; } })"></div>
-        <div class="ag-card ag-status" role="region" aria-label="Agent now" :class="$store.agent.stale() ? 'is-stale' : ''">
+      <div class="ag-live" x-show="isLive">
+        <div id="proposal-cards" x-init="mountProposals"></div>
+        <div class="ag-card ag-status" role="region" aria-label="Agent now" :class="staleCls">
           <div class="ag-status-h">
-            <span class="ag-chip" :class="'is-' + $store.agent.chip().key"><i aria-hidden="true"></i><b class="ag-state" x-text="$store.agent.chip().word"></b></span>
-            <span class="ag-since num" x-text="$store.agent.chip().since"></span>
+            <span class="ag-chip" :class="chipCls"><i aria-hidden="true"></i><b class="ag-state" x-text="chipWord"></b></span>
+            <span class="ag-since num" x-text="chipSince"></span>
             <span class="ag-sp"></span>
-            <span class="ag-pill" :class="$store.agent.pill().cls" :aria-label="$store.agent.pill().aria" x-text="$store.agent.pill().text"></span>
-            <button type="button" class="ag-stopbtn" @click="$store.agent.stop()" :disabled="$store.agent.busy" :aria-label="'Stop ' + (($store.agent.session() && $store.agent.session().name) || 'this agent') + ' now'">Stop</button>
+            <span class="ag-pill" :class="pillClass" :aria-label="pillAria" x-text="pillText"></span>
+            <button type="button" class="ag-stopbtn" @click="stopRun" :disabled="$store.agent.busy" :aria-label="stopAria">Stop</button>
           </div>
-          <p class="ag-nowline" aria-live="polite" x-text="$store.agent.nextLine()"></p>
-          <p class="ag-last" x-show="$store.agent.decision" x-text="'Last: ' + $store.agent.nowLine()"></p>
+          <p class="ag-nowline" aria-live="polite" x-text="nextLine"></p>
+          <p class="ag-last" x-show="$store.agent.decision" x-text="lastLine"></p>
           <div class="ag-tiles num">
-            <div class="ag-tile ag-t-budget"><span>Budget used</span><b x-text="$store.agent.budget() ? usdOf($store.agent.budget().used) : '—'"></b><span x-text="$store.agent.budget() ? 'of ' + usdOf($store.agent.budget().limit) : ''"></span>
-              <div class="ag-meter" role="progressbar" aria-label="Budget used" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="budgetPct()"><span :style="'width:' + budgetPct() + '%'"></span></div></div>
-            <div class="ag-tile ag-t-net"><span>Net</span><b :class="netCls()" x-text="netText()" data-flash></b><span x-text="tradesWord()"></span></div>
-            <div class="ag-tile ag-t-ends"><span>Ends in</span><b x-text="leftShort()"></b><span x-text="endsClock()"></span></div>
+            <div class="ag-tile ag-t-budget"><span>Budget used</span><b x-text="budgetUsed"></b><span x-text="budgetOf"></span>
+              <div class="ag-meter" role="progressbar" aria-label="Budget used" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="budgetPct"><span :style="budgetWidth"></span></div></div>
+            <div class="ag-tile ag-t-net"><span>Net</span><b :class="netCls" x-text="netText" data-flash></b><span x-text="tradesWord"></span></div>
+            <div class="ag-tile ag-t-ends"><span>Ends in</span><b x-text="leftShort"></b><span x-text="endsClock"></span></div>
           </div>
-          <p class="ag-quiet num" x-text="apiLine()"></p>
-          <p class="ag-quiet ag-also" x-show="alsoLine()" x-text="alsoLine()"></p>
-          <p class="ag-stale" x-show="$store.agent.stale()" x-text="$store.agent.staleText()" role="status"></p>
+          <p class="ag-quiet num" x-text="apiLine"></p>
+          <p class="ag-quiet ag-also" x-show="alsoLine" x-text="alsoLine"></p>
+          <p class="ag-stale" x-show="stale" x-text="staleText" role="status"></p>
 
           <!-- paused: the reason and the one action it allows -->
-          <div class="ag-paused" x-show="$store.agent.session() && $store.agent.session().state === 'paused'" role="status">
-            <b x-text="($store.agent.session() && $store.agent.session().pause_reason) || 'No reason sent.'"></b>
+          <div class="ag-paused" x-show="isPaused" role="status">
+            <b x-text="pauseReason"></b>
             <small>The agent sends no new orders while paused. Open positions keep their take profit and stops.</small>
-            <div class="ag-act" x-show="$store.agent.pauseKind() === 'kill'">
+            <div class="ag-act" x-show="pauseKill">
               <button type="button" class="ag-btn" disabled>Resume</button>
-              <small>Turn the kill switch off first (KILL at the top of Play<span x-show="phone()">, on the PC</span>).</small>
-              <small class="amber" x-show="$store.agent.killed === null && $store.agent.killErr" x-text="'Kill switch state unknown: ' + $store.agent.killErr"></small>
+              <small>Turn the kill switch off first (KILL at the top of Play<span x-show="phone">, on the PC</span>).</small>
+              <small class="amber" x-show="killUnknown" x-text="killUnknownText"></small>
             </div>
-            <div class="ag-act" x-show="$store.agent.pauseKind() === 'mode'">
+            <div class="ag-act" x-show="pauseMode">
               <small>This run cannot continue on a different mode. End it and start the agent again.</small>
-              <button type="button" class="ag-btn" @click="$store.agent.stop()" :disabled="$store.agent.busy">End run</button>
+              <button type="button" class="ag-btn" @click="stopRun" :disabled="$store.agent.busy">End run</button>
             </div>
-            <div class="ag-act" x-show="$store.agent.pauseKind() === 'kill_off' || $store.agent.pauseKind() === 'other'">
-              <label class="field" for="ag-resume-in" x-show="phone()"><span>On the phone, type RESUME</span></label>
-              <input id="ag-resume-in" type="text" autocomplete="off" spellcheck="false" x-show="phone()" x-model="resumeTyped" aria-label="Type RESUME to resume">
-              <button type="button" class="ag-btn ag-btn-go" @click="$store.agent.resume(phone() ? resumeTyped.trim() : null)" :disabled="$store.agent.busy || (phone() && resumeTyped.trim() !== 'RESUME')">Resume</button>
+            <div class="ag-act" x-show="pauseResumable">
+              <label class="field" for="ag-resume-in" x-show="phone"><span>On the phone, type RESUME</span></label>
+              <input id="ag-resume-in" type="text" autocomplete="off" spellcheck="false" x-show="phone" x-model="resumeTypedModel" aria-label="Type RESUME to resume">
+              <button type="button" class="ag-btn ag-btn-go" @click="resumeRun" :disabled="resumeOff">Resume</button>
             </div>
           </div>
         </div>
 
-        <span class="ag-eyebrow" x-show="$store.agent.openPositions().length">Open</span>
-        <template x-for="p in $store.agent.openPositions()" :key="p.id">
+        <span class="ag-eyebrow" x-show="openPosAny">Open</span>
+        <template x-for="p in openPositions" :key="p.id">
           <div class="ag-card ag-pos num">
-            <div class="ag-pos-1"><b :class="sideCls(p)" x-text="sideWord(p)"></b><span x-text="posTitle(p)"></span></div>
-            <span class="ag-pos-2" x-text="posSub(p)"></span>
+            <div class="ag-pos-1"><b :class="pSideCls" x-text="pSideWord"></b><span x-text="pTitle"></span></div>
+            <span class="ag-pos-2" x-text="pSub"></span>
           </div>
         </template>
 
-        <div class="ag-latest" x-show="!wideLive()">
+        <div class="ag-latest" x-show="notWideLive">
           <span class="ag-eyebrow">Latest</span>
           <div class="ag-group ag-feedlist num">
-            <template x-for="it in latest()" :key="it.key">
-              <div class="ag-ev" :class="'is-' + it.kind"><time x-text="hm(it.ts)"></time><span class="ag-ev-t"><b :class="it.cls" x-text="it.title"></b><small x-show="it.sub" x-text="it.sub"></small></span></div>
+            <template x-for="it in latest" :key="it.key">
+              <div class="ag-ev" :class="itKindCls"><time x-text="itTime"></time><span class="ag-ev-t"><b :class="it.cls" x-text="it.title"></b><small x-show="it.sub" x-text="it.sub"></small></span></div>
             </template>
-            <p class="ag-ev-empty" x-show="!latest().length" x-text="$store.agent.session() && $store.agent.session().kind === 'external' ? 'No trades or decisions yet; waiting for the external agent.' : 'No trades or decisions yet. The agent’s wakes are under All activity.'"></p>
-            <button type="button" class="ag-more" @click="openActivity('trades')">All activity ›</button>
+            <p class="ag-ev-empty" x-show="latestNone" x-text="latestEmpty"></p>
+            <button type="button" class="ag-more" @click="openTrades">All activity ›</button>
           </div>
         </div>
 
         <div class="ag-group ag-rows" role="list">
-          <button type="button" class="ag-row" role="listitem" @click="open('note')"><span>Note to the agent</span><span class="ag-sp"></span><span class="ag-val" x-text="$store.agent.notes.length ? $store.agent.notes.length + ' sent' : ''"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <button type="button" class="ag-row" role="listitem" @click="open('settings')"><span>Run settings</span><span class="ag-sp"></span><span class="ag-val" x-text="settingsVal()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <button type="button" class="ag-row" role="listitem" x-show="!wideLive()" @click="open('score')"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <button type="button" class="ag-row" role="listitem" @click="open('prompts')"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <button type="button" class="ag-row" role="listitem" @click="open('telegram')"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val" x-text="tgLine()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="openNote"><span>Note to the agent</span><span class="ag-sp"></span><span class="ag-val" x-text="notesVal"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="openRunSettings"><span>Run settings</span><span class="ag-sp"></span><span class="ag-val" x-text="settingsVal"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" x-show="notWideLive" @click="openScore"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="openPrompts"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="openTelegram"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val" x-text="tgLine"></span><span class="ag-chev" aria-hidden="true">›</span></button>
         </div>
         <small class="ag-killnote">The kill switch (KILL at the top of Play) blocks all new orders, everywhere, and pauses every agent.</small>
       </div>
 
       <!-- ===== ONE AGENT: ITS LAST RUN ENDED ===== -->
-      <div class="ag-ended" x-show="mode() === 'ended'" role="status">
+      <div class="ag-ended" x-show="isEnded" role="status">
         <div class="ag-card">
-          <div class="ag-status-h"><span class="ag-chip" :class="'is-' + $store.agent.chip().key"><i aria-hidden="true"></i><b class="ag-state" x-text="$store.agent.chip().word"></b></span><span class="ag-since num" x-text="$store.agent.chip().since"></span></div>
-          <b class="ag-endwhy" x-text="$store.agent.endWords()"></b>
-          <div class="ag-big num"><small>Last run’s net</small><b :class="netCls()" x-text="netText()"></b></div>
+          <div class="ag-status-h"><span class="ag-chip" :class="chipCls"><i aria-hidden="true"></i><b class="ag-state" x-text="chipWord"></b></span><span class="ag-since num" x-text="chipSince"></span></div>
+          <b class="ag-endwhy" x-text="endWords"></b>
+          <div class="ag-big num"><small>Last run’s net</small><b :class="netCls" x-text="netText"></b></div>
           <div class="ag-tiles num">
-            <div class="ag-tile"><span>Trades</span><b x-text="traded().length"></b><span x-text="wonCount() + ' won'"></span></div>
-            <div class="ag-tile"><span>Ran</span><b x-text="ranText()"></b><span x-text="plannedText()"></span></div>
-            <div class="ag-tile"><span>API</span><b x-text="apiUsd()"></b><span x-text="wakesWord()"></span></div>
+            <div class="ag-tile"><span>Trades</span><b x-text="tradedCount"></b><span x-text="wonText"></span></div>
+            <div class="ag-tile"><span>Ran</span><b x-text="ranText"></b><span x-text="plannedText"></span></div>
+            <div class="ag-tile"><span>API</span><b x-text="apiUsd"></b><span x-text="wakesWord"></span></div>
           </div>
           <small>Won: made money after every fee. Net is the run's realized result.</small>
         </div>
-        <div class="ag-group ag-rule-results num" x-show="ruleResults().length">
-          <template x-for="x in ruleResults()" :key="x.rule"><div class="ag-row"><span x-text="x.rule"></span><span class="ag-sp"></span><span class="ag-val" :class="x.cls" x-text="x.text"></span></div></template>
+        <div class="ag-group ag-rule-results num" x-show="ruleResultsAny">
+          <template x-for="x in ruleResults" :key="x.rule"><div class="ag-row"><span x-text="x.rule"></span><span class="ag-sp"></span><span class="ag-val" :class="xCls" x-text="x.text"></span></div></template>
         </div>
         <div class="ag-group">
-          <div class="ag-row"><span>Open positions handed back</span><span class="ag-sp"></span><span class="ag-val" x-text="handedBack()"></span></div>
-          <template x-for="p in $store.agent.openPositions()" :key="p.id"><div class="ag-row ag-row-sub num"><span x-text="$store.agent.posLine(p)"></span></div></template>
-          <button type="button" class="ag-row" @click="openActivity('trades')"><span>All activity</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <div class="ag-row"><span>Open positions handed back</span><span class="ag-sp"></span><span class="ag-val" x-text="handedBack"></span></div>
+          <template x-for="p in openPositions" :key="p.id"><div class="ag-row ag-row-sub num"><span x-text="pLine"></span></div></template>
+          <button type="button" class="ag-row" @click="openTrades"><span>All activity</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
         </div>
-        <button type="button" class="ag-primary" x-show="!archivedSel()" @click="runAgain()">Run this agent again</button>
-        <small class="ag-foot" x-show="!archivedSel()">Opens New agent with this run’s settings; nothing starts until you type START and slide.</small>
-        <small class="ag-foot" x-show="archivedSel()">This agent is retired: it keeps its runs and cannot run again.</small>
+        <button type="button" class="ag-primary" x-show="notArchived" @click="runAgain">Run this agent again</button>
+        <small class="ag-foot" x-show="notArchived">Opens New agent with this run’s settings; nothing starts until you type START and slide.</small>
+        <small class="ag-foot" x-show="archivedSel">This agent is retired: it keeps its runs and cannot run again.</small>
       </div>
 
       <!-- ===== NEW AGENT: one market first, then the rest; a slide starts it ===== -->
-      <form class="ag-launch" x-show="mode() === 'new'" @submit.prevent @input="touched = true" aria-labelledby="ag-launch-h">
+      <form class="ag-launch" x-show="isNew" @submit.prevent="noop" @input="markTouched" aria-labelledby="ag-launch-h">
         <h2 id="ag-launch-h" class="sr-only">New agent</h2>
         <small class="ag-foot">An agent trades one market inside limits you set: max loss, per-trade cap, end time and API spend. You can stop it from any tab in one tap.</small>
 
         <!-- presets -->
-        <div class="ag-presets" x-show="presetsAvail === false || presets.length || presetsErr">
+        <div class="ag-presets" x-show="presetsBoxOn">
           <p class="ag-gl">Start from preset</p>
           <div class="ag-group">
-            <div class="ag-row is-off" x-show="presetsAvail === false"><span>Presets</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div>
-            <p class="ag-row red" x-show="presetsErr" x-text="'Presets could not be read: ' + presetsErr"></p>
-            <template x-for="p in presetsShown()" :key="p.name">
+            <div class="ag-row is-off" x-show="presetsOff"><span>Presets</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div>
+            <p class="ag-row red" x-show="presetsErr" x-text="presetsErrText"></p>
+            <template x-for="p in presetsShown" :key="p.name">
               <div class="ag-row ag-preset">
-                <button type="button" class="ag-preset-go" @click="startFrom(p)" :aria-label="'Start from preset ' + p.name"><b x-text="p.name"></b><small x-text="presetLine(p)"></small></button>
-                <button type="button" class="ag-link" x-show="!phone()" @click="deletePreset(p)" :disabled="presetBusy" :aria-label="'Delete preset ' + p.name">Delete</button>
+                <button type="button" class="ag-preset-go" @click="startFromThis" :aria-label="presetStartAria"><b x-text="p.name"></b><small x-text="pPresetLine"></small></button>
+                <button type="button" class="ag-link" x-show="notPhone" @click="deleteThisPreset" :disabled="presetBusy" :aria-label="presetDeleteAria">Delete</button>
               </div>
             </template>
           </div>
         </div>
-        <p class="ag-foot" x-show="filledLine()" x-text="filledLine()"></p>
+        <p class="ag-foot" x-show="filledLine" x-text="filledLine"></p>
 
         <p class="ag-gl" id="ag-gl-market">Market · pick one</p>
         <div class="ag-mkts" role="radiogroup" aria-labelledby="ag-gl-market">
-          <template x-for="k in venueKeys()" :key="k">
-            <button type="button" class="ag-mk" role="radio" :aria-checked="form.market === k ? 'true' : 'false'" :disabled="!marketOn(k) || !!form.agent_id && form.market !== k" @click="pickMarket(k)">
-              <b x-text="venueLabel(k)"></b><span x-text="marketSub(k)"></span>
+          <template x-for="k in venueKeys" :key="k">
+            <button type="button" class="ag-mk" role="radio" :aria-checked="kChecked" :disabled="kOff" @click="pickThisMarket">
+              <b x-text="kLabel"></b><span x-text="kSub"></span>
             </button>
           </template>
         </div>
 
         <div class="ag-group" x-show="form.market">
           <label class="ag-row"><span>Name</span><span class="ag-sp"></span>
-            <input class="ag-in ag-in-name" type="text" autocomplete="off" maxlength="40" x-model="form.name" :readonly="!!form.agent_id" @input="typedName()" aria-label="Agent name"></label>
+            <input class="ag-in ag-in-name" type="text" autocomplete="off" maxlength="40" x-model="nameModel" :readonly="nameReadonly" @input="typedName" aria-label="Agent name"></label>
         </div>
-        <p class="ag-foot" x-show="form.market" x-text="nameFoot()"></p>
+        <p class="ag-foot" x-show="form.market" x-text="nameFoot"></p>
 
         <p class="ag-gl" id="ag-gl-control" x-show="form.market">How much control</p>
         <div class="ag-group" x-show="form.market">
           <div class="ag-row"><span>Level</span><span class="ag-sp"></span>
             <div class="ag-seg" role="radiogroup" aria-labelledby="ag-gl-control">
-              <button type="button" role="radio" :aria-checked="form.level === 'assist' ? 'true' : 'false'" @click="setLevel('assist')">Assist</button>
-              <button type="button" role="radio" :aria-checked="form.level === 'auto' ? 'true' : 'false'" @click="setLevel('auto')">Auto</button>
+              <button type="button" role="radio" :aria-checked="levelAssistChecked" @click="setAssist">Assist</button>
+              <button type="button" role="radio" :aria-checked="levelAutoChecked" @click="setAuto">Auto</button>
             </div>
           </div>
-          <label class="ag-row" x-show="form.level === 'assist'"><span>Proposal window</span><span class="ag-sp"></span>
-            <input class="ag-in" type="text" inputmode="numeric" autocomplete="off" placeholder="20" x-model="form.proposal_ttl_s" aria-label="Proposal window (10 to 60 seconds)"><span class="ag-unit">s</span></label>
+          <label class="ag-row" x-show="isAssist"><span>Proposal window</span><span class="ag-sp"></span>
+            <input class="ag-in" type="text" inputmode="numeric" autocomplete="off" placeholder="20" x-model="ttlModel" aria-label="Proposal window (10 to 60 seconds)"><span class="ag-unit">s</span></label>
         </div>
-        <p class="ag-foot" x-show="form.market" x-text="levelFoot()"></p>
-        <p class="ag-foot" x-show="form.market && form.level === 'assist'">Each proposal waits 10–60 seconds (empty: 20). Assist needs at least one rule ticked below.</p>
+        <p class="ag-foot" x-show="form.market" x-text="levelFoot"></p>
+        <p class="ag-foot" x-show="assistFootOn">Each proposal waits 10–60 seconds (empty: 20). Assist needs at least one rule ticked below.</p>
 
         <p class="ag-gl" x-show="form.market">Rules</p>
-        <div class="ag-group ag-rules" x-show="form.market && form.kind === 'in_app' && ruleList().length">
-          <template x-for="x in ruleList()" :key="x.id">
-            <label class="ag-row ag-check"><input type="checkbox" x-model="form.rules[x.id]"><span class="ag-check-t"><span class="ag-rule-id" x-text="x.id"></span><small x-text="x.description"></small></span><span class="ag-val ag-rule-rec" x-text="ruleRecord(x.id)"></span></label>
+        <div class="ag-group ag-rules" x-show="rulesOn">
+          <template x-for="x in ruleList" :key="x.id">
+            <label class="ag-row ag-check"><input type="checkbox" x-model="ruleModel"><span class="ag-check-t"><span class="ag-rule-id" x-text="x.id"></span><small x-text="xDesc"></small></span><span class="ag-val ag-rule-rec" x-text="xRuleRecord"></span></label>
           </template>
-          <label class="ag-row ag-check ag-one-bet"><input type="checkbox" x-model="form.one_bet"><span class="ag-check-t"><span>One bet per window</span></span></label>
-          <button type="button" class="ag-row ag-score-row" @click="open('score')"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <label class="ag-row ag-check ag-one-bet"><input type="checkbox" x-model="oneBetModel"><span class="ag-check-t"><span>One bet per window</span></span></label>
+          <button type="button" class="ag-row ag-score-row" @click="openScore"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
         </div>
-        <div class="ag-group" x-show="form.market && form.kind === 'in_app' && !ruleList().length"><p class="ag-row ag-norules">No rules yet for this market: the model’s judgment only.</p></div>
-        <p class="ag-foot" x-show="form.market && form.kind === 'in_app' && ruleList().length">With a rule on, only the rule opens entries (with its BTC stop); the agent cannot buy and supervises them. None on: the agent decides entries itself. Retired rules are not offered.</p>
+        <div class="ag-group" x-show="noRulesOn"><p class="ag-row ag-norules">No rules yet for this market: the model’s judgment only.</p></div>
+        <p class="ag-foot" x-show="rulesOn">With a rule on, only the rule opens entries (with its BTC stop); the agent cannot buy and supervises them. None on: the agent decides entries itself. Retired rules are not offered.</p>
 
         <p class="ag-gl" x-show="form.market">Limits</p>
         <div class="ag-group num" x-show="form.market">
-          <label class="ag-row"><span>Max loss</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="form.budget" aria-label="Max loss (budget) $"></label>
-          <label class="ag-row"><span>Per trade</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="form.per_trade" aria-label="Per-trade cap $"></label>
-          <label class="ag-row"><span>Runs for</span><span class="ag-sp"></span><input class="ag-in" type="text" inputmode="numeric" autocomplete="off" x-model="form.minutes" aria-label="Runs for (minutes)"><span class="ag-unit">min</span></label>
+          <label class="ag-row"><span>Max loss</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="budgetModel" aria-label="Max loss (budget) $"></label>
+          <label class="ag-row"><span>Per trade</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="perTradeModel" aria-label="Per-trade cap $"></label>
+          <label class="ag-row"><span>Runs for</span><span class="ag-sp"></span><input class="ag-in" type="text" inputmode="numeric" autocomplete="off" x-model="minutesModel" aria-label="Runs for (minutes)"><span class="ag-unit">min</span></label>
         </div>
-        <p class="ag-foot" x-show="form.market && endsAt()" x-text="endsAt()"></p>
-        <p class="ag-foot" x-show="form.market && $store.agent.status && $store.agent.status.allow_production === false">The server runs agents in paper mode for now: a market in production is refused. The market's mode is pinned at start; changing it pauses the agent.</p>
+        <p class="ag-foot" x-show="endsAtOn" x-text="endsAt"></p>
+        <p class="ag-foot" x-show="paperOnlyOn">The server runs agents in paper mode for now: a market in production is refused. The market's mode is pinned at start; changing it pauses the agent.</p>
 
         <details class="ag-group ag-adv" x-show="form.market">
-          <summary class="ag-row"><span>Model</span><span class="ag-sp"></span><span class="ag-val" x-text="advancedLine()"></span><span class="ag-chev" aria-hidden="true">›</span></summary>
+          <summary class="ag-row"><span>Model</span><span class="ag-sp"></span><span class="ag-val" x-text="advancedLine"></span><span class="ag-chev" aria-hidden="true">›</span></summary>
           <div class="ag-row"><span>Who trades</span><span class="ag-sp"></span>
             <div class="ag-seg" role="radiogroup" aria-label="Who trades">
-              <button type="button" role="radio" :aria-checked="form.kind === 'in_app' ? 'true' : 'false'" @click="setKind('in_app')">In-app</button>
-              <button type="button" role="radio" :aria-checked="form.kind === 'external' ? 'true' : 'false'" @click="setKind('external')">External (MCP)</button>
+              <button type="button" role="radio" :aria-checked="kindInAppChecked" @click="setInApp">In-app</button>
+              <button type="button" role="radio" :aria-checked="kindExternalChecked" @click="setExternal">External (MCP)</button>
             </div>
           </div>
-          <p class="ag-row ag-key" x-show="form.kind === 'in_app'"><span>Anthropic key</span><span class="ag-sp"></span><b class="ag-val" x-text="keyLine()"></b></p>
-          <label class="ag-row ag-stack" x-show="form.kind === 'in_app'"><span>Model (rates in $ per million tokens)</span>
-            <select x-model="form.model">
+          <p class="ag-row ag-key" x-show="isInApp"><span>Anthropic key</span><span class="ag-sp"></span><b class="ag-val" x-text="keyLine"></b></p>
+          <label class="ag-row ag-stack" x-show="isInApp"><span>Model (rates in $ per million tokens)</span>
+            <select x-model="modelPickModel">
               <option value="">Pick a model</option>
-              <template x-for="m in ($store.agent.status && $store.agent.status.models) || []" :key="m.id"><option :value="m.id" x-text="modelLine(m)"></option></template>
+              <template x-for="m in modelChoices" :key="m.id"><option :value="m.id" x-text="mModelLine"></option></template>
             </select>
           </label>
-          <label class="ag-row num" x-show="form.kind === 'in_app'"><span>API spend cap</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="form.spend_cap" aria-label="API spend cap $"></label>
-          <button type="button" class="ag-row" @click="open('prompts')"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
-          <div class="ag-row ag-stack" x-show="form.kind === 'external'"><span>External agent (MCP)</span>
+          <label class="ag-row num" x-show="isInApp"><span>API spend cap</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="spendCapModel" aria-label="API spend cap $"></label>
+          <button type="button" class="ag-row" @click="openPrompts"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <div class="ag-row ag-stack" x-show="isExternal"><span>External agent (MCP)</span>
             <small>An agent outside this app (e.g. over MCP) trades through the app's tools, inside these limits. Starting shows its token once: copy it into the agent's settings.</small></div>
           <label class="ag-row ag-check"><input type="checkbox" disabled><span class="ag-check-t"><span>Sell agent positions on stop</span><small>Not built yet. Off: on stop, positions keep their take profit and stops and pass to you in Play.</small></span></label>
-          <p class="ag-row ag-stack"><small x-text="dailyLine()"></small><small x-text="promptsLine()"></small></p>
+          <p class="ag-row ag-stack"><small x-text="dailyLine"></small><small x-text="promptsLine"></small></p>
         </details>
 
         <p class="ag-gl" x-show="form.market">Save as preset</p>
         <div class="ag-group" x-show="form.market">
-          <div class="ag-row is-off" x-show="presetsAvail === false"><span>Presets</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div>
-          <div class="ag-row" x-show="presetsAvail !== false && phone()"><small>Save and delete presets on the PC.</small></div>
-          <div class="ag-row" x-show="presetsAvail !== false && !phone()">
-            <input class="ag-in ag-in-wide" type="text" autocomplete="off" maxlength="40" placeholder="Preset name" x-model="presetName" aria-label="Preset name" @keydown.enter.prevent="savePreset()">
-            <button type="button" class="ag-link" @click="savePreset()" :disabled="presetBusy || !presetName.trim() || presetsAvail === null">Save as preset</button>
+          <div class="ag-row is-off" x-show="presetsOff"><span>Presets</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div>
+          <div class="ag-row" x-show="presetsPhone"><small>Save and delete presets on the PC.</small></div>
+          <div class="ag-row" x-show="presetsPc">
+            <input class="ag-in ag-in-wide" type="text" autocomplete="off" maxlength="40" placeholder="Preset name" x-model="presetNameModel" aria-label="Preset name" @keydown.enter.prevent="savePreset">
+            <button type="button" class="ag-link" @click="savePreset" :disabled="presetSaveOff">Save as preset</button>
           </div>
         </div>
         <p class="ag-foot" x-show="presetMsg" :class="presetMsgCls" x-text="presetMsg" role="status"></p>
 
-        <p class="pl-note red" x-show="inAppBlocked()" x-text="inAppBlocked()" role="status"></p>
+        <p class="pl-note red" x-show="inAppBlocked" x-text="inAppBlocked" role="status"></p>
         <label class="ag-gl" for="ag-confirm">Type START, then slide</label>
-        <input id="ag-confirm" class="ag-confirm" type="text" autocomplete="off" spellcheck="false" x-model="form.confirm" @keydown.enter.prevent>
-        <div class="ag-slide" x-ref="agtrack" :class="canLaunch() || launching ? '' : 'off'">
-          <div class="ag-slide-fill" :style="'width:' + (slideX + 52) + 'px'"></div>
-          <span class="ag-slide-text" aria-live="polite"><span x-text="slideText()"></span><small x-show="slideHint()" x-text="slideHint()"></small></span>
-          <button type="button" class="ag-slide-knob" :style="'transform:translateX(' + slideX + 'px)'" :disabled="!canLaunch()"
-            aria-label="Slide to start agent (or press Enter)" @pointerdown="slideStart($event)" @pointermove="slideMove($event)" @pointerup="slideEnd()" @pointercancel="slideX = 0; sliding = false"
-            @keydown.enter.prevent="launch()" @keydown.space.prevent="launch()">&#8250;&#8250;</button>
+        <input id="ag-confirm" class="ag-confirm" type="text" autocomplete="off" spellcheck="false" x-model="confirmModel" @keydown.enter.prevent="noop">
+        <div class="ag-slide" x-ref="agtrack" :class="slideCls">
+          <div class="ag-slide-fill" :style="slideFillStyle"></div>
+          <span class="ag-slide-text" aria-live="polite"><span x-text="slideText"></span><small x-show="slideHint" x-text="slideHint"></small></span>
+          <button type="button" class="ag-slide-knob" :style="slideKnobStyle" :disabled="cannotLaunch"
+            aria-label="Slide to start agent (or press Enter)" @pointerdown="slideStart" @pointermove="slideMove" @pointerup="slideEnd" @pointercancel="slideCancel"
+            @keydown.enter.prevent="launch" @keydown.space.prevent="launch">&#8250;&#8250;</button>
         </div>
         <p class="pl-msg red ag-launch-msg" x-show="launchMsg" x-text="launchMsg" role="alert"></p>
         <small class="ag-foot">Typing START is always required. A market in production trades real money.</small>
@@ -1370,73 +1370,73 @@
       </form>
 
       <!-- ===== FLEET LIMITS (KD3: off by default; set on the PC) ===== -->
-      <div class="ag-glim" x-show="mode() === 'limits'">
+      <div class="ag-glim" x-show="isLimits">
         <div class="ag-group num">
-          <label class="ag-row"><span>Max loss per day</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" placeholder="off" x-model="gl.max_loss_day" :readonly="phone()" aria-label="Fleet max loss per day $ (empty: off)"></label>
-          <label class="ag-row"><span>API per day</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" placeholder="off" x-model="gl.api_day" :readonly="phone()" aria-label="Fleet API spend per day $ (empty: off)"></label>
+          <label class="ag-row"><span>Max loss per day</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" placeholder="off" x-model="glLossModel" :readonly="phone" aria-label="Fleet max loss per day $ (empty: off)"></label>
+          <label class="ag-row"><span>API per day</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" placeholder="off" x-model="glApiModel" :readonly="phone" aria-label="Fleet API spend per day $ (empty: off)"></label>
         </div>
-        <p class="ag-foot num" x-text="glUsed()"></p>
+        <p class="ag-foot num" x-text="glUsed"></p>
         <p class="ag-foot">Across every agent, each day (midnight local time). Reaching one pauses every agent; an entry that would pass the max loss is refused. Empty is off (the default).</p>
-        <button type="button" class="ag-primary" x-show="!phone()" @click="glSave()" :disabled="gl.busy">Save fleet limits</button>
-        <p class="pl-note amber" x-show="phone()">Change the fleet limits on the PC.</p>
+        <button type="button" class="ag-primary" x-show="notPhone" @click="glSave" :disabled="gl.busy">Save fleet limits</button>
+        <p class="pl-note amber" x-show="phone">Change the fleet limits on the PC.</p>
         <p class="ag-foot" x-show="gl.msg" :class="gl.cls" x-text="gl.msg" role="status"></p>
       </div>
     </div>
 
     <!-- ===== sheets: one job each, back to the page they came from ===== -->
-    <section class="ag-colA ag-sheet ag-note" x-show="sheet('note')" aria-labelledby="ag-note-h">
-      <div class="ag-bar"><button type="button" class="ag-back" @click="back()" x-text="backWord()"></button><h2 id="ag-note-h">Note to the agent</h2></div>
-      <div class="ag-card" x-show="$store.agent.sessionLive()">
+    <section class="ag-colA ag-sheet ag-note" x-show="sheetNote" aria-labelledby="ag-note-h">
+      <div class="ag-bar"><button type="button" class="ag-back" @click="back" x-text="backWord"></button><h2 id="ag-note-h">Note to the agent</h2></div>
+      <div class="ag-card" x-show="sessionLive">
         <label for="ag-note-in" class="ag-eyebrow">Your note</label>
-        <textarea id="ag-note-in" rows="3" maxlength="1000" x-model="noteText" placeholder="It reads this on its next wake"></textarea>
-        <button type="button" class="ag-btn ag-btn-go" @click="sendNote()" :disabled="noteBusy || !noteText.trim()" x-text="noteBusy ? 'Sending…' : 'Send note'"></button>
+        <textarea id="ag-note-in" rows="3" maxlength="1000" x-model="noteTextModel" placeholder="It reads this on its next wake"></textarea>
+        <button type="button" class="ag-btn ag-btn-go" @click="sendNote" :disabled="noteSendOff" x-text="noteSendText"></button>
         <p class="pl-note red" x-show="noteMsg" x-text="noteMsg" role="alert"></p>
       </div>
-      <p class="ag-foot" x-show="!$store.agent.sessionLive()">Notes go to a running agent.</p>
+      <p class="ag-foot" x-show="notSessionLive">Notes go to a running agent.</p>
       <ul class="ag-group ag-notes" x-show="$store.agent.notes.length">
-        <template x-for="n in $store.agent.notes.slice().reverse()" :key="n.id"><li class="ag-row"><span x-text="'“' + n.text + '”'"></span> <small :class="n.state === 'delivered' ? 'green' : 'amber'" x-text="noteState(n)"></small></li></template>
+        <template x-for="n in notesNewest" :key="n.id"><li class="ag-row"><span x-text="nQuote"></span> <small :class="nStateCls" x-text="nState"></small></li></template>
       </ul>
     </section>
 
-    <section class="ag-colA ag-sheet ag-settings" x-show="sheet('settings')" aria-labelledby="ag-set-h">
-      <div class="ag-bar"><button type="button" class="ag-back" @click="back()" x-text="backWord()"></button><h2 id="ag-set-h">Run settings</h2></div>
-      <div class="ag-group num" x-show="$store.agent.session()">
-        <div class="ag-row"><span>Who trades</span><span class="ag-sp"></span><span class="ag-val" x-text="$store.agent.session() && $store.agent.session().kind === 'external' ? 'External agent (MCP)' : 'In-app agent'"></span></div>
-        <div class="ag-row"><span>Level</span><span class="ag-sp"></span><span class="ag-val" x-text="levelWord() + ($store.agent.session() && $store.agent.session().limits && $store.agent.session().limits.proposal_ttl_s ? ' · proposals wait ' + $store.agent.session().limits.proposal_ttl_s + ' s' : '')"></span></div>
-        <div class="ag-row"><span>Market</span><span class="ag-sp"></span><span class="ag-val" x-text="marketsWord() + ' · ' + $store.agent.pill().text"></span></div>
-        <div class="ag-row ag-stack"><span>Budget</span><small x-text="$store.agent.budgetLine()"></small></div>
-        <div class="ag-row"><span>Per trade</span><span class="ag-sp"></span><span class="ag-val" x-text="$store.agent.session() && $store.agent.session().limits ? usdOf($store.agent.session().limits.per_trade) : '—'"></span></div>
-        <div class="ag-row"><span>Ends</span><span class="ag-sp"></span><span class="ag-val" x-text="endsClock() + ' · ' + $store.agent.timeLeft()"></span></div>
-        <div class="ag-row ag-stack"><span>API</span><small x-text="apiLine()"></small></div>
-        <div class="ag-row ag-stack" x-show="$store.agent.rulesLine()"><span>Rules</span><small x-text="$store.agent.rulesLine()"></small></div>
-        <div class="ag-row ag-stack"><span>Instructions</span><small x-text="sessionVersions() || promptsLine()"></small></div>
+    <section class="ag-colA ag-sheet ag-settings" x-show="sheetSettings" aria-labelledby="ag-set-h">
+      <div class="ag-bar"><button type="button" class="ag-back" @click="back" x-text="backWord"></button><h2 id="ag-set-h">Run settings</h2></div>
+      <div class="ag-group num" x-show="hasSession">
+        <div class="ag-row"><span>Who trades</span><span class="ag-sp"></span><span class="ag-val" x-text="whoTrades"></span></div>
+        <div class="ag-row"><span>Level</span><span class="ag-sp"></span><span class="ag-val" x-text="levelLine"></span></div>
+        <div class="ag-row"><span>Market</span><span class="ag-sp"></span><span class="ag-val" x-text="marketLine"></span></div>
+        <div class="ag-row ag-stack"><span>Budget</span><small x-text="budgetLine"></small></div>
+        <div class="ag-row"><span>Per trade</span><span class="ag-sp"></span><span class="ag-val" x-text="perTradeText"></span></div>
+        <div class="ag-row"><span>Ends</span><span class="ag-sp"></span><span class="ag-val" x-text="endsLine"></span></div>
+        <div class="ag-row ag-stack"><span>API</span><small x-text="apiLine"></small></div>
+        <div class="ag-row ag-stack" x-show="rulesLine"><span>Rules</span><small x-text="rulesLine"></small></div>
+        <div class="ag-row ag-stack"><span>Instructions</span><small x-text="versionsLine"></small></div>
       </div>
       <p class="ag-foot">Limits are fixed for the run. To change them, stop it and run the agent again.</p>
     </section>
 
     <!-- the prompts (edits on the PC only) -->
-    <section class="ag-colA ag-sheet ag-prompts" x-show="sheet('prompts')" aria-labelledby="ag-pr-h">
-      <div class="ag-bar"><button type="button" class="ag-back" @click="back()" x-text="backWord()"></button><h2 id="ag-pr-h">Instructions (prompts)</h2></div>
-      <p class="ag-foot" x-text="promptsLine()"></p>
-      <p class="pl-note" x-show="sessionVersions()" x-text="sessionVersions()"></p>
-      <p class="pl-note amber" x-show="phone()">Change this on the PC.</p>
-      <p class="error-box" x-show="prErr" x-text="'Could not read the prompts: ' + prErr" role="alert"></p>
+    <section class="ag-colA ag-sheet ag-prompts" x-show="sheetPrompts" aria-labelledby="ag-pr-h">
+      <div class="ag-bar"><button type="button" class="ag-back" @click="back" x-text="backWord"></button><h2 id="ag-pr-h">Instructions (prompts)</h2></div>
+      <p class="ag-foot" x-text="promptsLine"></p>
+      <p class="pl-note" x-show="sessionVersions" x-text="sessionVersions"></p>
+      <p class="pl-note amber" x-show="phone">Change this on the PC.</p>
+      <p class="error-box" x-show="prErr" x-text="prErrText" role="alert"></p>
       <small>Each agent's limits are added as data on every wake, so no edit can remove a limit.</small>
-      <template x-for="l in ['system', 'user']" :key="l">
+      <template x-for="l in layers" :key="l">
         <section class="ag-card ag-layer" x-show="pr">
-          <h3 x-text="layerHead(l)"></h3>
-          <small x-show="l === 'user'">Sent after the system prompt.</small>
-          <textarea rows="8" x-model="drafts[l]" :readonly="phone()" :aria-label="l === 'system' ? 'System prompt' : 'User prompt'"></textarea>
+          <h3 x-text="lHead"></h3>
+          <small x-show="lIsUser">Sent after the system prompt.</small>
+          <textarea rows="8" x-model="draftModel" :readonly="phone" :aria-label="lAria"></textarea>
           <div class="ag-btns">
-            <button type="button" class="ag-btn" @click="savePrompt(l)" :disabled="phone() || prBusy || !dirty(l)">Save as new version</button>
-            <button type="button" class="ag-btn" x-show="dirty(l)" @click="discard(l)">Discard</button>
-            <button type="button" class="ag-btn" @click="resetPrompt(l)" :disabled="phone() || prBusy">Reset to default</button>
+            <button type="button" class="ag-btn" @click="saveThisPrompt" :disabled="lSaveOff">Save as new version</button>
+            <button type="button" class="ag-btn" x-show="lDirty" @click="discardThis">Discard</button>
+            <button type="button" class="ag-btn" @click="resetThisPrompt" :disabled="prOff">Reset to default</button>
           </div>
           <details class="ag-hist">
-            <summary x-text="'Versions (' + history(l).length + ')'"></summary>
+            <summary x-text="lVersions"></summary>
             <ul class="ag-list">
-              <template x-for="x in history(l)" :key="x.version">
-                <li><span x-text="histLine(x)"></span> <b x-show="current(l, x)">current</b><button type="button" class="pl-link" x-show="!current(l, x)" @click="restorePrompt(l, x.version)" :disabled="phone() || prBusy">Restore</button></li>
+              <template x-for="x in lHistory" :key="x.version">
+                <li><span x-text="xHistLine"></span> <b x-show="xCurrent">current</b><button type="button" class="pl-link" x-show="xNotCurrent" @click="restoreThis" :disabled="prOff">Restore</button></li>
               </template>
             </ul>
           </details>
@@ -1446,123 +1446,123 @@
     </section>
 
     <!-- Telegram: pairing and alert choices (GET /api/telegram/status; writes on the PC only) -->
-    <section class="ag-colA ag-sheet ag-tg" x-show="sheet('telegram')" aria-labelledby="ag-tg-h">
-      <div class="ag-bar"><button type="button" class="ag-back" @click="back()" x-text="backWord()"></button><h2 id="ag-tg-h">Telegram</h2></div>
-      <div class="ag-group" x-show="tgAvail === false"><div class="ag-row is-off"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div></div>
-      <p class="error-box" x-show="tgErr" x-text="'Could not read the Telegram status: ' + tgErr" role="alert"></p>
-      <p class="ag-foot" x-show="tgAvail === null && !tgErr">Reading the Telegram status…</p>
-      <div class="ag-group" x-show="tg && !tg.configured"><p class="ag-row ag-tg-off">Add a bot token in .env to use Telegram.</p></div>
-      <template x-if="tg && tg.configured">
+    <section class="ag-colA ag-sheet ag-tg" x-show="sheetTelegram" aria-labelledby="ag-tg-h">
+      <div class="ag-bar"><button type="button" class="ag-back" @click="back" x-text="backWord"></button><h2 id="ag-tg-h">Telegram</h2></div>
+      <div class="ag-group" x-show="tgOff"><div class="ag-row is-off"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div></div>
+      <p class="error-box" x-show="tgErr" x-text="tgErrText" role="alert"></p>
+      <p class="ag-foot" x-show="tgReading">Reading the Telegram status…</p>
+      <div class="ag-group" x-show="tgUnconfigured"><p class="ag-row ag-tg-off">Add a bot token in .env to use Telegram.</p></div>
+      <template x-if="tgConfigured">
         <div class="ag-tg-on">
           <div class="ag-group">
-            <div class="ag-row"><span>Bot</span><span class="ag-sp"></span><span class="ag-val" x-text="tg.running ? 'running' : 'not running'"></span></div>
-            <div class="ag-row"><span>Paired</span><span class="ag-sp"></span><span class="ag-val ag-tg-who" x-text="tg.paired ? (tg.user_label || 'yes') : 'not paired'"></span></div>
-            <div class="ag-row" x-show="!phone() && !tg.paired"><button type="button" class="ag-link" @click="tgPair()" :disabled="tgBusy" x-text="tgCode ? 'New code' : 'Pair'"></button></div>
-            <div class="ag-row" x-show="!phone() && tg.paired"><button type="button" class="ag-link red" @click="tgUnpair()" :disabled="tgBusy">Unpair</button></div>
+            <div class="ag-row"><span>Bot</span><span class="ag-sp"></span><span class="ag-val" x-text="tgRunning"></span></div>
+            <div class="ag-row"><span>Paired</span><span class="ag-sp"></span><span class="ag-val ag-tg-who" x-text="tgPairedText"></span></div>
+            <div class="ag-row" x-show="tgCanPair"><button type="button" class="ag-link" @click="tgPair" :disabled="tgBusy" x-text="tgPairText"></button></div>
+            <div class="ag-row" x-show="tgCanUnpair"><button type="button" class="ag-link red" @click="tgUnpair" :disabled="tgBusy">Unpair</button></div>
           </div>
-          <div class="ag-card ag-tg-code" x-show="tgCode && !tg.paired" role="status">
-            <span>Send <code class="ag-code" x-text="'/start ' + (tgCode ? tgCode.code : '')"></code> to <span class="ag-tg-bot" x-text="tg.bot_username ? '@' + tg.bot_username : 'your bot'"></span></span>
-            <small class="num" x-text="tgLeft()"></small>
+          <div class="ag-card ag-tg-code" x-show="tgCodeOn" role="status">
+            <span>Send <code class="ag-code" x-text="tgStartText"></code> to <span class="ag-tg-bot" x-text="tgBotText"></span></span>
+            <small class="num" x-text="tgLeft"></small>
           </div>
           <p class="ag-gl">Alerts</p>
           <div class="ag-group ag-tg-alerts">
-            <template x-for="a in alerts" :key="a[0]">
-              <label class="ag-row ag-check"><span class="ag-check-t"><span x-text="a[1]"></span></span><span class="ag-sp"></span>
-                <input type="checkbox" role="switch" :checked="tgAlert(a[0])" :disabled="phone() || tgBusy || !(tg.alerts && a[0] in tg.alerts)" @change="tgSetAlert(a[0], $event.target.checked)" :aria-label="a[1] + ' alerts'"></label>
+            <template x-for="a in alerts" :key="aKind">
+              <label class="ag-row ag-check"><span class="ag-check-t"><span x-text="aLabel"></span></span><span class="ag-sp"></span>
+                <input type="checkbox" role="switch" :checked="aOn" :disabled="aOff" @change="aChange" :aria-label="aAria"></label>
             </template>
           </div>
-          <div class="ag-group ag-tg-daily" x-show="tg.alerts && 'daily' in tg.alerts">
+          <div class="ag-group ag-tg-daily" x-show="tgDailyOn">
             <label class="ag-row"><span>Daily summary at</span><span class="ag-sp"></span>
-              <input type="time" class="num" :value="tgDailyAt()" :disabled="phone() || tgBusy || !tgAlert('daily')" @change="tgSetDaily($event.target.value)" aria-label="Daily summary time"></label>
+              <input type="time" class="num" :value="tgDailyAt" :disabled="tgDailyOff" @change="tgDailyChange" aria-label="Daily summary time"></label>
           </div>
           <p class="ag-foot">Session activity: what each agent does, as it happens, at most one message every 20 s; and an hourly how-it's-going. Daily summary: the day's trades, sent once at that time.</p>
-          <p class="ag-foot" x-show="phone()">Pair, unpair and alert changes are made on the PC.</p>
+          <p class="ag-foot" x-show="phone">Pair, unpair and alert changes are made on the PC.</p>
         </div>
       </template>
       <p class="ag-foot" x-show="tgMsg" :class="tgMsgCls" x-text="tgMsg" role="status"></p>
     </section>
 
     <!-- ===== All activity across every run (one agent), or every agent's (the audit): the same filters ===== -->
-    <section class="ag-colB ag-feedwrap ag-activity" x-show="activityOn()" :class="$store.agent.stale() ? 'is-stale' : ''" aria-labelledby="ag-feed-h">
-      <div class="ag-bar"><button type="button" class="ag-back" x-show="!wideLive() && page === 'agent'" @click="back()" x-text="backWord()"></button><h2 id="ag-feed-h" x-text="page === 'audit' ? 'Every agent, every run' : 'All activity'"></h2></div>
+    <section class="ag-colB ag-feedwrap ag-activity" x-show="activityOn" :class="staleCls" aria-labelledby="ag-feed-h">
+      <div class="ag-bar"><button type="button" class="ag-back" x-show="feedBackOn" @click="back" x-text="backWord"></button><h2 id="ag-feed-h" x-text="feedTitle"></h2></div>
       <div class="ag-chips" role="group" aria-label="Show">
-        <template x-for="f in [['trades', 'Trades'], ['decisions', 'Decisions'], ['thinking', 'Thinking'], ['everything', 'Everything']]" :key="f[0]">
-          <button type="button" class="ag-chip" :aria-pressed="filter === f[0] ? 'true' : 'false'" @click="setFilter(f[0])" x-text="f[1]"></button>
+        <template x-for="f in filterChips" :key="fKey">
+          <button type="button" class="ag-chip" :aria-pressed="fPressed" @click="setThisFilter" x-text="fLabel"></button>
         </template>
       </div>
-      <p class="ag-stale" role="status" x-show="$store.agent.stale()" x-text="$store.agent.staleText()"></p>
-      <p class="pl-note amber" x-show="page === 'agent' && $store.agent.streamNote" x-text="$store.agent.streamNote"></p>
+      <p class="ag-stale" role="status" x-show="stale" x-text="staleText"></p>
+      <p class="pl-note amber" x-show="streamNoteOn" x-text="$store.agent.streamNote"></p>
       <!-- Thinking: the run on screen's live feed (every wake's full card), then the earlier runs' wakes -->
-      <div class="ag-thinking" x-show="filter === 'thinking' && page === 'agent'">
-        <p class="pl-note muted" x-show="!$store.agent.everLive && $store.agent.enabled && $store.agent.sessionLive()">Connecting to the live feed…</p>
-        <p class="pl-note muted" x-show="$store.agent.sessionLive() && !$store.agent.runCount" x-text="$store.agent.session() && $store.agent.session().kind === 'external' ? 'Waiting for the external agent: no tool call yet.' : 'Waiting for the first event: no wake yet.'"></p>
-        <p class="pl-note muted" x-show="$store.agent.ended() && !$store.agent.runCount">No wakes are recorded for this run.</p>
+      <div class="ag-thinking" x-show="thinkingOn">
+        <p class="pl-note muted" x-show="connectingOn">Connecting to the live feed…</p>
+        <p class="pl-note muted" x-show="waitingOn" x-text="waitingText"></p>
+        <p class="pl-note muted" x-show="noWakesOn">No wakes are recorded for this run.</p>
         <div id="ag-feed" class="ag-feed" x-ignore></div>
         <small x-show="$store.agent.runCount">The newest 50 wakes of this run are kept on this screen.</small>
       </div>
-      <p class="error-box" x-show="jr.err" x-text="'Could not read the activity: ' + jr.err" role="alert"></p>
+      <p class="error-box" x-show="jr.err" x-text="jrErrText" role="alert"></p>
       <div class="ag-group ag-feedlist ag-jr num">
-        <template x-for="it in jrItems()" :key="it.key">
+        <template x-for="it in jrItems" :key="it.key">
           <div class="ag-jr-item">
-            <template x-if="it.kind === 'run'"><div class="ag-run-div" :class="it.live ? 'is-live' : ''" x-text="it.title"></div></template>
-            <template x-if="it.kind !== 'run'">
-              <details class="ag-ev ag-ev-d" :class="'is-' + it.kind">
-                <summary><time x-text="hm(it.ts)"></time><span class="ag-ev-t"><b :class="it.cls" x-text="it.title"></b><small x-show="it.sub" x-text="it.sub"></small></span></summary>
+            <template x-if="itIsRun"><div class="ag-run-div" :class="itLiveCls" x-text="it.title"></div></template>
+            <template x-if="itNotRun">
+              <details class="ag-ev ag-ev-d" :class="itKindCls">
+                <summary><time x-text="itTime"></time><span class="ag-ev-t"><b :class="it.cls" x-text="it.title"></b><small x-show="it.sub" x-text="it.sub"></small></span></summary>
                 <div class="ag-ev-more">
                   <template x-for="(l, i) in it.lines" :key="i"><p x-text="l"></p></template>
-                  <button type="button" class="ag-link" x-show="it.run" @click="showRun(it.run)">Open the full run ›</button>
+                  <button type="button" class="ag-link" x-show="it.run" @click="showThisRun">Open the full run ›</button>
                 </div>
               </details>
             </template>
           </div>
         </template>
-        <p class="ag-ev-empty" x-show="!jrItems().length && emptyText(filter)" x-text="emptyText(filter)"></p>
-        <button type="button" class="ag-more ag-older" x-show="jrMore()" @click="jrLoad(true)" :disabled="jr.busy" x-text="jr.busy ? 'Reading…' : 'Older ›'"></button>
-        <div class="ag-sentinel" x-init="watchMore($el)" aria-hidden="true"></div>
+        <p class="ag-ev-empty" x-show="jrEmptyText" x-text="jrEmptyText"></p>
+        <button type="button" class="ag-more ag-older" x-show="jrMore" @click="jrOlder" :disabled="jr.busy" x-text="jrOlderText"></button>
+        <div class="ag-sentinel" x-init="watchMoreHere" aria-hidden="true"></div>
       </div>
     </section>
 
     <!-- ===== the rule scorecard: live vs backtest per rule x market; retirement is enforced by the server ===== -->
-    <section class="ag-colC ag-scorewrap" x-show="scoreOn()" aria-labelledby="ag-score-h">
-      <div class="ag-bar"><button type="button" class="ag-back" x-show="!wideLive()" @click="back()" x-text="backWord()"></button><h2 id="ag-score-h">Rule scorecard</h2></div>
+    <section class="ag-colC ag-scorewrap" x-show="scoreOn" aria-labelledby="ag-score-h">
+      <div class="ag-bar"><button type="button" class="ag-back" x-show="notWideLive" @click="back" x-text="backWord"></button><h2 id="ag-score-h">Rule scorecard</h2></div>
       <div class="ag-card ag-score">
         <small>Every agent, closed trades only (settling ones wait for the result). Win % means nothing without the break-even the price paid implies.</small>
-        <p class="ag-foot" x-show="!$store.agent.card && !$store.agent.cardErr">Reading the scorecard…</p>
-        <p class="error-box" x-show="$store.agent.cardErr" x-text="'Could not read the scorecard: ' + $store.agent.cardErr" role="alert"></p>
-        <template x-for="x in cardRules()" :key="x.rule">
-          <div class="ag-score-rule" :class="isRetired(x) ? 'is-retired' : ''">
+        <p class="ag-foot" x-show="cardReading">Reading the scorecard…</p>
+        <p class="error-box" x-show="$store.agent.cardErr" x-text="cardErrText" role="alert"></p>
+        <template x-for="x in cardRules" :key="x.rule">
+          <div class="ag-score-rule" :class="xRetiredCls">
             <div class="ag-score-head">
               <b x-text="x.rule"></b>
-              <span class="ag-score-status" :class="isRetired(x) ? 'muted' : 'green'" x-text="statusWord(x)"></span>
+              <span class="ag-score-status" :class="xStatusCls" x-text="xStatusWord"></span>
             </div>
-            <small class="ag-score-reason" x-show="isRetired(x) && x.status.reason" x-text="x.status.reason"></small>
-            <div class="ag-score-bar" x-show="!isRetired(x)" role="progressbar" :aria-valuenow="x.bar.trades" aria-valuemin="0" :aria-valuemax="x.bar.of" :aria-label="x.rule + ' 30-trade bar'">
-              <span :style="'width:' + barPct(x) + '%'"></span>
+            <small class="ag-score-reason" x-show="xReason" x-text="xReason"></small>
+            <div class="ag-score-bar" x-show="xActive" role="progressbar" :aria-valuenow="xBarTrades" aria-valuemin="0" :aria-valuemax="xBarOf" :aria-label="xBarAria">
+              <span :style="xBarStyle"></span>
             </div>
-            <small class="ag-score-barline" x-show="!isRetired(x)" x-text="barLine(x)"></small>
+            <small class="ag-score-barline" x-show="xActive" x-text="xBarLine"></small>
             <ul class="ag-list ag-score-rows">
-              <template x-for="r in cardRows(x.rule)" :key="r.rule + ':' + r.market">
+              <template x-for="r in xRows" :key="rKey">
                 <li class="num">
                   <span class="ag-score-mkt" x-text="r.market_label"></span>
-                  <span class="ag-score-win" x-text="winLine(r.live)"></span>
-                  <span class="ag-score-net" x-text="netLine(r.live)"></span>
-                  <small x-show="extraLine(r.live)" x-text="extraLine(r.live)"></small>
+                  <span class="ag-score-win" x-text="rLiveWin"></span>
+                  <span class="ag-score-net" x-text="rLiveNet"></span>
+                  <small x-show="rLiveExtra" x-text="rLiveExtra"></small>
                 </li>
               </template>
             </ul>
-            <small class="ag-score-bt" x-text="btLine(x.backtest)" :title="x.backtest ? x.backtest.note : ''"></small>
-            <div class="ag-btns" x-show="!phone()">
-              <button type="button" class="ag-btn" x-show="!isRetired(x)" @click="setRule(x.rule, 'retired')" :disabled="!!rsBusy">Retire</button>
-              <template x-if="isRetired(x)">
+            <small class="ag-score-bt" x-text="xBt" :title="xBtNote"></small>
+            <div class="ag-btns" x-show="notPhone">
+              <button type="button" class="ag-btn" x-show="xActive" @click="retireThis" :disabled="rsBusyOn">Retire</button>
+              <template x-if="xRetired">
                 <span class="ag-score-react">
-                  <input type="text" autocomplete="off" spellcheck="false" x-model="rsTyped[x.rule]" :placeholder="'Type ' + phrase(x.rule)" :aria-label="'Type ' + phrase(x.rule) + ' to reactivate'">
-                  <button type="button" class="ag-btn" @click="setRule(x.rule, 'active')" :disabled="!!rsBusy || String(rsTyped[x.rule] || '').trim() !== phrase(x.rule)">Reactivate</button>
+                  <input type="text" autocomplete="off" spellcheck="false" x-model="rsTypedModel" :placeholder="xPhraseHint" :aria-label="xPhraseAria">
+                  <button type="button" class="ag-btn" @click="reactivateThis" :disabled="reactivateOff">Reactivate</button>
                 </span>
               </template>
             </div>
           </div>
         </template>
-        <p class="pl-note amber" x-show="phone()">Retire or reactivate a rule on the PC.</p>
+        <p class="pl-note amber" x-show="phone">Retire or reactivate a rule on the PC.</p>
         <p x-show="rsMsg" :class="rsMsgCls" x-text="rsMsg" role="status"></p>
       </div>
     </section>
@@ -1573,42 +1573,42 @@
      Above it, while any agent runs: the accessory "N agents · ±$X" (amber with "· N need you" when any agent needs
      you) and a round Stop: one agent stops in one tap (R18); several ask "Stop all?" on screen first (the server
      asks nothing). Toasts sit above both. ===== -->
-<div class="nv-toast" x-data x-show="$store.app.toastText" x-cloak role="status" aria-live="polite" :class="$store.app.toastCls" x-text="$store.app.toastText"></div>
+<div class="nv-toast" x-show="$store.app.toastText" x-cloak role="status" aria-live="polite" :class="$store.app.toastCls" x-text="$store.app.toastText"></div>
 <!-- signed out (any /api answer 401, B6#9): one clear prompt, never silent failures; web/app.js sets $store.app.auth -->
-<div class="nv-auth" x-data x-show="$store.app.auth" x-cloak role="alertdialog" aria-labelledby="nv-auth-t" aria-describedby="nv-auth-d">
-  <h2 id="nv-auth-t" x-text="$store.app.auth && $store.app.auth.title"></h2>
-  <p id="nv-auth-d" x-text="$store.app.auth && $store.app.auth.text"></p>
-  <a class="pl-btn pl-yes" :href="$store.app.auth ? $store.app.auth.href : '/login'" x-text="$store.app.auth && $store.app.auth.action"></a>
+<div class="nv-auth" x-show="$store.app.auth" x-cloak role="alertdialog" aria-labelledby="nv-auth-t" aria-describedby="nv-auth-d">
+  <h2 id="nv-auth-t" x-text="shAuthTitle"></h2>
+  <p id="nv-auth-d" x-text="shAuthText"></p>
+  <a class="pl-btn pl-yes" :href="shAuthHref" x-text="shAuthAction"></a>
 </div>
-<nav id="tabbar" class="nv-tabbar" x-data aria-label="Sections">
-  <div id="ag-acc" class="nv-acc num" x-show="$store.agent.accShow()" x-cloak role="region" aria-label="Agents" :class="$store.agent.needCount() ? 'is-amber' : ''">
-    <template x-if="!$store.agent.stopAsk">
+<nav id="tabbar" class="nv-tabbar" aria-label="Sections">
+  <div id="ag-acc" class="nv-acc num" x-show="shAccShow" x-cloak role="region" aria-label="Agents" :class="shAccCls">
+    <template x-if="shNoStopAsk">
       <div class="nv-acc-in">
-        <button type="button" class="nv-acc-open" @click="agentOpen()" :aria-label="'Open the Agents tab. ' + $store.agent.accHead() + ' ' + $store.agent.accLine()">
-          <span class="nv-acc-dot" :class="$store.agent.needCount() ? 'is-paused' : 'is-watching'" aria-hidden="true"></span>
-          <b x-text="$store.agent.accHead()"></b><span class="nv-acc-t" x-text="$store.agent.accLine()"></span>
+        <button type="button" class="nv-acc-open" @click="shOpenAgents" :aria-label="shAccAria">
+          <span class="nv-acc-dot" :class="shAccDotCls" aria-hidden="true"></span>
+          <b x-text="shAccHead"></b><span class="nv-acc-t" x-text="shAccLine"></span>
         </button>
-        <button type="button" class="nv-acc-stop" @click="$store.agent.accStop()" :disabled="$store.agent.busy" :aria-label="$store.agent.fleetCount() === 1 ? 'Stop the agent now' : 'Stop all agents'"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor"/></svg></button>
+        <button type="button" class="nv-acc-stop" @click="shAccStop" :disabled="$store.agent.busy" :aria-label="shAccStopAria"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor"/></svg></button>
       </div>
     </template>
     <template x-if="$store.agent.stopAsk">
       <div class="nv-acc-in nv-acc-ask" role="alertdialog" aria-label="Stop all agents?">
-        <b x-text="'Stop all ' + $store.agent.fleetCount() + ' agents?'"></b>
+        <b x-text="shStopAllText"></b>
         <span class="nv-sp"></span>
-        <button type="button" class="nv-acc-btn" @click="$store.agent.stopAsk = false">Cancel</button>
-        <button type="button" class="nv-acc-btn is-stop" @click="$store.agent.stopAll()" :disabled="$store.agent.busy">Stop all</button>
+        <button type="button" class="nv-acc-btn" @click="shStopAskCancel">Cancel</button>
+        <button type="button" class="nv-acc-btn is-stop" @click="shStopAll" :disabled="$store.agent.busy">Stop all</button>
       </div>
     </template>
   </div>
-  <p class="nv-acc-stale" x-show="$store.agent.enabled && $store.agent.sessionLive() && $store.agent.stale()" x-cloak x-text="$store.agent.staleText()" role="status"></p>
+  <p class="nv-acc-stale" x-show="shStaleOn" x-cloak x-text="shStaleText" role="status"></p>
   <div class="nv-tabs" role="tablist">
-    <button type="button" role="tab" class="nv-tab" :aria-selected="$store.app.section() === 'play' ? 'true' : 'false'" @click="navTo('play')"><svg width="26" height="26" aria-hidden="true"><use href="#tb-play"/></svg><span>Play</span></button>
-    <button type="button" role="tab" class="nv-tab" :aria-selected="$store.app.section() === 'agent' ? 'true' : 'false'" @click="navTo('agent')"><svg width="26" height="26" aria-hidden="true"><use href="#sv-mark"/></svg><span>Agents</span></button>
-    <button type="button" role="tab" class="nv-tab" :aria-selected="$store.app.section() === 'record' ? 'true' : 'false'" @click="navTo('record')"><svg width="26" height="26" aria-hidden="true"><use href="#tb-record"/></svg><span>Record</span></button>
+    <button type="button" role="tab" class="nv-tab" :aria-selected="shTabPlay" @click="shNavPlay"><svg width="26" height="26" aria-hidden="true"><use href="#tb-play"/></svg><span>Play</span></button>
+    <button type="button" role="tab" class="nv-tab" :aria-selected="shTabAgent" @click="shNavAgent"><svg width="26" height="26" aria-hidden="true"><use href="#sv-mark"/></svg><span>Agents</span></button>
+    <button type="button" role="tab" class="nv-tab" :aria-selected="shTabRecord" @click="shNavRecord"><svg width="26" height="26" aria-hidden="true"><use href="#tb-record"/></svg><span>Record</span></button>
   </div>
 </nav>
 </main>
-<div class="sr-only" aria-live="polite" x-data x-text="$store.app.announcement"></div>
+<div class="sr-only" aria-live="polite" x-text="$store.app.announcement"></div>
 
 <script src="vendor/lightweight-charts-5.0.8.standalone.production.js"></script>
 <script src="app.js"></script>

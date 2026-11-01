@@ -192,6 +192,46 @@
     });
   });
 
+  // The page shell: <body x-data="shell">, read by the toast, the signed-out prompt, the tab bar with its agents
+  // accessory and the screen-reader announcer (Alpine's CSP build evaluates property paths only: a getter is a value,
+  // a method an event handler). Every view sits inside it, so its members are prefixed `sh` and never shadow a view's.
+  // The agents store (views/agent.js) is read through these: a store method named in the page would run with the
+  // page's scope as `this`.
+  document.addEventListener('alpine:init', function () {
+    Alpine.data('shell', function () {
+      function app() { return Alpine.store('app'); }
+      function agents() { return Alpine.store('agent'); }
+      function tab(section) { return app().section() === section ? 'true' : 'false'; }
+      return {
+        get shAuthTitle() { var a = app().auth; return a ? a.title : null; },
+        get shAuthText() { var a = app().auth; return a ? a.text : null; },
+        get shAuthAction() { var a = app().auth; return a ? a.action : null; },
+        get shAuthHref() { var a = app().auth; return a ? a.href : '/login'; },
+        get shAccShow() { return agents().accShow(); },
+        get shAccCls() { return agents().needCount() ? 'is-amber' : ''; },
+        get shAccDotCls() { return agents().needCount() ? 'is-paused' : 'is-watching'; },
+        get shNoStopAsk() { return !agents().stopAsk; },
+        get shAccHead() { return agents().accHead(); },
+        get shAccLine() { return agents().accLine(); },
+        get shAccAria() { return 'Open the Agents tab. ' + agents().accHead() + ' ' + agents().accLine(); },
+        get shAccStopAria() { return agents().fleetCount() === 1 ? 'Stop the agent now' : 'Stop all agents'; },
+        get shStopAllText() { return 'Stop all ' + agents().fleetCount() + ' agents?'; },
+        get shStaleOn() { var st = agents(); return !!st.enabled && st.sessionLive() && st.stale(); },
+        get shStaleText() { return agents().staleText(); },
+        get shTabPlay() { return tab('play'); },
+        get shTabAgent() { return tab('agent'); },
+        get shTabRecord() { return tab('record'); },
+        shOpenAgents: function () { window.agentOpen(); },
+        shAccStop: function () { agents().accStop(); },
+        shStopAll: function () { agents().stopAll(); },
+        shStopAskCancel: function () { agents().stopAsk = false; },
+        shNavPlay: function () { window.navTo('play'); },
+        shNavAgent: function () { window.navTo('agent'); },
+        shNavRecord: function () { window.navTo('record'); }
+      };
+    });
+  });
+
   document.addEventListener('alpine:init', function () {
     window.addEventListener('hashchange', function () {
       var r = parseHash();
