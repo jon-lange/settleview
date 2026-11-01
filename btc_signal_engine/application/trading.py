@@ -962,8 +962,17 @@ class TradingService:
 
     def committed_by_env(self, now: int) -> dict[str, float]:
         """Dollars this service has committed today (the user's day) in each of its envs: a CommittedToday source
-        (KD7)."""
-        return {env: self.exposure(env, now)["day"] for env in self.gateways}
+        (KD7): the same brackets and sums as exposure(env, now)["day"], in ONE read for every env. It runs on every
+        perps View (~20 a second with the screen open) and every limits check, and a read per env was a database round
+        trip per env on Postgres (docs/solutions/2026-11-01-perps-view-round-trips-on-postgres.md)."""
+        day0 = self.day_start(now)
+        rows = {r["id"]: r for r in self._select(BRACKETS, filters=[("created_ts", ">=", day0)])}
+        rows.update({v["id"]: v for v in self._watched() if v["created_ts"] >= day0})
+        out = {env: 0.0 for env in self.gateways}
+        for b in rows.values():
+            if b["env"] in out:
+                out[b["env"]] += self.committed(b)
+        return {env: round(v, 4) for env, v in out.items()}
 
     def _market_caps(self, ticket: dict, lim: dict) -> GateResult:
         """A market buy's WORST case (every contract at the ceiling, plus fee: its `max_cost`) must fit the per-trade
