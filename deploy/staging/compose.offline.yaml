@@ -1,0 +1,10 @@
+# Staging with no internet (CI, tests, a machine that must not reach any venue): add after compose.staging.yaml,
+#   docker compose -p settleview-staging --env-file deploy/staging/staging.env \
+#     -f compose.yaml -f deploy/staging/compose.staging.yaml -f deploy/staging/compose.offline.yaml up -d --wait
+# The project's network is internal: its containers reach each other and nothing else (no venue, no Coinbase, no
+# Anthropic). Docker publishes no port on an internal network, so the loopback ports are gone too; the smoke suite
+# (scripts/smoke.py) runs inside the app container's network namespace and needs none.
+
+networks:
+  default:
+    internal: true

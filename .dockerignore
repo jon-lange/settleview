@@ -12,3 +12,5 @@ tests
 docs
 !docs/agent/default-system-prompt.md
 secrets
+deploy/staging/secrets
+deploy/staging/keys

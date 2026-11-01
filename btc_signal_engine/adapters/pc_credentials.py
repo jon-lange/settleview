@@ -82,6 +82,22 @@ def create_pairing_code(folder: Path, now_ms: int | None = None) -> tuple[str, i
     return code, expires
 
 
+def _signature(secret: bytes, payload: str) -> str:
+    return hmac.new(secret, ("pc." + payload).encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def cookie_from_secret_file(folder: Path, now_ms: int | None = None) -> str:
+    """A PC cookie signed under the secret file the running app already uses, read only: nothing is created, replaced
+    or written (FileNotFoundError / ValueError when the app has made no valid secret yet). For the deploy gate's
+    read-only smoke suite (scripts/smoke.py), which mounts the app's data volume read-only and sends GETs only; anyone
+    who can read that volume can be the PC anyway."""
+    secret = bytes.fromhex((Path(folder) / SECRET_FILE).read_text(encoding="ascii").strip())
+    if len(secret) < 16:
+        raise ValueError("the PC secret file is too short")
+    payload = f"{_now_ms() if now_ms is None else now_ms}.{secrets.token_hex(12)}"
+    return f"{payload}.{_signature(secret, payload)}"
+
+
 def rotate_secret_file(folder: Path) -> None:
     """A new PC secret: every PC browser's cookie stops working (they pair again)."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -142,7 +158,7 @@ class PcCredentials:
 
     # -- cookies ----------------------------------------------------------------------------------------------------
     def _sign(self, payload: str) -> str:
-        return hmac.new(self._secret, ("pc." + payload).encode("ascii"), hashlib.sha256).hexdigest()
+        return _signature(self._secret, payload)
 
     def issue(self) -> str:
         payload = f"{self.clock_ms()}.{secrets.token_hex(12)}"

@@ -415,10 +415,16 @@ class Runtime:
         self.kalshi_positions_value: float | None = None  # Kalshi portfolio_value $ from the same balance reading
         self.market_stream = None  # production order-book stream for the Coach's live Kalshi prices
         self.market_quotes: dict[str, tuple[dict, int]] = {}  # ticker -> (stream quote, received at)
+        # Staging (BTCFLOW_STAGING): no production gateway is built at all, whatever else is set (the settings refuse
+        # production credentials there too, bootstrap/config.py), so production is never "configured": no mode
+        # switch, agent session or reconcile can reach it.
         self.trading_gws = {
             "demo": trading_from_settings("demo", s.trading_demo_key_id, s.trading_demo_key_path, max_order_cost=gw_cap),
-            "prod": trading_from_settings("prod", s.trading_prod_key_id, s.trading_prod_key_path, max_order_cost=gw_cap),
+            "prod": None if s.staging else trading_from_settings("prod", s.trading_prod_key_id,
+                                                                  s.trading_prod_key_path, max_order_cost=gw_cap),
             "shadow": shadow_trading(max_order_cost=gw_cap, exchange=self.shadow_ex)}
+        if s.staging:
+            log.warning("STAGING (BTCFLOW_STAGING): no production trading is wired; shadow and Kalshi demo only")
         # The synchronous store, not the buffered writer: a bracket must be on disk before its order is sent.
         trading_config = TradingConfig(
             enabled=s.trading_enabled, max_open_positions=s.trading_max_open_positions,
@@ -460,7 +466,7 @@ class Runtime:
         self.pm_shadow_ex = None
         self.you_poly_trading: TradingService | None = None  # phone_trading["polymarket_15m"]
         self.you_poly5_trading: TradingService | None = None  # phone_trading["polymarket_5m"]
-        if s.polymarket_key_id and s.polymarket_secret_key is not None:
+        if s.polymarket_key_id and s.polymarket_secret_key is not None and not s.staging:  # staging: no pm_prod
             self._build_polymarket(trading_config)
         # The Play tabs, keyed by the table's play keys ("kalshi", "polymarket", "polymarket_5m").
         venues = {market("kalshi_15m").play_key: PlayVenue(
@@ -509,8 +515,9 @@ class Runtime:
         unavailable: dict[str, str] = {}
         spec = perp("kalshi_btc_perp")
         for env in PERP_ENVS:
-            if env == "perp_prod" and not s.trading_enabled:
-                unavailable[env] = "Production trading is turned off on this server (BTCFLOW_TRADING_ENABLED)."
+            if env == "perp_prod" and (s.staging or not s.trading_enabled):
+                unavailable[env] = ("This is a staging server: no production trading (BTCFLOW_STAGING)." if s.staging
+                                    else "Production trading is turned off on this server (BTCFLOW_TRADING_ENABLED).")
                 continue
             client, auth, why = margin_from_settings(env, *keys[env], subaccount=s.perps_subaccount,
                                                      max_notional=s.perps_order_hard_ceiling)

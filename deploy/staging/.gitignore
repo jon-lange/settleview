@@ -1,0 +1,4 @@
+# Staging's own secret files (deploy/postgres/make_secrets.py deploy/staging/secrets) and the optional Kalshi DEMO key
+secrets/
+keys/*
+!keys/.gitkeep

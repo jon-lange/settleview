@@ -33,6 +33,12 @@ RENAMED = {"BTCFLOW_LOG_FILE": "BTCFLOW_FILE_LOG"}
 BOT_USERNAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{1,28}[Bb][Oo][Tt]")
 
 
+# The settings a staging deployment (BTCFLOW_STAGING) refuses to start with: every production credential and switch.
+STAGING_REFUSED = ("trading_enabled", "trading_prod_key_id", "trading_prod_key_path", "agent_allow_production",
+                   "polymarket_key_id", "polymarket_secret_key", "kalshi_key_id", "kalshi_private_key_path",
+                   "telegram_bot_token")
+
+
 class FileValueSource(PydanticBaseSettingsSource):
     """`BTCFLOW_<NAME>_FILE` -> the setting `<name>` read from that file (environment variables only)."""
 
@@ -125,6 +131,13 @@ class Settings(BaseSettings):
     kalshi_key_id: str | None = None
     kalshi_private_key_path: Path | None = None
 
+    # Staging (BTCFLOW_STAGING; deploy/staging/, docs/operations.md "Staging and the deploy gate"): the same image as
+    # production with no real-money path. On, the start is refused while any production credential or switch is set
+    # (STAGING_REFUSED: the production trading key and switch, agents in production, the Polymarket US keys, whose
+    # only trading mode besides shadow is production, the read-only production Kalshi key and the Telegram bot, which
+    # production's bot would fight over), and the composition root wires no production gateway at all: shadow (the
+    # real book, simulated sends) and Kalshi demo when demo keys are configured.
+    staging: bool = False
     # Human-confirmed trading. Separate keys per environment; never the read-only kalshi_key_*.
     trading_enabled: bool = False  # master switch for PRODUCTION only
     trading_demo_key_id: str | None = None  # BTCFLOW_TRADING_DEMO_KEY_ID
@@ -243,6 +256,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate(self) -> Settings:
+        if self.staging:
+            on = [f"BTCFLOW_{name.upper()}" for name in STAGING_REFUSED if getattr(self, name) not in (None, False)]
+            if on:
+                raise ValueError("BTCFLOW_STAGING is on, so no real-money path may be configured: unset "
+                                 + ", ".join(on) + " (docs/operations.md, \"Staging and the deploy gate\")")
         if self.workers != 1:
             raise ValueError("workers must be 1: the app has a single writer task and in-memory trading state (KTD3)")
         if self.perps_warn_red >= self.perps_warn_amber:

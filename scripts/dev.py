@@ -10,6 +10,8 @@
     python scripts/dev.py experiments report        # scripts/experiments.py, the research data mounted read-only
     python scripts/dev.py script scripts/x.py ...   # any research script the same way
     python scripts/dev.py evals run pipelines/pr.toml   # python -m evals ... (also: evals test | export | review)
+    python scripts/dev.py smoke --project settleview-staging   # the deploy gate's READ-ONLY smoke suite against a
+                                                    # running stack (scripts/smoke.py; also --wait S, --no-browser)
     python scripts/dev.py shell                     # a bash shell in the container (the checkout at /app)
     python scripts/dev.py run python -m ...         # any command in the container
     python scripts/dev.py build                     # rebuild the image (every command does this first; cached)
@@ -59,7 +61,8 @@ PYTEST = ["python", "-m", "pytest", "-p", "no:cacheprovider"]
 IN_CONTAINER_TOOLS = {"ruff", "imports"}  # quality.py tools that need the project's Python environment
 SQLITE_FILES = re.compile(r".*\.db(-wal|-shm|-journal)?$")
 KEY_IN_CONTAINER = "/run/evals/api-key"  # where `evals ... --api-key-file F` sees F (mounted read-only)
-COMMANDS = ("build", "test", "postgres-tests", "quality", "experiments", "script", "evals", "shell", "run", "down")
+COMMANDS = ("build", "test", "postgres-tests", "quality", "experiments", "script", "evals", "smoke", "shell", "run",
+            "down")
 
 
 def say(msg: str) -> None:
@@ -292,6 +295,9 @@ def main(argv: list[str]) -> int:
             return script(args, data)
         if cmd == "evals":
             return evals(args, data)
+        if cmd == "smoke":  # the host half (Docker, read-only) starts the dev image itself, beside the stack's app
+            return subprocess.run([sys.executable, str(ROOT / "scripts" / "smoke.py"), *args],  # noqa: S603
+                                  cwd=ROOT).returncode
         if cmd == "shell":
             return in_container(["bash"], tty=True)
         if not args:

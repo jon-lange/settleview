@@ -1,0 +1,121 @@
+# Staging: the production compose.yaml, the same image, and NO real-money path (docs/operations.md, "Staging and the
+# deploy gate"). An override on top of compose.yaml, its own project (settleview-staging), so its own volumes,
+# network and containers; never the live `settleview` project:
+#
+#   python deploy/postgres/make_secrets.py deploy/staging/secrets      # once: staging's own passwords (git-ignored)
+#   docker compose -p settleview-staging --env-file deploy/staging/staging.env \
+#     -f compose.yaml -f deploy/staging/compose.staging.yaml up -d --wait
+#   python scripts/dev.py smoke --project settleview-staging            # the read-only smoke suite
+#   docker compose -p settleview-staging -f compose.yaml -f deploy/staging/compose.staging.yaml down --volumes
+#
+# scripts/deploy.py runs exactly this before every production deploy. Ports on this PC's loopback only: 18000 (the
+# phone listener), 18001 (the PC listener; pair a browser with `docker compose -p settleview-staging exec app python -m
+# btc_signal_engine.ops pair-pc`), 18002 (the agent listener). The app listens on the same numbers inside the
+# container, because the PC listener answers only to Host localhost:<its own port>.
+#
+# Why production is impossible here, by construction (each layer alone would be enough):
+#   - BTCFLOW_STAGING=true: the settings refuse to start with any production credential or switch set
+#     (bootstrap/config.py STAGING_REFUSED), and the app builds no production gateway at all (bootstrap/app.py).
+#   - Neither `.env` is read: the app's env_file is reset, and the production key settings' *_FILE variables are
+#     removed, so nothing names a production key file.
+#   - Every secret file comes from deploy/staging/secrets/, never ./secrets: the production key files are not mounted,
+#     and the app mounts only its database password, the OTLP headers, the Anthropic key and the Kalshi DEMO key id.
+#   - rec-pm-quotes (it needs the Polymarket US keys, which are production keys) runs only with the profile
+#     `polymarket-recorder`, which staging never turns on.
+# tests/deploy/test_staging.py checks all of this; the smoke suite checks it again on the running stack.
+#
+# Trading modes in staging: Shadow (Kalshi's and Polymarket's real books, simulated sends; no key needed) and Sandbox
+# (Kalshi's demo exchange) only when deploy/staging/secrets/trading_demo_key_id holds a DEMO key id and
+# BTCFLOW_TRADING_DEMO_KEY_PATH (in deploy/staging/staging.env) names its key file mounted below.
+#
+# Offline (CI, a laptop with no venue access, tests): add `-f deploy/staging/compose.offline.yaml`, which cuts the
+# project's network off from the internet (the app then shows its feeds as down; the smoke suite still passes).
+
+name: settleview-staging
+
+x-staging-app-env: &staging-app-env
+  BTCFLOW_STAGING: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${SETTLEVIEW_STAGING_OTLP_ENDPOINT:-}
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=staging
+
+services:
+  migrate:
+    environment:
+      <<: *staging-app-env
+
+  app:
+    env_file: !reset []
+    environment:
+      <<: *staging-app-env
+      # The production credentials' files: not named at all (the settings would refuse them anyway). Each !reset is
+      # written here, not in the anchor: older compose releases drop a !reset that arrives through a merge key.
+      BTCFLOW_POLYMARKET_KEY_ID_FILE: !reset null
+      BTCFLOW_POLYMARKET_SECRET_KEY_FILE: !reset null
+      BTCFLOW_TELEGRAM_BOT_TOKEN_FILE: !reset null
+      BTCFLOW_KALSHI_KEY_ID_FILE: !reset null
+      BTCFLOW_TRADING_PROD_KEY_ID_FILE: !reset null
+      BTCFLOW_API_PORT: 18000
+      BTCFLOW_PC_PORT: 18001
+      BTCFLOW_AGENT_PORT: 18002
+      # Agent mode on, so the smoke suite exercises the agent API (sessions there can only pin shadow or demo).
+      BTCFLOW_AGENT_ENABLED: "true"
+      BTCFLOW_TRADING_DEMO_KEY_PATH: ${BTCFLOW_TRADING_DEMO_KEY_PATH:-}
+      OTEL_SERVICE_NAME: settleview-staging-app
+    secrets: !override [pg_app_password, otlp_headers, anthropic_api_key, trading_demo_key_id]
+    ports: !override
+      - "127.0.0.1:18000:18000"
+      - "127.0.0.1:18001:18001"
+      - "127.0.0.1:18002:18002"
+    # The Kalshi DEMO key file (optional): put it in deploy/staging/keys/ and set BTCFLOW_TRADING_DEMO_KEY_PATH=
+    # /keys/<name> in deploy/staging/staging.env. Never a production key: the settings refuse every production one.
+    volumes:
+      - ./deploy/staging/keys:/keys:ro
+
+  rec-pm-quotes:
+    profiles: [polymarket-recorder]  # needs the Polymarket US keys (production keys): never in staging
+    environment:
+      <<: *staging-app-env
+      BTCFLOW_POLYMARKET_KEY_ID_FILE: !reset null
+      BTCFLOW_POLYMARKET_SECRET_KEY_FILE: !reset null
+    secrets: !override [pg_recorder_password, otlp_headers]
+
+  rec-pm-settle:
+    environment:
+      <<: *staging-app-env
+      OTEL_SERVICE_NAME: settleview-staging-rec-pm-settle
+
+  openobserve:
+    env_file: !override
+      - path: ./deploy/staging/secrets/openobserve.env
+        required: true
+    ports: !override
+      - "127.0.0.1:15080:5080"
+
+# Every secret from staging's own folder (deploy/postgres/make_secrets.py deploy/staging/secrets), never ./secrets.
+secrets:
+  otlp_headers:
+    file: ./deploy/staging/secrets/otlp_headers
+  pg_superuser_password:
+    file: ./deploy/staging/secrets/pg_superuser_password
+  pg_app_password:
+    file: ./deploy/staging/secrets/pg_app_password
+  pg_research_password:
+    file: ./deploy/staging/secrets/pg_research_password
+  pg_backup_password:
+    file: ./deploy/staging/secrets/pg_backup_password
+  pg_recorder_password:
+    file: ./deploy/staging/secrets/pg_recorder_password
+  polymarket_key_id:
+    file: ./deploy/staging/secrets/polymarket_key_id
+  polymarket_secret_key:
+    file: ./deploy/staging/secrets/polymarket_secret_key
+  anthropic_api_key:
+    file: ./deploy/staging/secrets/anthropic_api_key
+  telegram_bot_token:
+    file: ./deploy/staging/secrets/telegram_bot_token
+  kalshi_key_id:
+    file: ./deploy/staging/secrets/kalshi_key_id
+  trading_demo_key_id:
+    file: ./deploy/staging/secrets/trading_demo_key_id
+  trading_prod_key_id:
+    file: ./deploy/staging/secrets/trading_prod_key_id
