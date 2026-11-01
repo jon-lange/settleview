@@ -184,9 +184,11 @@ the headers file, the service name and the resource attributes.
 GenAI views in one UI; AGPL-3.0, run unmodified):
 
 ```bash
-python deploy/postgres/make_secrets.py        # adds secrets/openobserve.env and secrets/otlp_headers (keeps the rest)
+python deploy/postgres/make_secrets.py        # adds secrets/openobserve.env and an empty secrets/otlp_headers
 echo OTEL_EXPORTER_OTLP_ENDPOINT=http://openobserve:5080/api/default >> .env
 docker compose --profile observability up -d  # OpenObserve, and the services recreated with the endpoint
+python deploy/openobserve/ingest_token.py     # the services' ingest-only credential into secrets/otlp_headers
+docker compose up -d --force-recreate app rec-pm-quotes rec-pm-settle   # they read it at their start
 # UI: http://localhost:5080 (this PC only), user admin@settleview.local, the password in secrets/openobserve.env
 docker compose --profile observability stop openobserve   # pause it (the app keeps running; exports retry, then drop)
 # off again: remove the line from .env, then `docker compose up -d`; `docker volume rm settleview_settleview-o2` deletes its data
@@ -197,11 +199,22 @@ a share of the host's memory, not of its 1 GiB limit), sends no usage reports an
 Its write-ahead log files are 512 MB sparse files (one per signal), so `docker system df` shows about 2 GB for the
 volume while the disk actually used is a few MB to start with (`du` inside a container mounting it). Its UI is published on `127.0.0.1`
 only. The root password is read once, on its first start, from the env file (its image has no shell, so it cannot read
-a secret file). To change it: change it in the UI, delete `secrets/openobserve.env` and `secrets/otlp_headers`, run
-`O2_ROOT_PASSWORD=<new> python deploy/postgres/make_secrets.py`, then `docker compose up -d --force-recreate app
-rec-pm-quotes rec-pm-settle`. Another backend: write its headers into `secrets/otlp_headers` and point the endpoint at
+a secret file). To change it: change it in the UI, delete `secrets/openobserve.env`, run
+`O2_ROOT_PASSWORD=<new> python deploy/postgres/make_secrets.py` (the services' header does not change with it).
+Another backend: write its headers into `secrets/otlp_headers` and point the endpoint at
 it. If the backend is down, exports fail quietly in the background (a few WARNINGs from `opentelemetry`); the app does
 not wait for it, and a stop waits at most 5 s for the last export.
+
+**The services' credential is ingest-only** (review B4#14). `secrets/otlp_headers`, which the app and the recorders
+mount, holds OpenObserve's organization ingestion token (`Authorization=Basic ...` of `otlp@settleview.local:<token>`),
+never the root login: with it the exporters can send logs, metrics and traces, and every other API (search, streams,
+users, settings) answers 401 (checked against v1.1.1, 2026-11-01). `deploy/openobserve/ingest_token.py` (standard
+library; `--url` for another address, e.g. an SSH tunnel on Swarm, with `O2_ROOT_PASSWORD` in the environment instead of
+the env file) reads the token with the root login, checks both halves (an OTLP batch is accepted, the stream list is
+refused) and only then writes the header; run again it changes nothing. `--rotate` issues a new token (the old one
+stops at once): run it, then recreate the three services. The root password lives only in `secrets/openobserve.env`,
+which only the `openobserve` container reads. A deployment made before 2026-11-01 has a root-derived header: run the
+script once (see "Deploying: the 2026-11-01 least-privilege steps").
 
 **What is exported**
 
@@ -339,31 +352,76 @@ the two and why (JSON as text, unbounded VARCHAR, booleans, row order):
 
 The driver is psycopg 3 (`pip install -e ".[postgres]"`, in the Docker image and the dev container).
 
-**Schemas and roles.** The app's tables are in the schema `app` (made by its Alembic migrations: `ops migrate` or the
-app's start), the recorders' in `research` (made by the recorders on start). Each connection sets its schema, so no
-SQL names one. Three roles, made by `deploy/postgres/initdb.sh` on the first start of a new `settleview-pg` volume:
+**Schemas and roles.** The app's tables are in the schema `app` (made by its Alembic migrations: the `migrate` job,
+`ops migrate`, or the app's start with `BTCFLOW_DB_MIGRATE=auto`), the recorders' in `research` (made by the recorders
+on start). Each connection sets its schema, so no SQL names one. The roles, made by `deploy/postgres/initdb.sh` and
+`deploy/postgres/roles.sh` on the first start of a new `settleview-pg` volume:
 
 | Role | Used by | Rights |
 |---|---|---|
-| `settleview_app` | the app, both recorders, migrations, `ops migrate-sqlite-to-pg` | owns the schemas `app` and `research` |
+| `settleview_app` | the app, the `migrate` job, `ops migrate` | owns the schema `app`; `SELECT` on `research` (the data alert, freshness), nothing else there |
+| `settleview_recorder` | both recorders | owns the schema `research` and its tables; no privilege on `app` (not even `USAGE`) |
 | `settleview_research` | research scripts, notebooks, ad-hoc `psql` | `SELECT` on both schemas (also on tables made later), every transaction read-only |
 | `settleview_backup` | the `backup` service | `pg_read_all_data`, read-only |
 | `postgres` (superuser) | administration only | its password is a secret file; no service uses it |
 
-No other role may connect, and nobody may create objects in `public`.
+No other role may connect, and nobody may create objects in `public`. Least privilege (review B4#4): a recorder bug or
+a leaked recorder password can neither read nor change a trading table, a session or a setting, and the app can no
+longer write research data. `ops migrate-sqlite-to-pg` (the one-time cut-over copy, done 2026-10-31) wrote `research`
+as `settleview_app`; to run it again on a deployment with the recorder role, run it as the superuser.
+
+### Postgres: the recorder role on an existing deployment
+
+`deploy/postgres/roles.sh` makes `settleview_recorder` (its password from `secrets/pg_recorder_password`), gives it the
+schema `research` and every table in it (indexes and rows stay as they are), grants `SELECT` there to `settleview_app`
+and `settleview_research` (also on tables made later), and revokes everything else. It is idempotent: a new volume runs
+it after `initdb.sh`; an existing volume needs it once, by hand, before the recorders start with the new role:
+
+```bash
+python deploy/postgres/make_secrets.py          # adds secrets/pg_recorder_password (keeps every other file)
+docker compose up -d postgres                   # recreated with the new secret and roles.sh (a few seconds' restart)
+docker compose exec -T postgres bash /docker-entrypoint-initdb.d/20-roles.sh   # "settleview roles: ..." when done
+docker compose up -d                            # the migrate job, the app, the recorders as settleview_recorder
+```
+
+Between the third and the fourth line, recorders still running as `settleview_app` cannot write (they keep their rows
+in memory and retry, as in a database outage), so run the two back to back. Check:
+`docker compose exec postgres psql -U postgres -d settleview -c "\dn+ research"` names `settleview_recorder` as the
+owner. On Swarm run the same script with `docker exec` in the postgres task; on a managed server run the SQL inside
+`roles.sh` as the admin user (a member of `settleview_app` and `settleview_recorder`, so it may move the ownership).
+
+### Postgres: migrations as a one-off job
+
+Compose runs the schema migrations in their own service, `migrate` (`python -m btc_signal_engine.ops migrate`): at every
+`docker compose up` it starts once Postgres is healthy, upgrades the schema to the latest revision (nothing new is a
+no-op), and exits 0; the app starts only after that (`depends_on: service_completed_successfully`). A failed migration
+stops there, before an app starts on a half-new schema: `docker compose logs migrate` says why, and
+`docker compose ps -a` shows it `Exited (1)`. The app runs with `BTCFLOW_DB_MIGRATE=check`: it reads the revision and
+refuses to start, exit 75, while the schema is behind (on Swarm, which ignores `depends_on`, an app task that starts
+first is restarted until the job has run).
+
+| Variable | Purpose |
+|---|---|
+| `BTCFLOW_DB_MIGRATE` | `auto` (default): the app migrates at its start (development, the portable supervisor, one process). `check`: a job migrates (compose's `migrate` service, a Swarm one-shot task, an ACA / ECS job); the app only checks the revision. Any other value stops the start. |
+
+Migration 0001 is frozen (review B4#13): its tables are written out in the migration, not imported from
+`adapters/sqlite/tables.py`, so an old revision always creates the same schema; later revisions each create or alter
+their own part and check before they act. `tests/storage/test_schema.py` migrates a fresh SQLite and a fresh Postgres
+database to head and compares them with `tables.py`: a new table or column without its migration fails that test.
 
 **First start (compose).**
 
 ```bash
-python deploy/postgres/make_secrets.py   # ./secrets/pg_{superuser,app,research,backup}_password (kept if present)
+python deploy/postgres/make_secrets.py   # ./secrets/pg_{superuser,app,research,backup,recorder}_password (kept if present)
 docker compose up -d --build
-docker compose logs postgres | grep "settleview initdb"   # roles and schemas were made
+docker compose logs postgres | grep "settleview "   # "settleview initdb: ..." and "settleview roles: ..."
 ```
 
 The passwords are random, never printed, git- and docker-ignored. On Swarm create them as secrets instead
 (`docker secret create pg_app_password <file>`) and mark the compose `secrets:` entries `external: true`. The init
 script runs only on an empty volume: to change a password later, `ALTER ROLE settleview_app PASSWORD '...'` in psql,
-write the same value to its file, then `docker compose up -d --force-recreate app rec-pm-quotes rec-pm-settle`.
+write the same value to its file, then `docker compose up -d --force-recreate app rec-pm-quotes rec-pm-settle` (the
+recorders' role: write the new file and run `roles.sh` again, which sets it).
 
 **Tools.** `docker compose exec postgres psql -U postgres -d settleview` (inside the container, no port needed). For a
 desktop tool on this PC, uncomment the `127.0.0.1:5432:5432` port of the `postgres` service and connect as
@@ -489,9 +547,10 @@ reconciles on start.
 - **Major version** (17 to 18): a new data directory. Take a dump (`--once` above), stop the writers, start the new
   version on a new volume (a new volume name in `compose.yaml`), restore the dump, check it, start the services; keep
   the old volume until the new one has run a week. Run the restore drill with the new image first.
-- **Schema** (a new Alembic migration): the app migrates on start, in one transaction under an advisory lock (two
-  services starting together never migrate twice). By hand: `docker compose run --rm --no-deps app python -m
-  btc_signal_engine.ops migrate`. Take a dump first for anything more than an added table or column.
+- **Schema** (a new Alembic migration): the `migrate` job applies it before the app starts (`docker compose up -d`;
+  "Postgres: migrations as a one-off job"), in one transaction under an advisory lock (two processes starting together
+  never migrate twice). By hand: `docker compose run --rm migrate`. Take a dump first for anything more than an added
+  table or column.
 - **0022** (2026-11-01) adds two indexes, `ix_trading_brackets_session` and `ix_agent_journal_kind` (kind, id). Both
   tables are small (about 200 brackets and 7,600 journal rows on the live database that day), so the plain CREATE INDEX
   in the migration's transaction takes milliseconds; it holds writes to those two tables only for that long and, like
@@ -734,7 +793,28 @@ image is labelled with its commit: `org.opencontainers.image.revision`, and tele
 up to 60 s: the log says `SIGTERM: stopping gracefully`, then `process exiting`; before 2026-10-31 uvicorn re-raised
 the signal and the app died at once with exit 143, nothing flushed: [docs/solutions/2026-10-31-sigterm-uvicorn-reraise-and-db-outage.md](solutions/2026-10-31-sigterm-uvicorn-reraise-and-db-outage.md)) and starts the new one; a recorder is restarted
 only when its image changed, and loses at most a second of quotes. A change to the `postgres` service's settings in
-`compose.yaml` recreates it too: a database outage of a few seconds that the app's writer rides out.
+`compose.yaml` recreates it too: a database outage of a few seconds that the app's writer rides out. The `migrate` job
+runs first at every `up` and the app waits for it ("Postgres: migrations as a one-off job").
+
+**The 2026-11-01 least-privilege steps** (once, on a deployment made before that day; in the window between agent
+sessions, as any app restart): the recorders' role and the ingest-only telemetry credential. After `git checkout` of
+the new commit and `docker build ... -t settleview:local .` in the deploy checkout:
+
+```bash
+python deploy/postgres/make_secrets.py          # adds secrets/pg_recorder_password; every existing file is kept
+python deploy/openobserve/ingest_token.py       # only with the observability profile running: the ingest-only header
+docker compose up -d postgres                   # Postgres recreated with the new secret and roles.sh (seconds)
+docker compose exec -T postgres bash /docker-entrypoint-initdb.d/20-roles.sh   # prints "settleview roles: ..."
+docker compose up -d                            # migrate job, then the app; the recorders as settleview_recorder
+docker compose ps -a                            # migrate Exited (0); app, rec-pm-quotes, rec-pm-settle healthy
+```
+
+`ingest_token.py` before `up -d`: the recreated app and recorders read the new header at their start, so no second
+restart. The old header held OpenObserve's root login; changing the root password in its UI afterwards is a sensible
+extra (see "Observability"). Rolling back the code needs no database change: the old compose file runs the recorders
+as `settleview_app`, which can then read `research` but not write it, so on a rollback also run
+`docker compose exec postgres psql -U postgres -d settleview -c "ALTER SCHEMA research OWNER TO settleview_app"` and the
+same for each table (or keep the recorders stopped until the roll forward).
 
 **Without Docker**: stop the app gracefully **before** checking out new code, then check out, then let it start
 again. The command is the same on every OS. `--data-dir` is the folder that holds the app's database (the parent of
@@ -851,7 +931,11 @@ docker compose stop               # stop all (the app gets 60 s to shut down cle
   database and no network on purpose: a venue or database outage is not cured by a restart. Data freshness stays an
   alert and readiness signal: `ops fresh pm-quotes` (2 minutes) / `pm-settle` (10 minutes), the app's `data` alert and
   `/api/health` `recorders`. Plain compose restarts an *exited* container, not an *unhealthy* one; Swarm and cloud
-  platforms do, so these checks double as liveness probes there.
+  platforms do, so these checks double as liveness probes there. So that a wedged recorder is restarted under plain
+  compose too, it ends itself with exit 75: its main loop not beating for 5 minutes (`pm-quotes`; 15 for `pm-settle`;
+  a watch thread, `bootstrap/heartbeat.py`), one quotes lane whose own loop has not turned for 3 minutes (a WebSocket
+  call that never returns), or no quote recorded for 10 minutes without a venue outage. The `migrate` job is not a
+  long-running service: `Exited (0)` is its healthy state.
 - **Network**: this PC uses `http://localhost:8001` (published on `127.0.0.1` only) in a browser paired once with
   `ops pair-pc`; phones use `http://<this PC's LAN address>:8000` with the PIN; external agents use
   `http://localhost:8002` (published on `127.0.0.1` only) with their session token (see "Running in Docker: who
@@ -872,7 +956,10 @@ the agent's CLI, would see it): each is a compose secret mounted under `/run/sec
 | `anthropic_api_key` | `BTCFLOW_ANTHROPIC_API_KEY` | app |
 | `telegram_bot_token` | `BTCFLOW_TELEGRAM_BOT_TOKEN` | app |
 | `kalshi_key_id`, `trading_demo_key_id`, `trading_prod_key_id` | `BTCFLOW_KALSHI_KEY_ID`, `BTCFLOW_TRADING_{DEMO,PROD}_KEY_ID` | app |
-| `pg_*_password`, `otlp_headers` | the database passwords, the OTLP headers (see "Postgres", "Observability") | as before |
+| `pg_app_password` | `BTCFLOW_DATABASE_PASSWORD` (settleview_app) | postgres, migrate, app |
+| `pg_recorder_password` | `BTCFLOW_DATABASE_PASSWORD` (settleview_recorder) | postgres, rec-pm-quotes, rec-pm-settle |
+| `pg_superuser_password`, `pg_research_password`, `pg_backup_password` | the other roles' passwords (see "Postgres") | postgres; backup (its own) |
+| `otlp_headers` | `OTEL_EXPORTER_OTLP_HEADERS_FILE`: OpenObserve's ingest-only token (see "Observability") | app, rec-pm-quotes, rec-pm-settle |
 
 An **empty file means "not configured"** (that feature stays off), so every file always exists:
 `deploy/postgres/make_secrets.py` creates the missing ones empty. A value in both `.env` and a non-empty file is an
@@ -966,11 +1053,18 @@ Not tried yet; the image and services are built for it. The rules that matter on
   - **Amazon RDS for PostgreSQL** (or Aurora PostgreSQL): version 17, in private subnets with a security group open to
     the ECS tasks only, automated backups with point-in-time restore (retention 7 to 35 days), Multi-AZ optional; the
     password in Secrets Manager, given to the task as `BTCFLOW_DATABASE_PASSWORD` (or a file).
-  - **Roles on a managed server**: run the SQL of `deploy/postgres/initdb.sh` once as the admin user (replace the
-    `\set ...` lines with the passwords; the platform's admin is not a superuser, which this SQL does not need, and
-    on RDS `pg_read_all_data` is granted the same way). Then `ops migrate` (or the app's first start) makes the tables,
-    and `ops migrate-sqlite-to-pg` from a container in the same network copies existing data.
-  - The recorders use the same database (schema `research`), so no file volume is needed in the cloud at all.
+  - **Roles on a managed server**: run the SQL of `deploy/postgres/initdb.sh` and then `deploy/postgres/roles.sh` once
+    as the admin user (replace the `\set ...` lines with the passwords; the platform's admin is not a superuser,
+    which this SQL does not need, and on RDS `pg_read_all_data` is granted the same way). Then the migrate job makes
+    the tables, and `ops migrate-sqlite-to-pg` from a container in the same network copies existing data.
+  - The recorders use the same database (schema `research`, as `settleview_recorder`), so no file volume is needed in
+    the cloud at all.
+- **Migrations are a job, not part of the app's start** (`BTCFLOW_DB_MIGRATE=check` on the app): Container Apps, a
+  Container Apps Job (manual trigger, the app's image, command `python -m btc_signal_engine.ops migrate`) started and
+  awaited before each new app revision; ECS, a one-off `run-task` of the same task definition with that command before
+  the service update; Swarm, the `migrate` service (restart policy on-failure: it runs once and stays `Complete`;
+  `docker service update --force settleview_migrate` re-runs it), and the app's tasks restart until it has run. An app
+  started on an older schema exits 75 with "run the migrate job first".
 - **Secrets**: no `.env` is needed. Give each secret to the service as a file and set `BTCFLOW_<NAME>_FILE`
   (Swarm: `docker secret create` and `secrets:`, mounted under `/run/secrets/`; Container Apps: secrets mounted as a
   volume or referenced as environment variables; ECS: Secrets Manager / Parameter Store values). The recorders need
@@ -978,12 +1072,14 @@ Not tried yet; the image and services are built for it. The rules that matter on
 - **Logs**: stderr in every container; the platform's collector reads it (Container Apps: Log Analytics; ECS:
   CloudWatch via `awslogs`; Swarm: `docker service logs`).
 - **Telemetry**: point `OTEL_EXPORTER_OTLP_ENDPOINT` at the platform's OpenTelemetry collector (Container Apps' managed
-  agent, an ADOT sidecar on ECS) and give its credential, if any, as the headers file (see "Observability").
+  agent, an ADOT sidecar on ECS) and give its credential, if any, as the headers file (see "Observability"): an
+  ingest-only one, never the backend's admin login.
 - **Sizes**: the compose limits are the starting task / container sizes ("Resource limits and Postgres settings").
 - **Health**: the image's healthcheck is the app's liveness probe (`GET /api/health` on loopback: open without a
   session, it answers such a caller only `{"status": "up"}`); each recorder's is
-  `python -m btc_signal_engine.ops fresh <name>` (exit 0 / 1). On a platform without exec probes, the app's Telegram
-  `data` alert covers the recorders.
+  `python -m btc_signal_engine.ops alive <name>` (exit 0 / 1: the process-local heartbeat; `ops fresh <name>` is the
+  readiness / alert signal, not a restart trigger). On a platform without exec probes, the recorders' own stall exits
+  and the app's Telegram `data` alert cover them.
 - **Network exposure**: never on the internet. Keep ingress internal (Container Apps internal ingress, an ECS service
   without a public load balancer, Swarm without a public port) and reach it over a VPN (WireGuard, Tailscale, the
   cloud's VPN gateway). The app has no HTTPS and no internet-grade login. Never route ingress to the PC listener
@@ -1017,7 +1113,7 @@ Not tried yet; the image and services are built for it. The rules that matter on
    restore"). From the SQLite app: the final copies of the cut-over (see "Postgres: moving the SQLite data in").
 2. Copy the project and a `.env` to the server, run `python deploy/postgres/make_secrets.py`, then
    `docker compose up -d --build` and restore or copy the data in. Each container runs one process as a non-root
-   user. Schema migrations apply on start.
+   user. Schema migrations apply in the `migrate` job before the app starts.
 3. The compose file publishes the PC listener (8001) and the agent listener (8002) on `127.0.0.1` only and the phone
    port (8000) on the network. Pair the browser you administer from: `docker compose exec app python -m
    btc_signal_engine.ops pair-pc` (from another machine, through an SSH tunnel to the server's 8001).
