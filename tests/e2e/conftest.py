@@ -94,6 +94,11 @@ class Guard:
         page.on("dialog", self._dialog)
 
     def _console(self, msg) -> None:
+        # Alpine reports a directive it cannot evaluate (the CSP build: anything but a property path, or a path to
+        # nothing) and an expression that threw as console warnings: both are failures.
+        if msg.type == "warning" and msg.text.startswith("Alpine"):
+            self.problems.append(f"console warning: {msg.text.strip()}")
+            return
         if msg.type != "error":
             return
         url = (msg.location or {}).get("url") or ""

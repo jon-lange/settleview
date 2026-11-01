@@ -284,5 +284,13 @@
     });
   };
 
-  window.BTC = { api: api, fmt: fmt };
+  // x-model under Alpine's CSP build (web/vendor/alpine-csp-*.min.js), which cannot assign to a path: a component's
+  // getter returns this {get, set} pair for one property of an object, e.g.
+  //   get qtyModel() { return BTC.model(this, 'qty'); }        <input x-model.number="qtyModel">
+  // (`this` is the component, or any reactive object such as this.form). Modifiers (.number, .lazy) still apply.
+  function model(obj, key) {
+    return { get: function () { return obj[key]; }, set: function (v) { obj[key] = v; } };
+  }
+
+  window.BTC = { api: api, fmt: fmt, model: model };
 })();
