@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.hypothesis/
+*.egg-info/
+build/
+dist/
+
+# Local data and secrets
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+.import_linter_cache/
+data_run.log
+*.pem
+data_backfill.log
+
+# Kalshi private key (read-only account link) - never commit
+key.pem
+data_backtest30.log
+
+# runtime logs (the watchdog's and anything else written next to the repo)
+*.log
+
+# Publishing safety net (virtual environments of any name, logs, secrets)
+.venv*/
+.env.*
+!.env.example
+
+# e2e browser test screenshots
+tests/e2e/.artifacts/
+
+# Postgres passwords for compose (deploy/postgres/make_secrets.py writes them); never commit
+secrets/
+
+# Local compose override written at cut-over (host paths of key files); never commit
+compose.override.yaml
+
+# deploy/swarm/render_stack.py output (absolute paths of this checkout)
+settleview-stack.json
+
+# Eval run output and the error-analysis pack (redacted, but the user's own trading history): never committed
+evals/results/
+evals/review/*
+!evals/review/README.md
+
+# Local, per-machine agent notes (never published)
+CLAUDE.local.md

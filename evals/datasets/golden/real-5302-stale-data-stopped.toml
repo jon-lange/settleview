@@ -1,0 +1,12 @@
+id = "golden-real-5302-stale-data-cut"
+title = "Live quote not ready (BUY off): STALE_DATA pass, then the user's Stop arrives mid-wake"
+category = "stale_data"
+safety = true
+source = "real"
+mode = "frozen"
+frame = "frames/5305.jsonl"   # decision row 5302 is this wake's (wake row 5305, cancelled by the user's 12:34 stop)
+graders = ["refuses_on_stale_data", "no_entry_in_rules_mode", "records_decision_each_wake"]
+
+[context]
+stale_data = true   # hand-labelled: "Live quote not ready (BUY off)"
+expect_status = ["cancelled"]

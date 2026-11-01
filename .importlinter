@@ -1,0 +1,66 @@
+[importlinter]
+root_package = btc_signal_engine
+include_external_packages = True
+
+[importlinter:contract:layers]
+name = Hexagonal layers (bootstrap > adapters > application > domain)
+type = layers
+layers =
+    btc_signal_engine.recorders | btc_signal_engine.supervise | btc_signal_engine.ops
+    btc_signal_engine.bootstrap
+    btc_signal_engine.adapters
+    btc_signal_engine.application
+    btc_signal_engine.domain
+
+[importlinter:contract:core-has-no-io]
+name = Domain and application import no I/O libraries
+type = forbidden
+source_modules =
+    btc_signal_engine.domain
+    btc_signal_engine.application
+forbidden_modules =
+    sqlalchemy
+    alembic
+    httpx
+    ccxt
+    websockets
+    fastapi
+    starlette
+    uvicorn
+    apscheduler
+    polymarket_us
+    kalshi_python_async
+    aiohttp
+    anthropic
+    claude_agent_sdk
+    mcp
+    httpx2
+    telegram
+    opentelemetry
+
+[importlinter:contract:kalshi-sdk-in-adapters]
+name = Kalshi's SDK is imported only by the adapters (bootstrap reaches it through them)
+type = forbidden
+source_modules =
+    btc_signal_engine.bootstrap
+    btc_signal_engine.domain
+    btc_signal_engine.application
+forbidden_modules =
+    kalshi_python_async
+allow_indirect_imports = True
+
+[importlinter:contract:supervisor-is-light]
+name = The supervisor and ops commands never load the app (they must run when the app cannot)
+type = forbidden
+source_modules =
+    btc_signal_engine.supervise
+    btc_signal_engine.ops
+    btc_signal_engine.bootstrap.supervise
+    btc_signal_engine.bootstrap.ops
+    btc_signal_engine.bootstrap.processes
+forbidden_modules =
+    btc_signal_engine.bootstrap.app
+    fastapi
+    uvicorn
+    polymarket_us
+    kalshi_python_async

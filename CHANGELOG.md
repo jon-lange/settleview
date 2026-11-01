@@ -1,0 +1,105 @@
+# Changelog
+
+All notable user-visible changes to Settleview. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Fixed
+- Ruff's findings fixed: `zip()` calls state whether lengths must match (equal-length pairs are now checked), loop closures bind their variables, swallowed errors are logged or narrowed, and an index bound check no longer disappears under `python -O`.
+- A deploy no longer crash-loops the app while the backup service's start-of-day `pg_dump` runs: a migration that meets a table lock rolls back and retries with backoff for up to `BTCFLOW_DB_MIGRATION_LOCK_WAIT_S` (120 s), logging who holds the lock, and the backup's start-of-day dump waits `BACKUP_START_DELAY` (300 s) after the service starts.
+- An order whose answer was lost stays unknown until the venue's fills prove its outcome, on Kalshi, Polymarket US and perps: never closed as "not found" because a list did not show it, booked at its real average price, given its take profit (perps: the stop and take profit approved with it, else marked unprotected), and still unprovable ones are shown as "could not confirm whether your order filled". A production position can be sold after a credential problem drops the mode to sandbox. Polymarket US IOC answers still pending are read until final; only 400/401/403/404/422 count as a rejection.
+
+### Security
+- Quality gates on every push and locally: `python scripts/quality.py` runs Ruff, Hadolint, ShellCheck and Trivy (the image's fixable HIGH / CRITICAL vulnerabilities and secrets, the Dockerfile's misconfigurations, secrets in the repository) from pinned official images; CI's `lint` and `trivy` jobs run the same script and upload SARIF to code scanning where available. GitHub Actions are pinned by commit SHA.
+- The Docker image has no fixable HIGH or CRITICAL vulnerability (9 before): `cryptography` 50.0.2 (Windows ARM64 dev hosts keep 46.0.3, the newest with a wheel there), `urllib3` 2.8.0 and `setuptools` 84.0.0 pinned, pip (with its old vendored packages) removed from the image, the base image pinned by digest and Debian's security updates applied at build.
+- **The PC is a paired browser, never a network position.** Run `python -m btc_signal_engine.ops pair-pc` (Docker: `docker compose exec app python -m btc_signal_engine.ops pair-pc`) once and open the one-time link it prints (5 minutes, one browser): the app sets an HttpOnly, SameSite=Strict PC cookie (400 days, signed under a secret in the app's data folder). Without it the PC port shows only "Pair this browser", so a sibling container calling `app:8001` with a spoofed `Host`, a local process without an agent token, or loopback inside the container is no longer the PC. "Sign out PC browsers" on the Phone access card (or `ops signout-pc`) signs every PC browser out. **After deploying this, pair the PC's browser once.**
+- External agents' tool API (`/api/agent/tools`, `/api/agent/call/{tool}`) moved to its own listener, `BTCFLOW_AGENT_PORT` (compose: `http://localhost:8002`), whose requests are never the PC or a person; every tool call, reads too, needs a live session's token. Approving or skipping a proposal, resume, limits, the market band, a mode change and the presence heartbeat need the paired PC or a phone's PIN session.
+- Docker Swarm: `deploy/swarm/render_stack.py` renders the stack file without the PC listener (8001), the agent listener (8002) or OpenObserve (5080), which Swarm would publish on every node; CI fails if the stack publishes any of them.
+- WebSocket upgrades get the same Origin check as other requests; `/login` and `/pair` read at most 2 KB of a body (413 beyond); `/api/health` answers only `{"status": "up"}` without a session; `from_pc` fails closed.
+
+### Added
+- The Telegram pairing card names your own bot: `BTCFLOW_TELEGRAM_BOT_USERNAME` (optional), else the name Telegram's `getMe` reports once the bot runs, else "your bot" (`GET /api/telegram/status` returns `bot_username`).
+- Agent evals, stage 1 (`evals/`, see evals/README.md):
+  - `python -m evals.export` exports journal wakes as redacted JSONL. It is read-only on SQLite or Postgres, and the
+    deny-list scan fails the export on any hit.
+  - `python -m evals.review --n 100` builds the error-analysis pack: 100 stratified real wakes and a label sheet.
+  - 13 code graders, each with a mutation check.
+  - Golden v0: 12 real and 8 crafted items, plus a 2-item adversarial stub, each run frozen (recorded tool results)
+    or simulated (the real runner and order gate on the shadow exchange).
+  - `python -m evals run pipelines/pr.toml` runs on the fake model in CI. `--live` uses the real model with a
+    $300/month budget guard.
+  - Summaries start with an Adjudication line.
+- Each agent wake keeps its exact input for evals: the message the model got (memory, events, observe; secrets
+  scrubbed) in the new `agent_wake_inputs` table (migration 0021), and a fingerprint on the wake row (system prompt
+  and tool specs hashes, prompt versions, model, effort, max tokens, SDK / CLI version, git sha).
+- `BTCFLOW_PUBLIC_URL`: the phone address the Phone access card shows (in Docker the app cannot see the host's LAN address; the card no longer shows the container's).
+- Database outages no longer lose writes: the writer retries an unreachable or busy database until it is back (logged when it starts, every minute, and when it ends; `writer_outage_s` in `/api/health`), finds a refused write by halving its batch so only that write is set aside, and `python -m btc_signal_engine.ops replay-dead-letter [--apply]` replays the dead-letter file idempotently.
+- Postgres connections time out instead of hanging: statement 5 s, lock 2 s, idle in transaction 30 s, TCP keepalives, a 5 s pool wait (`BTCFLOW_DB_*` settings; migrations and bulk moves get a 10 min statement timeout).
+- Compose: every venue / API key (Polymarket, Anthropic, Telegram, Kalshi key ids) is a secret file in `./secrets`, never an environment value; `python deploy/secrets_from_env.py` moves them out of an existing `.env` once (names printed, never values).
+- Compose: rotated container logs on every service (5 x 10 MB), read-only root filesystems, no Linux capabilities, `no-new-privileges`, tini as PID 1; the phone port's host address is `BTCFLOW_PHONE_BIND`.
+- `python -m btc_signal_engine.ops alive pm-quotes | pm-settle`: the recorders' liveness (a heartbeat file), now their healthcheck; data freshness stays an alert.
+- OpenTelemetry (off until `OTEL_EXPORTER_OTLP_ENDPOINT` is set; standard `OTEL_*` settings, the backend credential from a file via `OTEL_EXPORTER_OTLP_HEADERS_FILE`): traces of requests, HTTP calls and SQL, metrics (event-loop lag, loops, writer, database pools, stream state and flaps, recorder freshness, agent wake queue, wakes, tokens and cost, order gate decisions, process memory and CPU) and logs with trace ids, from the app and both recorders. Each agent wake is a GenAI span with a child span per tool call; prompts, output, tool arguments, headers, URL query values, the Telegram bot token, keys and passwords are never exported. The SDK is the new `otel` extra, in the Docker image.
+- An opt-in OpenObserve service (`docker compose --profile observability up -d`, UI on http://localhost:5080, this PC only; 14 days on its own volume). `deploy/postgres/make_secrets.py` also writes its password and the matching OTLP header file.
+- Resource limits on every compose service, and Postgres tuned for a small host (`shared_buffers` 512 MB, longer checkpoints, slow statements logged, `pg_stat_statements`).
+- Images carry their commit (`org.opencontainers.image.revision`, build arg `GIT_SHA`); CI builds linux/amd64 and linux/arm64.
+- Postgres 17 as the app's database (`BTCFLOW_DATABASE_URL`, password from `BTCFLOW_DATABASE_PASSWORD_FILE`): the app's tables in the schema `app`, the research recorders' in `research`, one code path with SQLite (which stays for hosts without Docker and for tests). The driver is the optional `postgres` extra (psycopg 3), included in the Docker image.
+- `compose.yaml` runs a `postgres` service (pinned 17.10, its own `settleview-pg` volume, not published, roles `settleview_app` / `settleview_research` read-only / `settleview_backup` made on first start from secret files; `python deploy/postgres/make_secrets.py` writes them) and a `backup` service: a nightly `pg_dump` to the `settleview-backups` volume, 7 daily + 4 weekly kept, an optional off-site hook. `deploy/postgres/restore-drill.sh` restores a dump into a throwaway server and checks it (CI runs it on every push).
+- `python -m btc_signal_engine.ops migrate-sqlite-to-pg` copies the SQLite files (the app's database, the trade archive, the recorders' file) into Postgres: read-only, streamed with COPY, verified by row counts and sampled checksums, resumable table by table, refusing a table that already has rows unless `--force-table`. `ops migrate` upgrades the database to the latest schema.
+- Research scripts can read either store read-only through one helper (`adapters/sqlite/research.readonly_engine`; `BTCFLOW_RESEARCH_DATABASE_URL` for the read-only role).
+- Runs the same on Windows, Linux and macOS: `compose.yaml` now runs the app and the two Polymarket US research recorders as separate services from one image (restart policies, healthchecks, named volumes, logs to stderr), and `python -m btc_signal_engine.supervise` runs the same processes without Docker (restarts with backoff, one rotated log per process, clean stop). Thin start-at-boot examples for systemd, launchd and Task Scheduler are in `deploy/`.
+- The research recorders are package commands: `python -m btc_signal_engine.recorders pm-quotes | pm-settle` (same tables as before; folder from `BTCFLOW_RESEARCH_DIR`, no hard-coded paths).
+- `python -m btc_signal_engine.ops stop` stops the app before a deploy on any OS (the `deploy_stop.ps1` protocol and exit codes; `--hold` / `release` for the supervisor); `ops fresh` checks a recorder's newest row.
+- Telegram `data` alert (on by default): a research recorder silent for more than 2 minutes (settlement: 10), back again, or no research database; the daily summary adds yesterday's coverage (5m windows recorded of 288, longest gap, settled). `/api/health` shows the recorders.
+- Every setting can be read from a file with `BTCFLOW_<NAME>_FILE` (Docker / Swarm secrets); `BTCFLOW_FILE_LOG=false` logs to stderr only.
+- Docker: this PC opens the app at `http://localhost:8001` (a second listener, `BTCFLOW_PC_PORT`, published on `127.0.0.1` only; since the pairing change the PC is that listener plus a paired browser's cookie) and phones at `http://<PC LAN address>:8000` with the PIN; compose no longer uses `BTCFLOW_LOCAL_CLIENTS` or a fixed network.
+- The Agents tab (renamed from Agent) is a fleet: a summary card (net today, winning of N, budget, API), "Needs you" first in amber, one row per agent with its net and a sparkline, and agents grouped by market with a "N running normally · best · worst" sentence once there are more than eight.
+- One agent's screen shows its live run (else its last), with All activity across every run of the agent, a divider per run ("Run 3 · 22:35–23:41 · ended by restart · +$2.52 · 6 trades") and older rows as you scroll; a fleet-wide "All agents' activity" audit with the same filters.
+- New agent: pick one market first (its rules, mode, "also traded by …", "No rules yet: the model's judgment only", "Off in this app"), then name (the server's default), level, rules, limits and model; type START, then slide to start. "Run this agent again" from an ended run. Presets keep the market and a name template.
+- The bar above the tabs shows "N agents · ±$X", amber with "· N need you"; one agent stops in one tap, several ask "Stop all?" on screen first.
+- Play shows one quiet line when agents are on the market you are looking at ("2 agents here · one holds Up $1.00 (CUSHION100)"); tapping it opens the Agents tab filtered to that market.
+- Record: "By agent" next to "By rule" (net after API, trades, wins, API), with Clone (New agent filled in from that agent's last launch, under a new name) and Retire (PC only; the agent keeps its runs).
+- Fleet limits (off by default, set on the PC): a max loss and an API spend per day across all agents.
+- A bottom tab bar on every screen: Play · Agent · Record (one-word labels, 44 pt targets, glass with a solid fallback under Reduce Transparency).
+- The Record tab: Today / Week / All with your net, trades and wins, the split You / Agent / API cost, results by rule, your trades, the order settings and each market's trading mode — the same numbers as the Telegram daily summary (`GET /api/record/summary`).
+- A running, paused or just-ended agent session shows in a slim bar above the tabs on every screen (state, level, net, trades, time left, a round Stop).
+- The market picker in Play's header: Kalshi → BTC 15m · BTC Perps; Polymarket → BTC 15m · BTC 5m.
+- The Settleview logo (the "strike eye" mark): favicon, home-screen icon, the Agent tab's icon, Ask Settleview's identifier, and a 512 px picture for the Telegram bot.
+- The Agent tab's state in words with its time: Watching, Thinking, Waiting for you, Placing, Paused, Stopped, Ended; the "now" line says what comes next.
+- A short flash on a number that changes on a fill or a settle (off under Reduce Motion); messages such as "Session launched." appear as a toast.
+
+### Changed
+- Licence: Settleview is now under the PolyForm Noncommercial License 1.0.0 (was MIT): free for personal, hobby, research, education and noncommercial use; commercial use needs a separate licence. Third-party notices are in `NOTICE`.
+- Every log line (stderr, files, uvicorn, OpenTelemetry) is scrubbed of secrets, tokens, PINs and passwords, exception text and objects included; database errors never show bound parameters.
+- A SIGTERM (`docker compose stop`, a deploy) is a clean shutdown again: the writer flushes and the drains run (it exited at once with code 143).
+- `ops stop` and the supervisor give the app 60 s to stop (was 30 s), as compose does.
+- The Polymarket quotes recorder keeps its WebSocket and its rows (capped) through a database outage and always closes the socket.
+- `trading_orders.order_id` is indexed (migration 0020).
+- Polymarket prices: a quiet book (the venue sends one only when it changes) stays live up to 30 s while its connection is alive, its trade feed is covered and no trade has come after it; a trade with no book update after it refuses the book ("book feed broken"). The Polymarket trading feed no longer flips between WebSocket and polling on quiet markets (down only on a dead connection or after 10 s without a usable book; up after 5 s clean), so `stream_up` / `stream_down` audit rows and `/api/health` `degraded` mean a real outage. Play and the agents use the same rule as the order path.
+- The Polymarket quotes recorder reconnects when trades arrive without quotes for 60 s, backs off during a venue-side book outage, and exits (code 75, restarted by its policy) after 10 minutes without a quote otherwise; the `data` alert and `/api/health` say "Polymarket is sending trades but no quotes" when that is why it is silent.
+- `BTCFLOW_LOG_FILE` is now `BTCFLOW_FILE_LOG`: the old name read as "the setting `log` from a file" and stopped every container start of `ops` with exit 78; setting it now stops the start with an error naming the new one.
+- With Postgres, the daily maintenance moves Coinbase trades older than the retention window to `trades_archive` in the same database (one transaction per batch) and takes no file backup (the `backup` service or the managed server does); on SQLite it works as before. The compose services no longer use the `settleview-research` volume (the recorders write to Postgres).
+- Settings errors never echo the values (keys, tokens, passwords) in their messages.
+- `scripts/deploy_stop.ps1` and `scripts/record_polymarket_us*.py` are thin wrappers around the package commands; the compose service `btcflow` is now `app`, and its data is on the `settleview-data` volume instead of `./data`.
+- Perps moved from a top-level tab to Kalshi's market picker; when perps are switched off the picker says "BTC Perps · off" and one card explains why.
+- Play's header is the market picker, the countdown and a quiet round KILL button that turns red only while the kill switch is on.
+- One money line (a Live / Paper / Shadow pill and the cash, or "Cash unavailable") replaces the mode banner and the balance line.
+- The call card: sentence case, one hero line, Target and Ride-to in one row, the bar, the setup lights.
+- The order ticket is an opaque dock above the tab bar that never covers content: Up / Down buttons with ▲ / ▼, the amount chips, one info line and the slide.
+- "Your record" and "Mode for … trades" moved from Play to the Record tab.
+- Apple's type scale (34 / 22 / 17 / 15 / 13 / 12), tabular numbers on live figures, iOS system greens and reds (with high-contrast variants) and ▲ / ▼ or + / − beside every coloured number; labels in sentence case.
+- Ask Settleview is shown with the logo mark and its name in indigo (indigo now means AI only); the ✦ sparkle is gone.
+- Agent mode pills read Live / Paper / Shadow; Stop moved from the Agent tab's status card to the tab bar's session bar.
+- Auto rule entries now cap their order at the price the rule matched plus 2¢ (never above the rule's own cap), the same protection as an Assist proposal and a setup; before, Auto sent the IoC at the rule's full cap (e.g. 95¢ for H4). A rule match whose ask jumps more than 2¢ before the order goes out is now refused (`outside_your_bounds`) instead of filled at the higher price.
+- Stopping an agent waits (up to 30 s) for a rule entry in flight to be answered and recorded before the session ends, so its fill, its rule row (and the auto-retire tally) and the end summary's open positions are right.
+- A queued agent wake that would start after the agent was paused or stopped no longer runs; its events wait for the next wake.
+- The agent is now told about another position's fill, stop-out or settlement that happens while it is placing an order (it was silently dropped).
+- The global daily API limit counts every running wake's reserved worst case, so agents waking at once can no longer overshoot it together.
+- The agent's memory shows its open positions, the last 10 closed trades and one summary line, instead of every trade of the session.
+- The agent's Claude Code CLI: each wake has its own config directory, at most `BTCFLOW_AGENT_WAKE_CONCURRENCY` run at once (with a short random start delay), and its environment is an allowlist (`BTCFLOW_AGENT_ENV_PASS` adds names); the spend gate also runs after a failed or refused tool call.
+- Telegram: your `/stop` no longer hides another agent's pause or end while it runs; `/note 5 minutes left` with one agent is a note (an agent number needs several agents, or `#2`); a failed Approve / Skip tap can be tapped again; long messages are cut without breaking their formatting.
+
+
+### Removed
+- The single-session agent routes (`POST /api/agent/stop`, `/resume`, `/note`, `GET /api/agent/journal`, `/decisions`, `/stream`, status's `session`, prompts' `session_versions`): every call now names its session.
+- The ended-session bar above the tabs and its Dismiss (an ended agent is listed under "Not running" on the Agents tab).
+- The agent session strip stacked at the top of Play and Perps (replaced by the session bar above the tabs).

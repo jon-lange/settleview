@@ -1,0 +1,23 @@
+# Example only: start the portable supervisor at boot on Linux (systemd). No logic lives here.
+# Copy to /etc/systemd/system/settleview.service (or ~/.config/systemd/user/ without User=), adjust the paths, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now settleview
+# Logs: <data dir>/logs/*.log, and the supervisor's own lines in `journalctl -u settleview`.
+[Unit]
+Description=Settleview (app and research recorders under the portable supervisor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=settleview
+WorkingDirectory=/opt/settleview
+# Settings come from /opt/settleview/.env (the working directory) or from Environment= / *_FILE secrets.
+ExecStart=/opt/settleview/.venv/bin/python -m btc_signal_engine.supervise
+# SIGTERM to the supervisor only: it stops every child through its stop file, then exits.
+KillMode=mixed
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

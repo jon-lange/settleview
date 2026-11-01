@@ -1,0 +1,7 @@
+# Strategy A (momentum continuation), with C (divergence) recorded as a research note.
+# Params left out use the per-horizon defaults in btc_signal_engine/domain/strategies/rules.py.
+name = "momentum"
+signals = ["momentum", "divergence"]
+combine = "first_match"
+horizons = [60, 300, 900]
+champion = true

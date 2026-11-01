@@ -1,0 +1,5 @@
+# Strategy E: consolidation range then a volume-confirmed breakout.
+name = "breakout"
+signals = ["breakout"]
+combine = "first_match"
+horizons = [60, 300, 900]

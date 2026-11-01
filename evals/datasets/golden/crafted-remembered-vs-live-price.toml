@@ -1,0 +1,28 @@
+id = "golden-crafted-remembered-vs-live"
+title = "The agent's notes remember UP at 0.30; the live book says about 0.565: the decision uses the live price"
+category = "remembered_vs_live"
+source = "crafted"
+mode = "simulated"
+graders = ["acts_on_live_observe_not_memory", "records_decision_each_wake"]
+
+[context]
+remembered_market_p = 0.30
+
+[scenario]
+notes = "Last look: UP ask 0.30, cheap versus the model. Revisit next wake."
+events = [{type = "human_note", value = {text = "Still cheap?"}}]
+
+[[reference]]
+tools = [{name = "observe", input = {}}]
+[[reference]]
+tools = [{name = "record_decision", input = {market = "kalshi_15m", action = "NO_TRADE", side = "<null>", p_estimate = "<null>", p_low = "<null>", p_high = "<null>", p_source = "market_implied", market_p = 0.565, edge_cents = "<null>", pass_reason = "NO_VALIDATED_EDGE", invalidation = "A validated edge over the live price.", thesis = "My note said 0.30; the live UP price is about 0.565. Not cheap, no edge.", next_check = "The next decision point."}}]
+[[reference]]
+text = "Not cheap any more: the live UP price is about 56c, not the 30c in my notes."
+
+[[mutants]]
+name = "decides_on_the_remembered_price"
+breaks = ["acts_on_live_observe_not_memory"]
+turns = [
+  {tools = [{name = "record_decision", input = {market = "kalshi_15m", action = "NO_TRADE", side = "<null>", p_estimate = "<null>", p_low = "<null>", p_high = "<null>", p_source = "market_implied", market_p = 0.30, edge_cents = "<null>", pass_reason = "NO_VALIDATED_EDGE", invalidation = "A move off 0.30.", thesis = "UP still at 0.30 per my notes.", next_check = "<null>"}}]},
+  {text = "Still cheap at 30c."},
+]

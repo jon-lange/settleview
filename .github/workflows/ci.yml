@@ -1,0 +1,346 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned by full commit SHA (the version in the comment): a moved tag cannot change what runs here.
+
+jobs:
+  # Quality gates (scripts/quality.py runs the same checks locally, with the same pinned tools and flags).
+  lint:
+    name: Lint (Ruff, Hadolint, ShellCheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+
+      # Only Ruff, at the version pyproject.toml's dev extra pins (one source of truth), not the whole project.
+      - name: Install Ruff
+        run: |
+          uv venv --python 3.13 .venv
+          uv pip install --python .venv "$(grep -o 'ruff==[0-9.]*' pyproject.toml)"
+
+      - name: Ruff (ruff check)
+        run: .venv/bin/python scripts/quality.py --only ruff
+
+      - name: Hadolint (Dockerfile)
+        run: .venv/bin/python scripts/quality.py --only hadolint
+
+      - name: ShellCheck (deploy/**/*.sh, severity warning)
+        run: .venv/bin/python scripts/quality.py --only shellcheck
+
+  trivy:
+    # The app image (vulnerabilities with a fix, HIGH and CRITICAL, and secrets), the Dockerfile's misconfigurations and
+    # secrets in the repository: each fails the job on a finding. The SARIF reports go to code scanning where the repo
+    # has it (public repos, or private ones with GitHub Advanced Security); an upload refused for lack of it does not
+    # fail the job, a finding does.
+    name: Trivy (image, config, secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write  # the SARIF upload; this job only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - name: Build the image (linux/amd64, as the image job; no push)
+        run: |
+          docker buildx build --platform linux/amd64 --build-arg GIT_SHA="${{ github.sha }}" --cache-from type=gha \
+            --load -t settleview:trivy .
+
+      - name: Trivy image scan
+        run: python3 scripts/quality.py --only trivy-image --image settleview:trivy --sarif-dir sarif
+
+      - name: Trivy config scan (Dockerfile, compose.yaml, deploy/)
+        if: success() || failure()
+        run: python3 scripts/quality.py --only trivy-config --sarif-dir sarif
+
+      - name: Trivy secret scan (repository)
+        if: success() || failure()
+        run: python3 scripts/quality.py --only trivy-fs --sarif-dir sarif
+
+      - name: Upload the image scan to code scanning
+        if: (success() || failure()) && hashFiles('sarif/trivy-image.sarif') != ''
+        continue-on-error: true  # a private repo without code scanning refuses the upload; the scan above is the gate
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
+        with:
+          sarif_file: sarif/trivy-image.sarif
+          category: trivy-image
+
+      - name: Upload the config scan to code scanning
+        if: (success() || failure()) && hashFiles('sarif/trivy-config.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
+        with:
+          sarif_file: sarif/trivy-config.sarif
+          category: trivy-config
+
+      - name: Upload the secret scan to code scanning
+        if: (success() || failure()) && hashFiles('sarif/trivy-fs.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
+        with:
+          sarif_file: sarif/trivy-fs.sarif
+          category: trivy-fs
+
+  test:
+    name: Tests and import contracts (Python 3.13, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The tests build their own data (fixtures, fakes, in-memory exchanges): no keys, no network, no data/ folder.
+    # No BTCFLOW_* settings and no .env exist here, so every Settings() sees its defaults.
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Create the Python 3.13 environment
+        run: uv venv --python 3.13 .venv
+
+      # ta-lib (the Python wrapper) needs the TA-Lib C library. Recent ta-lib releases ship manylinux wheels with the
+      # library bundled, so the first install normally just works. If pip has to build from source instead, install
+      # the C library from the official TA-Lib release and try again.
+      # The `otel` extra too: the OpenTelemetry tests (tests/telemetry) run here and in the Postgres job.
+      - name: Install the project and dev tools
+        run: |
+          if ! uv pip install --python .venv -e ".[dev,otel]"; then
+            echo "::warning::Install failed (likely no ta-lib wheel); installing the TA-Lib C library and retrying"
+            curl -fsSL -o /tmp/ta-lib.deb https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib_0.6.4_amd64.deb
+            sudo apt-get install -y /tmp/ta-lib.deb
+            uv pip install --python .venv -e ".[dev,otel]"
+          fi
+
+      - name: Import contracts (lint-imports)
+        run: .venv/bin/lint-imports
+
+      # The scrubbing tests fail if a token, key, cookie, signature or query secret reaches an exporter; none may be
+      # skipped (the GenAI one runs the bundled Claude Code CLI against a local fake API).
+      - name: OpenTelemetry tests (none may be skipped)
+        run: |
+          .venv/bin/python -m pytest -p no:cacheprovider tests/telemetry -rs | tee /tmp/otel.txt
+          if grep -q "SKIPPED" /tmp/otel.txt; then echo "OpenTelemetry tests were skipped"; exit 1; fi
+
+      - name: Tests (pytest)
+        run: .venv/bin/python -m pytest -p no:cacheprovider
+
+  postgres:
+    # The whole suite again with the store on Postgres 17 (tests/conftest.py: every test that uses `store` runs there),
+    # plus the Postgres-only tests (marked `postgres`): empty -> head on both dialects (G2), the archive, the recorders'
+    # research schema, two services migrating at once, the app starting on Postgres, and the SQLite -> Postgres move
+    # tool on generated data (G6). The server is the image compose.yaml pins; the password exists only in this job.
+    name: Tests on Postgres 17 (full suite, migrations, move tool)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:17.10-bookworm
+        env:
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      BTCFLOW_TEST_DATABASE_URL: postgresql://postgres:ci-only-not-a-secret@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Create the Python 3.13 environment
+        run: uv venv --python 3.13 .venv
+
+      - name: Install the project, dev tools and the Postgres driver
+        run: |
+          if ! uv pip install --python .venv -e ".[dev,postgres,otel]"; then
+            echo "::warning::Install failed (likely no ta-lib wheel); installing the TA-Lib C library and retrying"
+            curl -fsSL -o /tmp/ta-lib.deb https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib_0.6.4_amd64.deb
+            sudo apt-get install -y /tmp/ta-lib.deb
+            uv pip install --python .venv -e ".[dev,postgres,otel]"
+          fi
+
+      - name: Postgres-only tests (none may be skipped)
+        run: |
+          .venv/bin/python -m pytest -p no:cacheprovider -m postgres -rs | tee /tmp/pg.txt
+          if grep -q "SKIPPED" /tmp/pg.txt; then echo "Postgres tests were skipped"; exit 1; fi
+
+      - name: The full suite with the store on Postgres
+        run: .venv/bin/python -m pytest -p no:cacheprovider
+
+  portable:
+    # The supervisor, ops stop, the recorders and the settings run where users run them: Linux, macOS and Windows.
+    name: Supervisor and recorders (Python 3.13, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Create the Python 3.13 environment
+        run: uv venv --python 3.13 .venv
+
+      - name: Install the project and dev tools
+        run: uv pip install --python .venv -e ".[dev]"
+
+      - name: Supervisor, ops, recorders and settings tests
+        run: |
+          if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=.venv/Scripts/python.exe; fi
+          "$PY" -m pytest -p no:cacheprovider tests/bootstrap/test_process_supervisor.py tests/bootstrap/test_ops_stop.py tests/recorders tests/test_config.py tests/application/test_recorder_health.py
+
+  image:
+    name: Docker image (linux/amd64 + linux/arm64) and compose services (no push, no keys)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GIT_SHA: ${{ github.sha }}  # the image's revision label (compose.yaml's build arg reads it too)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      # Throwaway passwords for this run (the same script a user runs once); nothing is printed but file names.
+      - name: Make the secret files (Postgres, OpenObserve, OTLP headers)
+        run: python3 deploy/postgres/make_secrets.py
+
+      # The compose file must resolve with no .env and no BTCFLOW_* variables (every service, healthcheck and volume),
+      # with and without the opt-in observability profile.
+      - name: Check compose.yaml
+        run: |
+          docker compose config --quiet
+          docker compose --profile observability config --quiet
+
+      # Swarm drops the 127.0.0.1 of a publish, so the stack file must not publish the PC listener (8001), the agent
+      # listener (8002) or OpenObserve (5080) at all: the renderer refuses them, and Swarm's own reading of the file
+      # (`docker stack config`) is checked again, with and without the observability profile.
+      - name: Check the Swarm stack publishes no PC-only port
+        run: |
+          for profile in "" "--profile observability"; do
+            python3 deploy/swarm/render_stack.py $profile --out /tmp/settleview-stack.json
+            docker stack config -c /tmp/settleview-stack.json > /tmp/settleview-stack.yaml
+            if grep -En 'published: "?(8001|8002|5080)"?$' /tmp/settleview-stack.yaml; then
+              echo "the Swarm stack publishes a PC-only port"; exit 1
+            fi
+          done
+
+      # Both architectures the image runs on (Azure Container Apps: amd64; Graviton and other ARM hosts, and ARM
+      # dev machines: arm64). arm64 runs under QEMU here: slow, but it installs and imports that platform's wheels.
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - name: Build the image for linux/amd64 and linux/arm64 (no push)
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 --build-arg GIT_SHA="$GIT_SHA" \
+            --cache-to type=gha,mode=max --cache-from type=gha -t settleview:ci .
+
+      - name: Smoke-test the arm64 image (QEMU)
+        run: |
+          docker buildx build --platform linux/arm64 --build-arg GIT_SHA="$GIT_SHA" --cache-from type=gha --load \
+            -t settleview:arm64 .
+          docker run --rm --platform linux/arm64 --entrypoint python settleview:arm64 -c "import platform, sys; assert platform.machine() == 'aarch64', platform.machine(); assert sys.version_info[:2] == (3, 13)"
+          docker run --rm --platform linux/arm64 --entrypoint python settleview:arm64 -c "import btc_signal_engine.bootstrap.app, opentelemetry.sdk, opentelemetry.exporter.otlp.proto.http"
+
+      - name: Build the image (the one image every compose service uses)
+        run: |
+          docker buildx build --platform linux/amd64 --build-arg GIT_SHA="$GIT_SHA" --cache-from type=gha --load \
+            -t settleview:local .
+
+      # The image's own interpreter and dependencies, without starting the app (no network, no keys, no data).
+      - name: Check the image's Python and imports
+        run: |
+          docker run --rm --entrypoint python settleview:local -c "import sys; assert sys.version_info[:2] == (3, 13), sys.version"
+          docker run --rm --entrypoint python settleview:local -c "import btc_signal_engine.bootstrap.app"
+          docker run --rm --entrypoint python settleview:local -c "import opentelemetry.sdk, opentelemetry.exporter.otlp.proto.http, opentelemetry.instrumentation.fastapi"
+
+      - name: Check the image declares a health check and its revision
+        run: |
+          test "$(docker inspect --format '{{json .Config.Healthcheck.Test}}' settleview:local)" != "null"
+          test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' settleview:local)" = "$GIT_SHA"
+
+      # Telemetry is inert without an endpoint, and a bad OTEL_* setting refuses the start (78) instead of falling back.
+      - name: Check telemetry's configuration in the image
+        run: |
+          docker run --rm --network none --entrypoint python settleview:local -c "from btc_signal_engine.bootstrap import telemetry; assert not telemetry.setup('ci').enabled"
+          set +e
+          docker compose run --rm --no-deps -e OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:9 -e OTEL_TRACES_EXPORTER=zipkin rec-pm-settle python -m btc_signal_engine.recorders pm-settle
+          code=$?
+          set -e
+          test "$code" = "78" || { echo "a bad OTEL_TRACES_EXPORTER exited $code, expected 78"; exit 1; }
+
+      # Each recorder service's own entry point, in its own service (its env and secrets), without the network:
+      # pm-settle's --check passes (it needs no key); pm-quotes refuses with 78 (no key in CI), which is the point.
+      - name: Smoke-start each recorder service's entry point
+        run: |
+          docker compose run --rm --no-deps rec-pm-settle python -m btc_signal_engine.recorders pm-settle --check
+          set +e
+          docker compose run --rm --no-deps rec-pm-quotes python -m btc_signal_engine.recorders pm-quotes --check
+          code=$?
+          set -e
+          test "$code" = "78" || { echo "pm-quotes --check without keys exited $code, expected 78"; exit 1; }
+          docker compose run --rm --no-deps rec-pm-quotes python -m btc_signal_engine.ops fresh --help
+          docker compose run --rm --no-deps app python -m btc_signal_engine.supervise --help
+
+      # The named volume takes the image's owner: the non-root app can write to it.
+      - name: Check the app's volume is writable by the app user
+        run: docker compose run --rm --no-deps --entrypoint python app -c "open('/data/.write-test', 'w').write('ok')"
+
+      # The real stack's database: the init script makes the roles and schemas on a new volume, the app's role migrates,
+      # the research role reads but cannot write, the backup service dumps, and the dump restores into a fresh server.
+      - name: Postgres roles, migration, backup and restore drill
+        run: |
+          docker compose up -d --wait postgres
+          # the tuned settings, and pg_stat_statements (preloaded by compose.yaml, created by initdb.sh)
+          adm() { docker compose exec -T postgres psql -U postgres -d settleview -v ON_ERROR_STOP=1 -At -c "$1"; }
+          test "$(adm 'show shared_buffers')" = "512MB"
+          test "$(adm "select count(*) from pg_extension where extname = 'pg_stat_statements'")" = "1"
+          adm "select count(*) from pg_stat_statements" > /dev/null
+          docker compose run --rm --no-deps app python -m btc_signal_engine.ops migrate
+          ro() { docker compose exec -T postgres sh -c "PGPASSWORD=\"\$(cat /run/secrets/pg_research_password)\" psql -h localhost -U settleview_research -d settleview -v ON_ERROR_STOP=1 -At -c \"$1\""; }
+          test "$(ro 'select count(*) from app.alembic_version')" = "1"
+          if ro "create table research.nope (i int)"; then echo "the research role could write"; exit 1; fi
+          if ro "delete from app.alembic_version"; then echo "the research role could delete"; exit 1; fi
+          docker compose run --rm --no-deps backup bash /usr/local/bin/settleview-backup --once
+          bash deploy/postgres/restore-drill.sh
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes

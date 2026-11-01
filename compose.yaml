@@ -1,0 +1,448 @@
+# Settleview services: one app image, one service per process, the same on Docker Desktop (Windows, macOS), Linux and a
+# Swarm (docs/operations.md, "Docker", "Postgres" and "Deploying to the cloud"). First start:
+#   python deploy/postgres/make_secrets.py      # once: random passwords in ./secrets (git- and docker-ignored), and
+#                                               # an empty file for each venue / API secret (fill in the ones you use)
+#   python deploy/secrets_from_env.py           # only when moving from keys in .env (prints names, never values)
+#   docker compose up -d --build
+#   docker compose exec app python -m btc_signal_engine.ops pair-pc   # once: pairs this PC's browser (a link)
+# Then open that link (http://localhost:8001/pair?code=...) on this PC; phones use http://<this PC's LAN address>:8000
+# and the PIN. Docker Swarm: deploy/swarm/render_stack.py (never publishes 8001, 8002 or 5080).
+# If `docker compose build` stops with "additional privileges requested: pass --allow=fs.read=Dockerfile", the shell's
+# folder differs in letter case from the real path (documents vs Documents; docs/solutions/2026-10-31-compose-bake-
+# path-case.md): cd to the real path, or run `docker build -t settleview:local .` and then `docker compose up -d`.
+#
+#   postgres       Postgres 17: the app's data (schema app) and the recorders' (schema research)   not published
+#   backup         nightly pg_dump -Fc to the settleview-backups volume (7 daily + 4 weekly)
+#   app            the Play app (collector, engine, API, web app)    8000: phones (PIN); 127.0.0.1:8001: this PC
+#                  (a paired browser: `docker compose exec app python -m btc_signal_engine.ops pair-pc` once);
+#                  127.0.0.1:8002: external agents' tool API
+#   rec-pm-quotes  Polymarket US quotes + trades (WebSocket)                                      writes schema research
+#   rec-pm-settle  Polymarket US settlement terms (public, no keys)                               writes schema research
+#   openobserve    logs, metrics and traces (OpenTelemetry), profile `observability` only    127.0.0.1:5080: this PC
+#
+# Observability (docs/operations.md, "Observability"): every Python service exports OpenTelemetry over OTLP/HTTP once
+# OTEL_EXPORTER_OTLP_ENDPOINT is set in `.env` next to this file; unset, nothing is exported. The local backend is opt-in:
+#   echo OTEL_EXPORTER_OTLP_ENDPOINT=http://openobserve:5080/api/default >> .env
+#   docker compose --profile observability up -d          # then http://localhost:5080 (admin@settleview.local)
+# Its credential (and any other backend's) is the secret file secrets/otlp_headers, never an environment value.
+#
+# Resources: every service has a memory limit (a leak or a runaway agent CLI stops at its own service) and a CPU cap,
+# sized for one small host from measurements (docs/operations.md, "Resource limits and Postgres settings"). Raise them,
+# and Postgres's memory settings with them, on a bigger host; in the cloud they are the task / container sizes.
+#
+# A crash or deploy of the app never stops data collection, and a recorder never touches trading. Every service logs
+# to stderr (`docker compose logs <service>`; the `local` log driver, rotated at 5 x 10 MB per container, so logs can
+# never fill the disk Postgres shares), restarts on its own and has a healthcheck that a platform can use as a
+# liveness probe. Configuration comes from the environment: `.env` next to this file (optional, settings only) or the
+# *_FILE form of any setting (a Docker / Swarm secret mounted under /run/secrets). Every secret is a file under
+# ./secrets, never an environment value: the database passwords, and the venue / API keys (Polymarket key id and
+# secret, Kalshi key ids, the Anthropic key, the Telegram bot token), so `docker inspect` and child processes never
+# see them. The recorders get only the Polymarket key files and the database.
+#
+# Hardening (docs/operations.md, "Docker: hardening"): the Python services run as a non-root user with a read-only
+# root filesystem (writes go to /data and to small tmpfs mounts at /tmp and the home folder), every Linux capability
+# dropped and no privilege gain (no-new-privileges); tini (in the image) is PID 1. Postgres keeps only the
+# capabilities its entrypoint needs to hand its folders to the postgres user.
+#
+# The phone port's host address is BTCFLOW_PHONE_BIND (default 0.0.0.0, every interface). Docker publishes ports
+# around the host firewall (ufw / firewalld never see them): on a server set it to the LAN address, or 127.0.0.1
+# behind a reverse proxy or VPN, in `.env` next to this file.
+#
+# In the cloud, use the managed Postgres (Azure Database for PostgreSQL Flexible Server, Amazon RDS) instead of the
+# `postgres` and `backup` services: point BTCFLOW_DATABASE_URL at it (docs/operations.md, "Deploying to the cloud").
+
+name: settleview
+
+# Every service's container log: Docker's `local` driver (compressed, rotated): at most 5 files of 10 MB each.
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# The Python services' runtime limits: a read-only root filesystem with tmpfs for /tmp (the recorders' heartbeat
+# files, the agent CLI's temporary files) and the app user's home (10001), every capability dropped, no privilege
+# gain. Everything the app keeps is on the /data volume.
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+    - /home/app:size=64m,uid=10001,gid=10001,mode=0700
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+x-service: &service
+  <<: *hardening
+  image: settleview:local
+  build:
+    context: .
+    args:
+      # The commit the image is built from (the OCI revision label and telemetry's service.version):
+      #   GIT_SHA=$(git rev-parse HEAD) docker compose build
+      GIT_SHA: ${GIT_SHA:-unknown}
+  restart: unless-stopped
+  # PID 1 is tini, the image's ENTRYPOINT (signals reach Python, zombies such as finished agent CLIs are reaped), on
+  # every platform: no `init: true` needed (ACA and ECS have no such switch).
+  logging: *logging
+  deploy: &deploy
+    # Swarm and cloud platforms: exactly one task per service, never two writers. Stop the old task before the new
+    # one starts on an update. Pin to the node that holds the volumes (a placement constraint) on a multi-node Swarm.
+    replicas: 1
+    restart_policy:
+      condition: any
+      delay: 10s
+    update_config:
+      order: stop-first
+    rollback_config:
+      order: stop-first
+
+# The app's and the recorders' database connection: the settleview_app role; its password is a secret file.
+x-database: &database
+  BTCFLOW_DATABASE_URL: postgresql://settleview_app@postgres:5432/settleview
+  BTCFLOW_DATABASE_PASSWORD_FILE: /run/secrets/pg_app_password
+  # Your local time zone (IANA name, e.g. America/Chicago): Record's "today", the fleet's day, global limits and the
+  # daily summary use the process's local day, and a container's default is UTC. Set TZ in `.env` next to this file.
+  TZ: ${TZ:-UTC}
+
+# OpenTelemetry for the app and the recorders (bootstrap/telemetry.py): inert while OTEL_EXPORTER_OTLP_ENDPOINT is empty
+# (the default). The backend's credential is read from the otlp_headers secret file (OTEL_EXPORTER_OTLP_HEADERS_FILE),
+# never from the environment; deploy/postgres/make_secrets.py writes it for the local OpenObserve.
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  OTEL_EXPORTER_OTLP_HEADERS_FILE: /run/secrets/otlp_headers
+  OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment.name=local}
+
+# The venue / API secrets: each setting read from its file (bootstrap/config.py, the *_FILE convention). An empty file
+# means "not configured" (that feature stays off). deploy/postgres/make_secrets.py creates the files empty;
+# deploy/secrets_from_env.py moves existing values out of `.env` into them.
+x-polymarket-secret-files: &polymarket-secret-files
+  BTCFLOW_POLYMARKET_KEY_ID_FILE: /run/secrets/polymarket_key_id
+  BTCFLOW_POLYMARKET_SECRET_KEY_FILE: /run/secrets/polymarket_secret_key
+
+x-app-secret-files: &app-secret-files
+  <<: *polymarket-secret-files
+  BTCFLOW_ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+  BTCFLOW_TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+  BTCFLOW_KALSHI_KEY_ID_FILE: /run/secrets/kalshi_key_id
+  BTCFLOW_TRADING_DEMO_KEY_ID_FILE: /run/secrets/trading_demo_key_id
+  BTCFLOW_TRADING_PROD_KEY_ID_FILE: /run/secrets/trading_prod_key_id
+
+x-needs-postgres: &needs-postgres
+  # Compose waits for a healthy database. Swarm ignores depends_on: there a service that starts first exits on the
+  # failed connection and its restart policy starts it again until the database answers.
+  postgres:
+    condition: service_healthy
+    restart: true
+
+# The image compose and the backup / restore drill use; an exact version (17.10, released 2026-08), never "latest".
+x-postgres-image: &postgres-image postgres:17.10-bookworm
+
+services:
+  postgres:
+    image: *postgres-image
+    restart: unless-stopped
+    logging: *logging
+    # The entrypoint starts as root to hand the data folder and its socket folder to the postgres user, then drops to
+    # it: only those capabilities, no privilege gain afterwards. The root filesystem is read-only (data on the volume,
+    # the socket and temp files on tmpfs).
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:size=1m
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: [no-new-privileges:true]
+    environment:
+      POSTGRES_DB: settleview
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_superuser_password
+      # SCRAM for every connection over the network (the image's default for a password-protected server).
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    # Settings for a small host (the 2 GiB limit below), the place to scale up (docs/operations.md, "Resource limits and
+    # Postgres settings"): shared_buffers ~25 % of the limit, effective_cache_size ~75 % (the planner's estimate of
+    # buffers + OS cache, no allocation), work_mem per sort/hash node, fewer and smoother checkpoints, SSD costs, slow
+    # statements over 500 ms logged, and pg_stat_statements loaded (created by initdb.sh; once by hand on an existing
+    # volume). A managed server takes the same values from its parameter group.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - min_wal_size=256MB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - track_io_timing=on
+      - -c
+      - log_min_duration_statement=500ms
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+    secrets: [pg_superuser_password, pg_app_password, pg_research_password, pg_backup_password]
+    configs:
+      # Roles (settleview_app, settleview_research, settleview_backup) and schemas, on the first start only.
+      - source: pg_initdb
+        target: /docker-entrypoint-initdb.d/10-settleview.sh
+    volumes:
+      - settleview-pg:/var/lib/postgresql/data
+    # Not published: only the services on this network reach it. For tools on this PC, uncomment (loopback only):
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    shm_size: 256mb
+    stop_grace_period: 60s  # a clean shutdown (checkpoint) before Docker's kill
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d settleview"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 6
+    deploy:
+      <<: *deploy
+      resources:
+        # shared_buffers 512 MB + autovacuum (3 x 128 MB at most) + ~30 backends (~10 MB each, plus work_mem while
+        # sorting) is about 1.2 GB; the rest of the 2 GiB is OS cache (reclaimed first under the limit).
+        limits: {cpus: "2.0", memory: 2g}
+        reservations: {memory: 1g}
+
+  backup:
+    image: *postgres-image  # pg_dump from the same version as the server
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    # Runs as the image's root but needs no capability (it writes only its own volume) and no privilege gain.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["bash", "/usr/local/bin/settleview-backup"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: settleview
+      PGUSER: settleview_backup
+      PGPASSWORD_FILE: /run/secrets/pg_backup_password
+      BACKUP_AT: "03:17"  # UTC: a quiet minute, as the app's own SQLite backup
+      # A start without today's dump waits this long first: pg_dump locks every table for its ~30 s run, and a deploy
+      # starts this service with the app, whose migrations need those tables (they wait a lock out too, up to
+      # BTCFLOW_DB_MIGRATION_LOCK_WAIT_S; docs/solutions/2026-11-01-migration-vs-backup-lock.md).
+      BACKUP_START_DELAY: "300"
+      # BACKUP_HOOK: /hooks/offsite.sh   # optional off-site copy (docs/operations.md, "Postgres: backups")
+    secrets: [pg_backup_password]
+    configs:
+      - source: pg_backup
+        target: /usr/local/bin/settleview-backup
+    volumes:
+      - settleview-backups:/backups
+    depends_on: *needs-postgres
+    healthcheck:
+      # Healthy while the last good dump is under 26 hours old.
+      test: ["CMD-SHELL", "test -f /backups/last-ok && [ $$(( $$(date -u +%s) - $$(cat /backups/last-ok) )) -lt 93600 ]"]
+      interval: 5m
+      timeout: 10s
+      start_period: 30m
+      retries: 2
+    deploy:
+      <<: *deploy
+      resources:
+        limits: {cpus: "1.0", memory: 512m}  # pg_dump streams; 10 MiB idle
+        reservations: {memory: 64m}
+
+  app:
+    <<: *service
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: [*database, *otel, *app-secret-files]
+      BTCFLOW_DB_PATH: /data/btcflow.db  # its folder (/data) holds the logs, pid and stop files; the data is in Postgres
+      BTCFLOW_API_HOST: 0.0.0.0
+      BTCFLOW_FILE_LOG: "false"
+      # Who is the PC (docs/operations.md, "Running in Docker: who counts as the PC"): a PAIRED BROWSER on the PC
+      # listener, never a network position. Once after a deploy: `docker compose exec app python -m
+      # btc_signal_engine.ops pair-pc`, then open the link it prints at http://localhost:8001. Without the PC cookie
+      # that port shows only "Pair this browser" (a sibling container reaching app:8001 gets nothing). Port 8000 is for
+      # phones (the PIN); 8002 serves external agents' tool API only (their session token; never the PC). The 0.0.0.0
+      # hosts are inside the container only, for the 127.0.0.1 publishes below.
+      BTCFLOW_PC_PORT: 8001
+      BTCFLOW_PC_HOST: 0.0.0.0
+      BTCFLOW_AGENT_PORT: 8002
+      BTCFLOW_AGENT_HOST: 0.0.0.0
+      OTEL_SERVICE_NAME: settleview-app
+    secrets: [pg_app_password, otlp_headers, polymarket_key_id, polymarket_secret_key, anthropic_api_key,
+              telegram_bot_token, kalshi_key_id, trading_demo_key_id, trading_prod_key_id]
+    depends_on: *needs-postgres
+    deploy:
+      <<: *deploy
+      resources:
+        # ~300 MiB measured idle, plus up to BTCFLOW_AGENT_WAKE_CONCURRENCY (4) Claude Code CLI processes during agent
+        # wakes (~150-300 MB each, not yet measured). Raise both together.
+        limits: {cpus: "2.0", memory: 2g}
+        reservations: {memory: 512m}
+    # The app's writer flush, agent and perps drains take up to ~45 s on a stop.
+    stop_grace_period: 60s
+    volumes:
+      - settleview-data:/data
+      # Optional read-only Kalshi key: mount it and set BTCFLOW_KALSHI_PRIVATE_KEY_PATH=/keys/kalshi.pem
+      # - ./keys:/keys:ro
+    ports:
+      # Phones (home LAN / VPN only, never port-forwarded to the internet): the PIN applies. Phone access also needs
+      # BTCFLOW_ALLOWED_HOSTS=<this PC's LAN address> in .env (the container does not know the host's addresses).
+      # The host address is BTCFLOW_PHONE_BIND (header above): 0.0.0.0 on this PC; the LAN address or 127.0.0.1 on a
+      # server, where Docker's published ports bypass ufw / firewalld.
+      - "${BTCFLOW_PHONE_BIND:-0.0.0.0}:8000:8000"
+      # This PC: the paired browser (no PIN, PC-only changes allowed); pairing works only here. Publish 8001 on
+      # 127.0.0.1 only and never point a reverse proxy at it. Keep both sides 8001 (the app checks the Host
+      # localhost:8001). Swarm drops the 127.0.0.1: use deploy/swarm/render_stack.py, which publishes neither 8001
+      # nor 8002. In the cloud do not expose this port at all.
+      - "127.0.0.1:8001:8001"
+      # External agents (MCP) on this PC: the tool API only, each call with its session's token.
+      - "127.0.0.1:8002:8002"
+
+  rec-pm-quotes:
+    <<: *service
+    command: ["python", "-m", "btc_signal_engine.recorders", "pm-quotes"]
+    # Only what this recorder needs: the database and the Polymarket US key (read-only market data), as secret files.
+    environment:
+      <<: [*database, *otel, *polymarket-secret-files]
+      OTEL_SERVICE_NAME: settleview-rec-pm-quotes
+    secrets: [pg_app_password, otlp_headers, polymarket_key_id, polymarket_secret_key]
+    depends_on: *needs-postgres
+    deploy:
+      <<: *deploy
+      resources:
+        limits: {cpus: "0.5", memory: 256m}  # ~64 MiB measured
+        reservations: {memory: 96m}
+    healthcheck:
+      # Liveness: the recorder's own loop touched its heartbeat file within 60 s (bootstrap/heartbeat.py). Not the
+      # data's freshness: a venue or database outage is not cured by a restart; the app's `data` alert and
+      # `python -m btc_signal_engine.ops fresh pm-quotes` report that (and the recorder exits by itself when it
+      # records nothing for 10 minutes without a venue outage).
+      test: ["CMD", "python", "-m", "btc_signal_engine.ops", "alive", "pm-quotes", "--max-age", "60"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  rec-pm-settle:
+    <<: *service
+    command: ["python", "-m", "btc_signal_engine.recorders", "pm-settle"]
+    environment:
+      <<: [*database, *otel]
+      OTEL_SERVICE_NAME: settleview-rec-pm-settle
+    secrets: [pg_app_password, otlp_headers]
+    depends_on: *needs-postgres
+    deploy:
+      <<: *deploy
+      resources:
+        limits: {cpus: "0.5", memory: 256m}  # ~58 MiB measured
+        reservations: {memory: 64m}
+    healthcheck:
+      # Liveness: its settlement pass touched the heartbeat file within 3 minutes (a pass makes a few 10 s lookups).
+      # Freshness (one row per closed window) is `ops fresh pm-settle` and the app's `data` alert.
+      test: ["CMD", "python", "-m", "btc_signal_engine.ops", "alive", "pm-settle", "--max-age", "180"]
+      interval: 60s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  # The local OpenTelemetry backend (logs, metrics, traces, GenAI views): opt-in, `docker compose --profile
+  # observability up -d`; `docker compose up -d` alone never starts it. Single node, local disk (its own volume), 14 days
+  # of data. An exact release (v1.1.1, 2026-10-16), never "latest". AGPL-3.0, run unmodified (docs/PUBLISHING.md).
+  openobserve:
+    image: openobserve/openobserve:v1.1.1
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *logging
+    # No capability and no privilege gain; its writes go to its volume (the root filesystem stays writable: the
+    # image is not tested read-only here).
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      ZO_ROOT_USER_EMAIL: admin@settleview.local  # the same login deploy/postgres/make_secrets.py puts in otlp_headers
+      ZO_DATA_DIR: /data
+      ZO_COMPACT_DATA_RETENTION_DAYS: "14"
+      ZO_TELEMETRY: "false"  # no usage reports to the vendor
+      ZO_MMDB_DISABLE_DOWNLOAD: "true"  # no GeoLite IP databases fetched from the internet (~57 MB; unused here)
+      # Its caches default to a share of the HOST's memory, not of the limit below: cap them (MB).
+      ZO_MEMORY_CACHE_MAX_SIZE: "256"
+      ZO_MEMORY_CACHE_DATAFUSION_MAX_SIZE: "256"
+      ZO_MEM_TABLE_MAX_SIZE: "128"
+    # The root password (ZO_ROOT_USER_PASSWORD), written by make_secrets.py. The image has no shell to read a secret
+    # file, so it is an env file: it shows in `docker inspect` of this container only. Read once, on the first start.
+    env_file:
+      - path: ./secrets/openobserve.env
+        required: true
+    volumes:
+      - settleview-o2:/data
+    ports:
+      - "127.0.0.1:5080:5080"  # the UI and API on this PC only, like 8001; the services reach it as openobserve:5080
+    stop_grace_period: 30s  # it flushes its write-ahead log on SIGTERM
+    healthcheck:
+      # The image has no shell or curl: its own CLI asks the running node (exits non-zero when none answers).
+      test: ["CMD", "/openobserve", "node", "status"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    deploy:
+      <<: *deploy
+      resources:
+        limits: {cpus: "1.0", memory: 1g}
+        reservations: {memory: 256m}
+
+secrets:
+  # Files written by deploy/postgres/make_secrets.py (Swarm: `docker secret create`, then `external: true`).
+  # otlp_headers: the OTLP backend's headers (OpenObserve's Basic credential by default); mounted into the app and the
+  # recorders and read only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+  otlp_headers:
+    file: ./secrets/otlp_headers
+  pg_superuser_password:
+    file: ./secrets/pg_superuser_password
+  pg_app_password:
+    file: ./secrets/pg_app_password
+  pg_research_password:
+    file: ./secrets/pg_research_password
+  pg_backup_password:
+    file: ./secrets/pg_backup_password
+  # Venue / API secrets (empty file = not configured). Mounted into the app; the Polymarket pair into rec-pm-quotes.
+  polymarket_key_id:
+    file: ./secrets/polymarket_key_id
+  polymarket_secret_key:
+    file: ./secrets/polymarket_secret_key
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key
+  telegram_bot_token:
+    file: ./secrets/telegram_bot_token
+  kalshi_key_id:
+    file: ./secrets/kalshi_key_id
+  trading_demo_key_id:
+    file: ./secrets/trading_demo_key_id
+  trading_prod_key_id:
+    file: ./secrets/trading_prod_key_id
+
+configs:
+  pg_initdb:
+    file: ./deploy/postgres/initdb.sh
+  pg_backup:
+    file: ./deploy/postgres/backup.sh
+
+volumes:
+  settleview-pg:  # the database files (Postgres's data directory)
+  settleview-backups:  # the nightly dumps
+  settleview-data:  # the app's local folder: logs, pid and stop files, the writer's dead-letter file
+  settleview-o2:  # OpenObserve's data (profile observability)

@@ -1,0 +1,10 @@
+id = "golden-real-2724-recovered-error"
+title = "set_alarms rejected (a seconds_left_below alarm without its market), fixed in the same wake"
+category = "recovered_tool_error"
+source = "real"
+mode = "frozen"
+frame = "frames/2724.jsonl"
+graders = ["recovers_after_tool_error", "records_decision_each_wake"]
+
+[recorded_verdicts]
+tool_args_valid = "fail"   # the invalid call itself is a step failure (kept as a real negative fixture)

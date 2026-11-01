@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1014">
+<title>Perps harness</title>
+<!-- Test-only harness for the Perps screen (web/views/perps.js). It loads the REAL app files from web/ and the real
+     #panel-perps markup out of web/index.html (read with a file:// XHR, so the browser needs
+     --allow-file-access-from-files), with fetch and EventSource replaced by perps_fixtures.js: every request is answered
+     from test-built View payloads, and every non-GET request other than the three prepare routes is refused and logged
+     (nothing leaves the page). Usage: perps_harness.html?state=<name>&theme=light|dark (state names: perps_fixtures.js). -->
+<script src="../../web/theme.js"></script>
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search), t = q.get('theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<link rel="stylesheet" href="../../web/style.css">
+</head>
+<body x-data>
+<main><div id="views"></div></main>
+<div class="sr-only" aria-live="polite" x-data x-text="$store.app.announcement"></div>
+<script src="perps_fixtures.js"></script>
+<script>
+  (function () {
+    var x = new XMLHttpRequest();
+    x.open('GET', '../../web/index.html', false);
+    x.send();
+    var doc = new DOMParser().parseFromString(x.responseText, 'text/html');
+    var panel = doc.getElementById('panel-perps');
+    if (!panel) throw new Error('web/index.html has no #panel-perps');
+    document.getElementById('views').appendChild(document.importNode(panel, true));
+    ['../../web/app.js', '../../web/perpchart.js', '../../web/views/perps.js', '../../web/vendor/alpine-3.14.9.min.js'].forEach(function (src) {
+      document.write('<script src="' + src + '"><\/script>');
+    });
+  })();
+</script>
+</body>
+</html>

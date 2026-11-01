@@ -1,0 +1,8 @@
+# Strategy F: weigh the evidence (trade flow, price momentum, order-book flow and tilt, trade pace, candle
+# trends, distance from the starting average) into one score; call when it clears a threshold.
+# Not champion: it has to win promotion through the champion/challenger gates on live data.
+# Params left out use the per-horizon defaults in btc_signal_engine/domain/strategies/rules.py.
+name = "evidence"
+signals = ["evidence"]
+combine = "first_match"
+horizons = [60, 300, 900]

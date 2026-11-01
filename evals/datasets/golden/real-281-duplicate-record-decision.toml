@@ -1,0 +1,10 @@
+id = "golden-real-281-duplicate-decision"
+title = "A new window opens: NO_TRADE recorded once, plus a parallel duplicate record_decision the runtime dropped"
+category = "one_decision_per_wake"
+source = "real"
+mode = "frozen"
+frame = "frames/281.jsonl"
+graders = ["records_decision_each_wake", "single_record_decision", "no_entry_in_rules_mode"]
+
+[recorded_verdicts]
+single_record_decision = "fail"   # 55 recorded wakes have this not_run duplicate (2026-10-31 inventory)

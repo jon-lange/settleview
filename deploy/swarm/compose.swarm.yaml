@@ -1,0 +1,31 @@
+# Docker Swarm: what differs from compose.yaml (docs/operations.md, "Docker Swarm"). Never used alone: render the
+# stack file with  python deploy/swarm/render_stack.py  (it merges this over compose.yaml, checks the ports and writes
+# settleview-stack.json), then  docker stack deploy -c settleview-stack.json settleview.
+#
+# Why: Swarm drops the host IP of a port publish (compose.yaml's 127.0.0.1 publish of the PC listener would be open on
+# EVERY node, through the routing mesh), so nothing compose publishes on 127.0.0.1 only may be published here: not
+# the PC listener (8001), not the agent listener (8002), not OpenObserve (5080). Being the PC needs a paired browser's cookie anyway;
+# reach the PC listener through an SSH tunnel to the node (docs/operations.md). The phone port (8000) stays published
+# (the PIN applies); keep it off the public interface (a VPN, an internal network).
+#
+# No .env on Swarm: settings are environment values from the deploying shell (interpolated by `docker stack deploy`)
+# or, for every secret, Swarm secrets and the BTCFLOW_<NAME>_FILE settings.
+
+services:
+  app:
+    env_file: !reset []
+    ports: !override
+      - "8000:8000"  # phones (PIN); 8001 (PC) and 8002 (agents) stay on the overlay network only
+    depends_on: !reset {}
+  backup:
+    depends_on: !reset {}
+  rec-pm-quotes:
+    depends_on: !reset {}
+  rec-pm-settle:
+    depends_on: !reset {}
+  openobserve:
+    # Its root password from the deploying shell (the image has no shell to read a secret file).
+    env_file: !reset []
+    environment:
+      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-}
+    ports: !reset []  # never 5080 on every node; reach the UI through an SSH tunnel to the node

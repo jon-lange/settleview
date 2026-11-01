@@ -1,0 +1,1613 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Settleview">
+<link rel="manifest" href="manifest.json" crossorigin="use-credentials">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="180x180">
+<title>Settleview</title>
+<!-- Theme, before first paint (no flash): web/theme.js, a file so the CSP allows it. -->
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="proposal.css">
+<link rel="stylesheet" href="agent.css">
+</head>
+<body x-data>
+<!-- the logo mark (B "Strike eye": a lens on the price-to-beat line; currentColor) and the tab bar's icons -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="sv-mark" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="12" cy="12" r="3.25" fill="currentColor"/><path d="M1.5 12 H5 M19 12 H22.5" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></symbol>
+    <symbol id="tb-play" viewBox="0 0 24 24"><path d="M4 18 L9 12 L13 15 L20 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="tb-record" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M8 15 V12 M12 15 V9 M16 15 V11" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="tb-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.85 1.85M16.65 16.65l1.85 1.85M5.5 18.5l1.85-1.85M16.65 7.35l1.85-1.85" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+<main>
+<div id="views">
+<!-- ================= PLAY (phone: you make the call) ================= -->
+<!-- ================= PLAY and RECORD share one Play component (web/views/play.js): Record shows Play's own record
+     view and the mode controls for each market, moved off Play (design pass 2026-10-31) ================= -->
+<div class="pl-scope" x-data="playView()" @pl-limits-saved.window="load()" @pl-venue.window="setVenue($event.detail)" @pl-open-settings.window="openSettings()">
+<section id="panel-play" class="pl" aria-label="Play" x-show="$store.app.view === 'play'" x-cloak>
+  <div class="pl-top">
+    <!-- the venue (segmented), then the market picker: Kalshi -> BTC 15m · BTC Perps; Polymarket -> BTC 15m · BTC 5m -->
+    <div class="nv-row">
+      <div class="nv-seg" role="radiogroup" aria-label="Venue" x-show="!needVenue()">
+        <template x-for="x in VENUES" :key="x">
+          <button type="button" role="radio" :aria-checked="venue === x" @click="setVenue(x)" :disabled="!!ticket"><span x-text="VENUE_NAMES[x]"></span><i class="pl-odot" x-show="venueOpen(x)" role="img" aria-label="open position"></i></button>
+        </template>
+      </div>
+      <span class="nv-sp" x-show="needVenue()"></span>
+      <button type="button" class="nv-gear" @click="openSettings()" aria-label="Settings" :aria-expanded="settings ? 'true' : 'false'" aria-controls="pl-settings"><svg width="22" height="22" aria-hidden="true"><use href="#tb-gear"/></svg></button>
+    </div>
+    <div class="nv-hdr">
+      <div class="nv-picker" x-show="!needVenue()" x-data="{ open: false }" @keydown.escape="open = false" @click.outside="open = false">
+        <button type="button" class="nv-pick" aria-haspopup="menu" :aria-expanded="open ? 'true' : 'false'" @click="open = !open" :disabled="!!ticket || needVenue()" :aria-label="'Market: ' + pickerLabel() + '. Change market'">
+          <b><span x-text="pickerLabel()"></span><small aria-hidden="true">&#9662;</small></b>
+          <span class="nv-sub num" x-text="pickerSub()"></span>
+        </button>
+        <div class="nv-menu" role="menu" :aria-label="venueName() + ' markets'" x-show="open" x-cloak>
+          <template x-for="it in pickerItems()" :key="it.key">
+            <button type="button" role="menuitemradio" :aria-checked="it.on ? 'true' : 'false'" @click="open = false; pickMarket(it)"><span x-text="it.label"></span><small x-show="it.note" x-text="it.note"></small><i class="pl-odot" x-show="it.dot" role="img" aria-label="open position"></i><b class="nv-check" aria-hidden="true" x-show="it.on">&#10003;</b></button>
+          </template>
+        </div>
+      </div>
+      <span class="nv-sp"></span>
+      <div class="pl-cd" x-show="!choosing()">
+        <div class="pl-cd-row"><span class="pl-clock num" :class="clockCls()" aria-label="Time left in this window" x-text="left()"></span><small aria-hidden="true">left</small></div>
+        <!-- the window's progress: the server's window start / end against the server-synced clock -->
+        <div class="pl-wbar" x-show="winPct() != null" :class="clockCls()" role="progressbar" aria-label="Window elapsed" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="winPct()"><span :style="'width:' + (winPct() || 0) + '%'"></span></div>
+      </div>
+      <!-- the one kill switch (shared by every strategy): quiet until engaged; KILL needs no confirm, Resume asks first -->
+      <button type="button" class="pl-kill" :class="killed() ? 'is-on' : ''" :aria-pressed="killed() ? 'true' : 'false'"
+        :aria-label="killed() ? (resumeLocked() ? 'Kill switch is on. Turn it off on the PC' : 'Kill switch is on. Resume trading') : 'Kill switch: stop all new trading'" @click="toggleKill()" :disabled="killBusy || resumeLocked()" x-text="killLabel()"></button>
+    </div>
+    <!-- the money line: the mode pill and the venue's cash -->
+    <p class="nv-money num" x-show="v && ok()"><span class="nv-pill" :class="pillCls()" :aria-label="pillAria()" x-text="pillWord()"></span><span :class="bal() && bal().fresh ? '' : 'pl-warn'" x-text="cashText()"></span></p>
+    <p class="pl-note muted nv-why" x-show="v && !ok()" x-text="v && v.reason" role="status"></p>
+    <template x-for="w in (v && v.settle_warnings) || []" :key="w.id"><p class="pl-note amber" role="alert" x-text="w.message"></p></template>
+  </div>
+  <p class="pl-route" x-show="$store.app.routeNote" x-cloak role="status"><span x-text="$store.app.routeNote"></span>
+    <button type="button" class="pl-link" @click="$store.app.routeNote = ''">OK</button></p>
+  <p class="pl-killed" x-show="killed()" x-cloak role="status"><b>Kill switch is ON.</b> No new entries in any mode. Open positions keep their take profit and stop.</p>
+  <p class="pl-msg red" x-show="killMsg" x-text="killMsg" role="alert"></p>
+  <p class="pl-ask" x-show="pickLine()" x-text="pickLine()" role="status"></p>
+  <!-- ===== nothing chosen yet: the venue, then (a venue with several) the market length, as one clear choice ===== -->
+  <div class="pl-choose" x-show="needVenue()" role="group" aria-labelledby="pl-choose-v">
+    <h2 id="pl-choose-v">Where do you want to trade?</h2>
+    <template x-for="x in VENUES" :key="x">
+      <button type="button" class="pl-choosebtn" @click="setVenue(x)" x-text="'Trade on ' + VENUE_NAMES[x]"></button>
+    </template>
+    <button type="button" class="pl-choosebtn" @click="perpsOpen()">Trade BTC perps on Kalshi</button>
+    <p>Play remembers your choice on this device.</p>
+  </div>
+  <div class="pl-choose" x-show="needSpan()" role="group" aria-labelledby="pl-choose-s">
+    <h2 id="pl-choose-s" x-text="spanAsk()"></h2>
+    <template x-for="s in spans()" :key="s">
+      <button type="button" class="pl-choosebtn" @click="setSpan(s)" :disabled="!!ticket"><span x-text="spanName(s) + ' markets'"></span><i class="pl-odot" x-show="openOn(venue, s)" role="img" aria-label="open position"></i></button>
+    </template>
+    <p>Play remembers your choice on this device.</p>
+  </div>
+  <p class="pl-lock" x-show="lockLine() &&(msg || '').indexOf(lockLine()) < 0" x-text="lockLine()" role="status"></p>
+  <p class="error-box" x-show="error" x-text="'Could not load: ' + error" role="alert"></p>
+  <p class="pl-msg" x-show="msg" :class="msgCls" x-text="msg" role="status"></p>
+  <p class="pl-note amber" x-show="cpErr && cpMode !== 'off'" x-text="cpErr" role="status"></p>
+
+  <!-- ===== the outcome (about 8 s or until tapped; neutral for a loss or break-even, no celebration) ===== -->
+  <template x-if="ok() && !pos() && outcome">
+    <button type="button" class="pl-card pl-outcome" :class="outcome.word === 'WON' ? 'pl-outcome-won' : ''" @click="closeOutcome()" role="status">
+      <strong class="num" x-text="outcomeText()"></strong>
+      <small x-text="outcomeSub()"></small>
+    </button>
+  </template>
+
+  <!-- ===== in a trade (board 14): every parameter, live; the auto-sell chip opens the auto-sell sheet ===== -->
+  <div class="pl-params" x-show="ok() && pos()" role="group" aria-label="Your trade">
+    <template x-for="ch in params()" :key="ch.k">
+      <span class="pl-pchip num" :class="ch.cls">
+        <template x-if="ch.tap"><button type="button" class="pl-pchip-btn" @click="tpOpen()" :disabled="!pos() || pos().state !== 'open'" x-text="ch.text + ' ›'"></button></template>
+        <template x-if="!ch.tap"><span x-text="ch.text"></span></template>
+      </span>
+    </template>
+  </div>
+
+  <!-- ===== before entry: the recommendation first (call + target entry/exit), then the amount ===== -->
+  <template x-if="ok() && !pos()">
+    <div class="pl-pre">
+      <div class="pl-card pl-verdict" :class="verdictCls()" x-show="!outcome">
+        <div class="pl-vhead">
+          <span class="pl-eyebrow">The call</span>
+          <!-- the server's agree count only (call.agree); hidden when it is not sent. Opens Details. -->
+          <button type="button" class="pl-agree num" x-show="agreeShort()" @click="openDetails()" aria-controls="pl-why" :aria-expanded="details ? 'true' : 'false'"
+            :aria-label="agreeText() + '. Show details'"><span x-text="agreeShort()"></span><i aria-hidden="true">&#8250;</i></button>
+        </div>
+        <strong class="pl-hero" x-text="heroText()"></strong>
+        <span class="pl-reason" x-text="call().reason"></span>
+        <!-- Target and Ride-to as one row: the target entry, then the server's payoffs for this side at this amount -->
+        <div class="pl-pair num">
+          <div><small>Target</small><b x-text="c(side().ask)"></b><span x-text="sideName(focus()) + ' · ' + (effMode(focus()) === 'market' ? 'Market' : 'Max price ' + c(capFor(focus())))"></span></div>
+          <div class="pl-plan"><small x-text="'Ride to ' + endHm()"></small><b><span class="pl-up" x-text="planWins()"></span> <span class="pl-plan-of">/ <span class="pl-down" x-text="planLoses()"></span></span></b><span>if it wins / if not</span></div>
+        </div>
+        <div class="pl-trend">
+          <div class="pl-barwrap">
+            <div class="pl-bar" :class="call().mid_up == null ? 'pl-bar-none' : ''" role="img" :aria-label="'Market: Up ' + pct(call().mid_up)"><span :style="'width:' + upWidth()"></span></div>
+            <i class="pl-bar-fair" x-show="fairLeft() != null" :style="'left:' + fairLeft()" role="img" :aria-label="'Model ' + pct(call().fair_up) + ' Up'" :title="'Model ' + pct(call().fair_up) + ' Up'"></i>
+          </div>
+          <div class="pl-split num" role="status" :aria-label="trendAria()">
+            <b class="pl-up" x-text="'▲ Up ' + pct(call().mid_up)"></b>
+            <span class="pl-split-mid"><span x-show="call().fair_up != null" x-text="'model ' + pct(call().fair_up)"></span><b :class="trendCls()" x-show="trendDelta() != null" x-text="trendText()"></b></span>
+            <b class="pl-down" x-text="downPct() + ' ▼'"></b>
+          </div>
+        </div>
+        <!-- Ask Settleview's setup lights (Full): one per active tested rule; grey not in play, amber setting up, green ready -->
+        <div class="sv-setups" x-show="cpLights().length" role="group" aria-label="Setups: tap one for its record">
+          <div class="sv-lights">
+            <template x-for="x in cpLights()" :key="x.rule">
+              <button type="button" class="sv-lt" :class="ltCls(x)" :aria-label="ltName(x)" :aria-pressed="ltTip === x.rule ? 'true' : 'false'" @click="ltTap(x)"><i aria-hidden="true"></i><span x-text="x.rule"></span></button>
+            </template>
+          </div>
+          <p class="sv-tip" x-show="ltTipText()" x-text="ltTipText()" role="status"></p>
+        </div>
+        <details id="pl-why" class="pl-why" x-ref="why" :open="details" @toggle="setDetails($event.target.open)">
+          <summary>Details</summary>
+          <small x-text="modelLine()"></small>
+          <small class="muted" x-show="v" x-text="settleLine()"></small>
+          <small class="muted" x-show="v && v.stake" x-text="stakeSentence()"></small>
+        </details>
+      </div>
+      <!-- the agents on this market (one quiet line; tap: the Agents tab filtered to it) -->
+      <button type="button" class="sv-here num" x-show="agentsHere()" @click="agentOpen(agentsHere().market)" :aria-label="agentsHere() ? agentsHere().head + ', ' + agentsHere().tail + '. Show them' : ''"><svg class="sv-glyph" width="16" height="16" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-here-t"><b x-text="agentsHere() ? agentsHere().head : ''"></b><span x-text="agentsHere() ? ' · ' + agentsHere().tail : ''"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></button>
+      <!-- Ask Settleview: one sentence under the call (nothing when there is nothing to say); the why behind a tap -->
+      <template x-if="cpLine() && !(cpLine().tone === 'warn' && cpSlideWarn())"><!-- once the slide shows the check, the warning lives there only -->
+        <details class="sv-ask" :class="cpLine().tone === 'warn' ? 'sv-warn' : ''" :aria-label="'Ask Settleview: ' + cpLine().text">
+          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview</span><span class="sv-say" x-text="cpLine().text"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
+          <div class="sv-why num">
+            <div class="sv-prog" x-show="cpLine().kind === 'setup'" role="img" :aria-label="Math.round((cpLine().progress || 0) * 100) + '% of the way'"><span :style="'width:' + Math.round((cpLine().progress || 0) * 100) + '%'"></span></div>
+            <ul><template x-for="(d, i) in cpLine().details" :key="i"><li x-text="d"></li></template></ul>
+          </div>
+        </details>
+      </template>
+      <button type="button" class="sv-pill" x-show="canFill()" @click="fillIn()"><svg width="16" height="16" aria-hidden="true"><use href="#sv-mark"/></svg>Fill in ticket</button>
+      <p class="muted pl-note" x-show="!v.ready" x-text="v.reason"></p>
+    </div>
+  </template>
+
+  <!-- ===== in a trade: chance it wins now (outlook.chance_now / model_chance / disagree; sparkline = this page's polls) ===== -->
+  <div class="pl-card pl-chance" x-show="ok() && pos()" role="group" aria-label="Chance it wins now">
+    <span class="pl-eyebrow">Chance it wins now</span>
+    <div class="pl-chance-row">
+      <strong class="pl-chance-big num" :class="chanceTone()" :aria-label="chanceAria()" x-text="pct(look().chance_now)"></strong>
+      <div class="pl-chance-side" aria-hidden="true">
+        <b class="num" :class="chanceCls()" x-text="chanceText()"></b>
+        <span class="num">model says <b class="pl-model" x-text="pct(look().model_chance)"></b></span>
+      </div>
+    </div>
+    <p class="pl-disagree" x-show="disagreeText()" x-text="disagreeText()" role="status"></p>
+    <div class="pl-chance-spark">
+      <svg class="pl-spark" role="img" :aria-label="chanceLabel()" viewBox="0 0 300 32" preserveAspectRatio="none" :class="chanceTone()">
+        <path class="pl-spark-mid" :d="chanceBase()"></path>
+        <path class="pl-spark-line" :d="chancePath()"></path>
+        <path class="pl-spark-dot" :d="chanceDot()"></path>
+      </svg>
+      <i class="pl-chance-entry" x-show="chanceBaseTop() != null" :style="'top:' + (chanceBaseTop() || '0')" aria-hidden="true">entry</i>
+    </div>
+    <small class="num" x-text="chanceFoot()"></small>
+  </div>
+
+  <!-- ===== the live "price to beat" chart card (boards 13 and 14; web/playchart.js) ===== -->
+  <div class="pl-card pl-ptb" x-show="ok()" :class="danger() ? 'pl-danger' : ''">
+    <div class="pl-ptb-head">
+      <b class="pl-ptb-btc num" x-text="'BTC ' + ptbBtc()"></b>
+      <span class="pl-ptb-chip num" x-show="ptbChip()" :class="ptbCls()" x-text="ptbChip()"></span>
+    </div>
+    <small class="pl-ptb-sub num" x-text="ptbSub()"></small>
+    <div class="pl-sigs" x-show="!pos()" role="group" aria-label="Signals: tap one to read what it means">
+      <template x-for="ch in sigChips()" :key="ch.key">
+        <button type="button" class="pl-sigchip num" :class="ch.cls" :aria-pressed="sigTip === ch.tip ? 'true' : 'false'" @click="sigTap(ch)" x-text="ch.text"></button>
+      </template>
+    </div>
+    <p class="pl-sigtip" x-show="sigTip && !pos()" x-text="sigTip" role="status"></p>
+    <p class="pl-lvlnote" x-show="levels">Levels are reference lines, not signals — in our tests chart levels didn't predict these markets.</p>
+    <div class="pl-ptb-box">
+      <div x-ref="ptb" class="pl-ptb-chart" role="img" :aria-label="ptbLabel()"></div>
+      <span class="pl-ptb-close" x-show="closeX != null && !ptbEmpty()" :style="'left:' + (closeX || 0) + 'px'" aria-hidden="true"><i x-text="'close ' + endHm()"></i></span>
+      <p class="pl-ptb-read num" x-show="readout" x-text="readout" role="status"></p>
+      <div class="pl-wempty" x-show="ptbEmpty()">Chart appears once this window has data.</div>
+    </div>
+    <!-- the chart's key (desktop): shown only while the price to beat is known, since the fills need it -->
+    <div class="pl-legend" x-show="v && v.btc && v.btc.strike != null"><span><i class="lg-strike"></i>Price to beat</span><span><i class="lg-up"></i>Above: ▲ UP wins</span><span><i class="lg-down"></i>Below: ▼ DOWN wins</span><span x-show="coneOk()"><i class="lg-cone"></i>Likely close range (1σ / 2σ): random walk at the current volatility</span></div>
+    <p class="pl-lvlnote amber" x-show="coneNote()" x-text="coneNote()" role="status"></p>
+    <div class="pl-oddsbox" x-show="oddsOn()">
+      <p class="pl-oddshead"><small x-text="oddsLabel() + (pos() && autoSell() != null ? ' · auto-sell ' + c(autoSell()) : '')"></small><b class="num" x-text="oddsNow()"></b></p>
+      <div x-ref="odds" class="pl-odds" :class="pos() ? 'pl-odds-trade' : ''"></div>
+      <small x-show="oddsEmpty">No recorded prices for this window yet.</small>
+    </div>
+    <div class="pl-ptb-foot">
+      <button type="button" class="pl-tog" x-show="!pos()" :aria-pressed="odds ? 'true' : 'false'" @click="toggleOdds()">Odds</button>
+      <button type="button" class="pl-tog" :aria-pressed="levels ? 'true' : 'false'" @click="toggleLevels()">Levels</button>
+    </div>
+    <small class="pl-hint" x-show="!pos()">Drag a finger across the chart to read any moment.</small>
+  </div>
+
+  <!-- ===== in a trade: hold vs sell now (outlook.hold_value / sell_now / give_up; advice payoffs and cost) ===== -->
+  <div class="pl-card pl-holdsell" x-show="ok() && pos()" role="group" aria-label="Hold or sell now">
+    <div>
+      <span class="pl-eyebrow" x-text="holdAt()"></span>
+      <b class="num" x-text="holdValue()"></b>
+      <span class="num"><b class="pl-up" x-text="holdWins()"></b> if it wins</span>
+      <span class="num"><b class="pl-down" x-text="holdLoses()"></b> if not</span>
+    </div>
+    <div>
+      <span class="pl-eyebrow">Sell now</span>
+      <b class="num" x-text="sellNow()"></b>
+      <span class="num"><b :class="sellVsCost() == null ? '' : sellVsCost() >= 0 ? 'pl-up' : 'pl-down'" x-text="sUsd(sellVsCost())"></b> vs cost</span>
+      <span class="num" x-text="'spread + fee ≈ ' + sellGiveUp()"></span>
+    </div>
+  </div>
+
+  <!-- ===== in a trade: HOLD / CONSIDER EXIT in one sentence (display only) ===== -->
+  <div class="pl-card pl-advline" x-show="ok() && pos()" :class="pos() && pos().advice ? advCls(pos().advice) : ''" role="status">
+    <p><b x-text="pos() && pos().advice ? pos().advice.action : ''"></b> · <span x-text="watchLine()"></span></p>
+  </div>
+  <template x-if="cpHold()">
+        <details class="sv-ask" :class="cpHold().tone === 'warn' ? 'sv-warn' : ''" :aria-label="'Ask Settleview: ' + cpHold().text">
+          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview</span><span class="sv-say" x-text="cpHold().text"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
+          <div class="sv-why num">
+            <div class="sv-prog" x-show="cpHold().kind === 'setup'" role="img" :aria-label="Math.round((cpHold().progress || 0) * 100) + '% of the way'"><span :style="'width:' + Math.round((cpHold().progress || 0) * 100) + '%'"></span></div>
+            <ul><template x-for="(d, i) in cpHold().details" :key="i"><li x-text="d"></li></template></ul>
+          </div>
+        </details>
+      </template>
+
+
+  <!-- ===== sticky bottom bar ===== -->
+  <div class="pl-bottom" x-show="ok()" role="region" aria-label="Order ticket">
+    <!-- one-tap retry after a "price moved" refusal of a buy: the live ask, 15 s, same tab / ticker / side / amount -->
+    <div class="pl-retry" x-show="retryShow()" x-cloak role="group" aria-label="Retry the buy at the new price">
+      <p class="pl-retry-head num" aria-live="polite" x-text="retryHead()"></p>
+      <button type="button" class="pl-btn pl-retry-go" :class="retry && retry.side === 'DOWN' ? 'pl-retry-down' : 'pl-retry-up'"
+        @click="retryBuy()" :disabled="!!retryWhy()" x-text="retryLabel()"></button>
+      <p class="pl-retry-note num" x-text="retryWhy() || retryNote()"></p>
+      <button type="button" class="pl-link pl-retry-x" @click="retry = null">Dismiss</button>
+    </div>
+    <div class="pl-sidepick" role="radiogroup" aria-label="Side to buy" x-show="!pos()">
+      <template x-for="s in ['UP', 'DOWN']" :key="s">
+        <button type="button" role="radio" class="pl-sidebtn" :class="(s === 'UP' ? 'pl-buy-up' : 'pl-buy-down') + (sideNow() === s ? ' on' : '')"
+          :aria-checked="sideNow() === s ? 'true' : 'false'" :aria-label="sideLabel(s)" @click="choose(s)"><b x-text="sideName(s)"></b><small class="num" x-text="c(side(s).ask) + (primary(s) ? ' · the call' : '')"></small></button>
+      </template>
+    </div>
+    <!-- the amount: chips and Other, with the contract count beside them -->
+    <div class="pl-amts" x-show="!pos()" role="group" aria-label="Amount per trade">
+      <template x-for="x in CHIPS" :key="x">
+        <button type="button" class="pl-chipbtn" :aria-pressed="!other && stake() === x ? 'true' : 'false'" :disabled="chipOff(x)" @click="pickChip(x)" x-text="'$' + x"></button>
+      </template>
+      <button type="button" class="pl-chipbtn" :aria-pressed="other ? 'true' : 'false'" @click="pickOther()">Other</button>
+      <span class="pl-amts-n num" x-text="countLine()"></span>
+    </div>
+    <label class="pl-amount" x-show="other && !pos()"><span>$</span><input id="pl-amount" type="text" inputmode="decimal" autocomplete="off" x-model="stakeInput" @change="saveStake()" aria-label="Amount in dollars"></label>
+    <div class="sv-filled num" x-show="filledLine()" role="status"><span class="sv-by"><svg width="14" height="14" aria-hidden="true"><use href="#sv-mark"/></svg>Filled in</span><span x-text="filledLine()"></span>
+      <button type="button" class="sv-undo" @click="undoFill()" :disabled="busy || sliding">Undo</button></div>
+    <!-- one secondary line: what bounds this amount when it is over a cap, else the order's terms -->
+    <p class="pl-slideinfo num" :class="infoWarn() ? 'pl-warn' : ''" x-show="infoLine()" x-text="infoLine()"></p>
+    <p class="pl-slideinfo" x-show="pos()">Sell needs a 70% slide. If the bid drops over 2¢ mid-slide it snaps back.</p>
+    <!-- the check while you slide: one amber line, only when there is something to warn about; it never blocks the slide -->
+    <template x-if="cpSlideWarn()">
+        <details class="sv-ask sv-check" :class="cpSlideWarn().tone === 'warn' ? 'sv-warn' : ''" :aria-label="'Check: ' + cpSlideWarn().text">
+          <summary><svg class="sv-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="sv-text"><span class="sv-who">Ask Settleview · check</span><span class="sv-say" x-text="cpSlideWarn().text"></span></span><span class="sv-chev" aria-hidden="true">&#8250;</span></summary>
+          <div class="sv-why num">
+            <div class="sv-prog" x-show="cpSlideWarn().kind === 'setup'" role="img" :aria-label="Math.round((cpSlideWarn().progress || 0) * 100) + '% of the way'"><span :style="'width:' + Math.round((cpSlideWarn().progress || 0) * 100) + '%'"></span></div>
+            <ul><template x-for="(d, i) in cpSlideWarn().details" :key="i"><li x-text="d"></li></template></ul>
+          </div>
+        </details>
+      </template>
+    <div class="pl-slide" x-ref="track" :class="(pos() ? 'pl-slide-exit' : (sideNow() === 'UP' ? 'pl-slide-up' : sideNow() === 'DOWN' ? 'pl-slide-down' : 'pl-slide-none')) + (slideOk() && !busy ? '' : ' off') + (pulse ? ' pl-pulse' : '') + (alert ? ' pl-alert' : '')">
+      <div class="pl-slide-fill" :style="'width:' + (slideX + 60) + 'px'"></div>
+      <span class="pl-slide-text" aria-live="polite"><span x-text="slideText()"></span><small x-show="slideSub()" x-text="slideSub()"></small></span>
+      <button type="button" class="pl-slide-knob" :style="'transform:translateX(' + slideX + 'px)'"
+        :aria-label="slideAria()" :disabled="!slideOk() || busy"
+        @pointerdown="slideStart($event)" @pointermove="slideMove($event)" @pointerup="slideEnd()" @pointercancel="slideX = 0; sliding = false">&#8250;&#8250;</button>
+    </div>
+  </div>
+
+  <!-- ===== auto-sell sheet (after a fill; optional; sits above the bottom bar so slide-to-sell stays usable) ===== -->
+  <div class="pl-sheet pl-tpsheet" x-show="tpSheet && pos()" x-cloak role="dialog" aria-labelledby="pl-tp-title">
+    <h2 id="pl-tp-title">Auto sell</h2>
+    <small class="muted">Sell price</small>
+    <input type="range" class="pl-range" max="99" step="1" :min="tpLo()" :value="tpCents" @input="tpCents = Number($event.target.value)" aria-label="Auto-sell price in cents" :aria-valuetext="tpLabel()">
+    <p class="pl-tplabel" x-text="tpLabel()"></p>
+    <p class="muted pl-note">Our data: riding beat an 85¢ auto-sell by about 5¢ a contract (5.3¢ over 222 held-out trades).</p>
+    <label class="pl-check pl-slcheck"><input id="pl-slon" type="checkbox" x-model="slOn"> Stop-loss (optional)</label>
+    <input type="range" class="pl-range" x-show="slOn" min="5" max="300" step="5" :value="slDist" @input="slDist = Number($event.target.value)" aria-label="Stop-loss distance from BTC now, in dollars" :aria-valuetext="slLabel()">
+    <p class="pl-tplabel" :class="slOn ? 'pl-down' : 'muted'" x-text="slLabel()"></p>
+    <p class="pl-msg red" x-show="tpMsg" x-text="tpMsg" role="alert"></p>
+    <div class="pl-grid2">
+      <button type="button" class="pl-btn pl-yes" @click="sheetSave()" :disabled="tpBusy">Submit</button>
+      <button type="button" class="pl-btn" @click="tpClose()" :disabled="tpBusy">Close</button>
+    </div>
+    <button type="button" class="pl-link" x-show="tpHas()" @click="tpRemove()" :disabled="tpBusy">Remove auto-sell (ride to settlement)</button>
+    <label class="pl-check"><input type="checkbox" x-model="tpNoMore"> Don't show this again</label>
+  </div>
+
+  <!-- ===== settings (the gear): kill switch state, and phone access (PIN) on the PC only ===== -->
+  <div class="pl-dim" x-show="settings" x-cloak @click="settings = false"></div>
+  <div id="pl-settings" class="pl-sheet pl-set" x-show="settings" x-cloak role="dialog" aria-modal="true" aria-labelledby="pl-set-title" @keydown.escape="settings = false">
+    <h2 id="pl-set-title">Settings</h2>
+    <section class="pl-set-sec" aria-labelledby="pl-set-kill">
+      <h3 id="pl-set-kill">Kill switch</h3>
+      <p class="pl-note" x-text="killState()"></p>
+      <button type="button" class="pl-btn" :class="killed() ? '' : 'pl-btn-kill'" @click="toggleKill()" :disabled="killBusy || resumeLocked()" x-text="killed() ? 'Resume trading' : 'KILL SWITCH: stop all new trading'"></button>
+      <p class="pl-note muted" x-show="resumeLocked()">Turning the kill switch off: change this on the PC.</p>
+      <small>One switch for every strategy and venue (the KILL button at the top is the same switch). It stops new entries and ends auto-approve sessions; open positions keep their take profit and stop.</small>
+    </section>
+    <section class="pl-set-sec pl-lim" aria-labelledby="pl-set-lim" x-data="playLimitsCard()" @pl-settings.window="lmLoad()">
+      <h3 id="pl-set-lim">Trade limits</h3>
+      <p class="pl-note muted" x-show="!lmTried">Checking…</p>
+      <p class="error-box" x-show="lmTried && !lm" x-text="'Could not load your trade limits: ' + lmErr" role="alert"></p>
+      <template x-if="lm">
+        <div class="pl-lim-body">
+          <p class="error-box" x-show="!lm.readable" x-text="lm.error" role="alert"></p>
+          <dl class="pl-lim-now">
+            <div><dt>Per trade</dt><dd class="num" x-text="lmNow('per_trade')"></dd></div>
+            <div><dt>Per day</dt><dd class="num" x-text="lmNow('per_day')"></dd></div>
+          </dl>
+          <p class="pl-note muted num" x-text="lmUsed(v)"></p>
+          <div class="pl-lim-edit">
+            <div class="pl-lim-field">
+              <label class="pl-check"><input type="checkbox" x-model="lmNoTrade" @change="lmEdited()" :disabled="pc === false && !lmNoTrade"> No per-trade limit</label>
+              <label class="pl-amount" x-show="!lmNoTrade"><span>$</span><input id="pl-lim-trade" type="text" inputmode="decimal" autocomplete="off" x-model="lmTrade" @input="lmEdited()" aria-label="Per-trade limit in dollars"></label>
+            </div>
+            <div class="pl-lim-field">
+              <label class="pl-check"><input type="checkbox" x-model="lmNoDay" @change="lmEdited()" :disabled="pc === false && !lmNoDay"> No per-day limit</label>
+              <label class="pl-amount" x-show="!lmNoDay"><span>$</span><input id="pl-lim-day" type="text" inputmode="decimal" autocomplete="off" x-model="lmDay" @input="lmEdited()" aria-label="Per-day limit in dollars"></label>
+            </div>
+          </div>
+          <button type="button" class="pl-btn pl-yes" x-show="!lmNeed" @click="lmSave(false)" :disabled="lmBusy" x-text="lmBusy ? 'Saving…' : 'Save limits'"></button>
+          <template x-if="lmNeed">
+            <div class="pl-lim-confirm" role="group" aria-labelledby="pl-lim-cf">
+              <p class="pl-note" id="pl-lim-cf" x-text="lmNeed.reason"></p>
+              <label class="field" for="pl-lim-phrase">Type: <b class="mono" x-text="lmNeed.confirm_phrase"></b></label>
+              <input id="pl-lim-phrase" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" x-model="lmPhrase">
+              <div class="pl-grid2">
+                <button type="button" class="pl-btn pl-yes" @click="lmSave(true)" :disabled="lmBusy || !lmNeed.confirm_phrase || lmPhrase !== lmNeed.confirm_phrase">Confirm and save</button>
+                <button type="button" class="pl-btn" @click="lmEdited()" :disabled="lmBusy">Cancel</button>
+              </div>
+            </div>
+          </template>
+          <p class="pl-note" :class="lmMsgCls" x-show="lmMsg" x-text="lmMsg" role="status"></p>
+          <p class="pl-note">The per-day limit is one combined total for the day across Kalshi, Polymarket and perps. A dollar means the stake for event contracts and the committed collateral for perps (the per-trade limit caps the collateral of each perps entry or add). The per-window limit does not apply to perps.</p>
+          <small>Lowering a limit saves at once; raising or removing one asks you to type a confirmation. In production every order must also fit your venue cash.</small>
+          <p class="pl-note muted" x-show="pc === false">Raising or removing a limit, or widening the market protection: change this on the PC.</p>
+          <div class="pl-band">
+            <small id="pl-band-l">Market protection: a Market buy fills at most this far over the ask you saw</small>
+            <p class="error-box" x-show="lm.market_band && !lm.market_band.readable" x-text="lm.market_band && lm.market_band.error" role="alert"></p>
+            <div class="pl-chips" role="radiogroup" aria-labelledby="pl-band-l">
+              <template x-for="x in bandChoices()" :key="String(x)">
+                <button type="button" role="radio" class="pl-chipbtn" :aria-checked="bandIs(x) ? 'true' : 'false'" :aria-pressed="bandIs(x) ? 'true' : 'false'" :disabled="lmBusy || (pc === false && bandWider(x))" @click="bandSave(x)" x-text="x == null ? 'Up to 99¢' : '+' + x + '¢'"></button>
+              </template>
+            </div>
+            <small class="muted">The worst case shown above the slide uses this. A wider band fills more often in a fast move; the order may cost up to that much more per contract. Default +15¢.</small>
+            <p class="pl-note" :class="bandMsgCls" x-show="bandMsg" x-text="bandMsg" role="status"></p>
+          </div>
+          <template x-if="lmHistory().length">
+            <div class="pl-lim-hist">
+              <small class="muted">Recent changes</small>
+              <ul>
+                <template x-for="h in lmHistory()" :key="h.k">
+                  <li><span class="muted num" x-text="h.when"></span> <b :class="h.up ? 'amber' : ''" x-text="h.word"></b> <span class="num" x-text="h.text"></span></li>
+                </template>
+              </ul>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+    <section class="pl-set-sec" aria-labelledby="pl-set-sv">
+      <h3 id="pl-set-sv">Ask Settleview</h3>
+      <div class="pl-seg pl-seg-sm sv-mode" role="radiogroup" aria-label="Ask Settleview mode">
+        <template x-for="m in CP_MODES" :key="m">
+          <button type="button" role="radio" :aria-checked="cpMode === m ? 'true' : 'false'" @click="setCpMode(m)" x-text="CP_NAMES[m]"></button>
+        </template>
+      </div>
+      <p class="pl-note amber" x-show="cpUnknown != null" x-text="'The saved Ask Settleview mode (“' + cpUnknown + '”) was not recognised, so it is Off. Pick one to replace it.'" role="status"></p>
+      <details class="sv-warnset">
+        <summary><span>Warnings</span><small x-text="cpWarnCount()"></small></summary>
+        <template x-for="k in CP_WARNS" :key="k">
+          <label class="pl-check"><input type="checkbox" role="switch" :checked="cpWarnOn(k)" @change="toggleCpWarn(k)"> <span x-text="CP_WARN_NAMES[k]"></span></label>
+        </template>
+      </details>
+      <p class="pl-note amber" x-show="cpWarnUnknown != null" x-text="'The saved warning switches (“' + cpWarnUnknown + '”) were not recognised, so all are on. Tap one to replace them.'" role="status"></p>
+      <small x-text="cpModeNote()"></small>
+      <small>Never places, approves or cancels orders. Runs only while Play is open.</small>
+    </section>
+    <section class="pl-set-sec" aria-labelledby="pl-set-theme">
+      <h3 id="pl-set-theme">Theme</h3>
+      <fieldset class="pl-seg pl-theme">
+        <legend>Theme</legend>
+        <template x-for="m in THEMES" :key="m">
+          <label><input type="radio" name="pl-theme" :value="m" :checked="themeMode === m" @change="setTheme(m)"><span x-text="THEME_NAMES[m]"></span></label>
+        </template>
+      </fieldset>
+      <p class="pl-note amber" x-show="themeUnknown != null" x-text="'The saved theme (“' + themeUnknown + '”) was not recognised, so System is used. Pick one to replace it.'" role="status"></p>
+      <p class="pl-note amber" x-show="themeMsg" x-text="themeMsg" role="status"></p>
+      <small>System follows this device's light or dark setting.</small>
+    </section>
+    <section class="pl-set-sec" aria-labelledby="pa-title" x-data="phoneAccessCard()" @pl-settings.window="load()">
+      <h3 id="pa-title">Phone access <span class="pa-pill" x-show="a" :class="a && a.pin_set ? 'pa-on' : 'pa-off'" x-text="a && a.pin_set ? 'On' : (a && a.reset_needed ? 'New PIN needed' : 'Off')"></span></h3>
+      <p class="pl-note muted" x-show="!tried">Checking…</p>
+      <p class="pl-note muted" x-show="tried && !a" x-text="'Phone access (the PIN): change this on the PC (' + refused + ')'"></p>
+      <template x-if="a">
+        <div class="pa-body">
+          <p class="pl-note muted">Use Play from your phone on the home network or VPN. Only this PC can change these settings. No HTTPS: never port-forward it.</p>
+          <p class="pl-note amber" x-show="a.reset_needed" role="status">Phone access needs a new 6–8 digit PIN — set it on the PC. The old PIN (set under the 4-digit rule) no longer works.</p>
+          <p class="pl-note amber" x-show="a.note" x-text="a.note"></p>
+          <div class="pa-pins">
+            <label class="field" for="pa-pin">PIN (6–8 digits)</label>
+            <input id="pa-pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" x-model="pin">
+            <label class="field" for="pa-pin2">PIN again</label>
+            <input id="pa-pin2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" x-model="pin2">
+            <p class="pl-note red" x-show="pin2 && pin !== pin2">The two PINs do not match.</p>
+            <p class="pl-note red" x-show="pin && !/^[0-9]{6,8}$/.test(pin)">The PIN must be 6 to 8 digits.</p>
+            <button type="button" class="pl-btn pl-yes" @click="save()" :disabled="busy || !valid()" x-text="a.pin_set ? 'Change PIN' : 'Turn on phone access'"></button>
+          </div>
+          <template x-if="a.pin_set">
+            <div class="pa-on-box">
+              <p class="pl-note">Phone URL: <b class="mono" x-text="a.lan_url || 'unknown'"></b> <button type="button" class="pl-link" @click="copy()" :disabled="!a.lan_url" x-text="copied ? 'Copied' : 'Copy'"></button></p>
+              <p class="pl-note muted" x-show="!a.lan_url" x-text="a.how_to_find_ip"></p>
+              <p class="pl-note" x-text="'Phones signed in: ' + a.signed_in"></p>
+              <div class="pl-grid2">
+                <button type="button" class="pl-btn" @click="signOut()" :disabled="busy">Sign out all phones</button>
+                <button type="button" class="pl-btn" @click="clear()" :disabled="busy">Turn phone access off</button>
+              </div>
+            </div>
+          </template>
+          <div class="pa-pc-box">
+            <p class="pl-note muted">This browser is paired as the PC (no PIN). Pair another one with <span class="mono">ops pair-pc</span>.</p>
+            <button type="button" class="pl-btn" @click="signOutPc()" :disabled="busy">Sign out PC browsers</button>
+          </div>
+        </div>
+      </template>
+      <p class="pl-note" x-show="msg" x-text="msg" role="status"></p>
+    </section>
+    <button type="button" class="pl-btn" @click="settings = false">Close</button>
+  </div>
+
+  <!-- ===== confirm sheet (second tap) ===== -->
+  <div class="pl-dim" x-show="ticket" x-cloak @click="answer(false)"></div>
+  <div class="pl-sheet" x-show="ticket" x-cloak role="dialog" aria-modal="true" aria-labelledby="pl-sheet-title">
+    <h2 id="pl-sheet-title" x-text="sheetTitle()"></h2>
+    <p class="pl-mode pl-real" x-show="real()">REAL MONEY</p>
+    <dl class="pl-rows"><template x-for="row in sheetRows()" :key="row[0]"><div><dt x-text="row[0]"></dt><dd x-text="row[1]"></dd></div></template></dl>
+    <p class="muted pl-note" x-text="'Expires in ' + ticketLeft() + ' s'"></p>
+    <button type="button" class="pl-btn pl-yes" @click="answer(true)" :disabled="busy || ticketLeft() === 0" x-text="confirmLabel()"></button>
+    <button type="button" class="pl-btn" @click="answer(false)" :disabled="busy">Cancel</button>
+  </div>
+</section>
+<!-- ================= RECORD (design pass 2026-10-31): your results over today / the week / everything, from
+     GET /api/record/summary (the Telegram daily summary's own computation), by rule; your trades on the Play market
+     (Play's record view, moved here); the order settings; each market's trading mode ================= -->
+<section id="panel-record" class="pl rc" aria-label="Record" x-show="$store.app.view === 'record'" x-cloak x-data="recordView()">
+  <div class="nv-titlebar"><h1 class="nv-title">Record</h1></div>
+  <div class="nv-seg rc-range" role="radiogroup" aria-label="Range">
+    <template x-for="r in RANGES" :key="r">
+      <button type="button" role="radio" :aria-checked="rcRange === r ? 'true' : 'false'" @click="rcSet(r)" x-text="RANGE_NAMES[r]"></button>
+    </template>
+  </div>
+  <p class="pl-note amber" x-show="rcRangeUnknown != null" x-text="'The saved range (“' + rcRangeUnknown + '”) was not recognised, so Today is shown. Pick one to replace it.'" role="status"></p>
+  <p class="error-box" x-show="rcErr" x-text="'Could not load your record: ' + rcErr" role="alert"></p>
+  <p class="pl-note muted" x-show="!rcSum && !rcErr">Loading…</p>
+  <template x-if="rcSum">
+    <div class="rc-sum">
+      <div class="rc-card" aria-live="polite">
+        <span class="pl-eyebrow" x-text="RANGE_NAMES[rcSum.range] + ' · all venues'"></span>
+        <div class="rc-hero-row"><b class="rc-hero num" :class="tone(rcSum.net)" x-text="signed(rcSum.net)" data-flash></b><span class="num" x-text="tradesLine(rcSum)"></span></div>
+        <div class="rc-tiles num">
+          <div class="rc-you"><small>You</small><b :class="tone(rcSum.you.net)" x-text="signed(rcSum.you.net)"></b><span x-text="plural(rcSum.you.trades, 'trade')"></span></div>
+          <div class="rc-agent"><small>Agent</small><b :class="tone(rcSum.agent.net)" x-text="signed(rcSum.agent.net)"></b><span x-text="plural(rcSum.agent.trades, 'trade')"></span></div>
+          <div class="rc-api"><small>API</small><b x-text="money(rcSum.api.usd)"></b><span x-text="plural(rcSum.api.wakes, 'wake')"></span></div>
+        </div>
+        <small class="rc-foot">Closed trades after every fee, counted on the day they closed (this PC's days). Perps keep their own record on the Perps screen.</small>
+      </div>
+      <div class="nv-seg rc-by" role="radiogroup" aria-label="Group results">
+        <template x-for="b in BYS" :key="b">
+          <button type="button" role="radio" :aria-checked="rcBy === b ? 'true' : 'false'" @click="rcSetBy(b)" x-text="BY_NAMES[b]"></button>
+        </template>
+      </div>
+      <div class="rc-group rc-rules num" x-show="rcBy === 'rule'">
+        <template x-for="x in rcSum.by_rule" :key="x.rule">
+          <div class="rc-row"><span x-text="x.rule"></span> <span class="nv-sp"></span> <span class="rc-val" x-text="x.trades ? x.wins + '/' + x.trades + ' won · ' : 'no trades'"></span><span class="rc-val" :class="tone(x.net)" x-show="x.trades" x-text="signed(x.net)"></span></div>
+        </template>
+        <div class="rc-row is-off" x-show="!rcSum.by_rule.length"><span>No rule ran or traded in this range.</span></div>
+      </div>
+      <!-- by agent: which agents earn their keep, after API cost; Clone or Retire from here -->
+      <div class="rc-byagent" x-show="rcBy === 'agent'">
+        <div class="rc-group rc-agents num">
+          <template x-for="a in (rcSum.by_agent || [])" :key="a.agent_id || a.name">
+            <details class="rc-ag" @toggle="if (!$event.target.open && rcAsk === a.agent_id) rcAsk = ''">
+              <summary class="rc-row"><span class="rc-ag-t"><span class="rc-ag-name" x-text="a.name"></span><small x-text="agentLine(a)"></small></span><span class="nv-sp"></span>
+                <span class="rc-ag-r"><b :class="tone(a.net_after_api)" x-text="signed(a.net_after_api)"></b><small>after API</small></span></summary>
+              <div class="rc-ag-acts" x-show="a.agent_id">
+                <button type="button" class="rc-act" @click="rcClone(a)">Clone</button>
+                <button type="button" class="rc-act red" x-show="!a.archived && rcAsk !== a.agent_id" @click="rcAsk = a.agent_id" :disabled="rcPhone()">Retire</button>
+                <small x-show="!a.archived && rcPhone()">Retire on the PC.</small>
+                <span class="rc-ask" x-show="rcAsk === a.agent_id" role="alert"><span x-text="'Retire ' + a.name + '? It keeps its runs and cannot run again.'"></span>
+                  <button type="button" class="rc-act red" @click="rcRetire(a)" :disabled="!!rcBusy">Retire</button><button type="button" class="rc-act" @click="rcAsk = ''">Cancel</button></span>
+              </div>
+            </details>
+          </template>
+          <div class="rc-row is-off" x-show="!(rcSum.by_agent || []).length"><span>No agent ran or traded in this range.</span></div>
+        </div>
+        <div class="rc-group" x-show="bestAgent()">
+          <button type="button" class="rc-row rc-clone-best" @click="rcClone(bestAgent())"><span x-text="'Clone the best agent (' + (bestAgent() ? bestAgent().name : '') + ')'"></span><span class="nv-sp"></span><span class="rc-chev" aria-hidden="true">›</span></button>
+        </div>
+        <p class="rc-foot" :class="rcMsgCls" x-show="rcMsg" x-text="rcMsg" role="status"></p>
+        <small class="rc-foot">Ranked by net after API cost. A handful of trades is luck as much as skill; the counts are shown so you can tell. Retire: tap an agent.</small>
+      </div>
+    </div>
+  </template>
+  <p class="rc-gl">Your trades and settings</p>
+  <!-- ===== your last N ===== -->
+  <details class="rc-group rc-disc pl-hist" id="rc-trades" @toggle="if ($event.target.open) loadScore()">
+    <summary><span x-text="'Your trades · ' + (venue ? tabName() : 'pick a market on Play')"></span><small class="num" x-show="att()" x-text="att() ? att().record.wins + '–' + att().record.losses + ' · ' + sUsd(att().record.pnl) : ''"></small></summary>
+    <div class="pl-row">
+      <b>Your last</b>
+      <div class="pl-seg pl-seg-sm" role="radiogroup" aria-label="How many attempts">
+        <template x-for="n in ['5', '10', '20', 'all']" :key="n">
+          <button type="button" role="radio" :aria-checked="last === n" @click="setLast(n)" x-text="n === 'all' ? 'All' : n"></button>
+        </template>
+      </div>
+    </div>
+    <div class="pl-seg pl-seg-sm" role="radiogroup" aria-label="Which venue">
+      <button type="button" role="radio" :aria-checked="!both" @click="setBoth(false)">This venue</button>
+      <button type="button" role="radio" :aria-checked="both" @click="setBoth(true)">Both</button>
+    </div>
+    <p class="error-box" x-show="sbError" x-text="sbError"></p>
+    <template x-if="att()">
+      <div>
+        <p class="pl-recline">
+          <b class="num" x-text="att().record.wins + '–' + att().record.losses"></b>
+          <b class="num" :class="att().record.pnl >= 0 ? 'pl-up' : 'pl-down'" x-text="sUsd(att().record.pnl)"></b>
+          <small class="pl-streak" x-show="streakText()" x-text="streakText()"></small>
+        </p>
+        <p class="pl-note muted" x-show="att().n" x-text="calLine()"></p>
+        <p class="muted" x-show="!att().n">No finished attempts yet.</p>
+        <template x-if="pnlChart()">
+          <svg class="pl-chart" :viewBox="'0 0 ' + W + ' ' + H" role="img" aria-label="Running P&L over these attempts; tap a dot for details">
+            <path :class="pnlChart().up ? 'pl-area-up' : 'pl-area-down'" :d="pnlChart().area"></path>
+            <line class="pl-zero" x1="0" :x2="W" :y1="pnlChart().zeroY" :y2="pnlChart().zeroY"></line>
+            <path class="pl-pnlln" :d="pnlChart().line"></path>
+            <g x-html="dotsSvg()" @click="pickDot($event)" style="cursor:pointer"></g>
+          </svg>
+        </template>
+        <p class="pl-pick" x-show="pick" role="status"><span x-text="pickWhen()"></span><span :class="pickVenueKnown() ? '' : 'pl-warn'" x-text="pickVenue()"></span><span x-text="pickRest()"></span></p>
+        <div class="pl-grid3">
+          <div><small>You won</small><b x-text="pct(attStats().won)"></b></div>
+          <div><small>Price said</small><b x-text="pct(attStats().said)"></b></div>
+          <div><small>Edge</small><b :class="(attStats().edge || 0) >= 0 ? 'pl-up' : 'pl-down'" x-text="attStats().edge == null ? '—' : (attStats().edge > 0 ? '+' : '') + attStats().edge + ' pts'"></b></div>
+        </div>
+        <p class="muted pl-note" x-text="sb && sb.calls.note"></p>
+      </div>
+    </template>
+  </details>
+
+  <details class="rc-group rc-disc" id="rc-orders">
+    <summary><span>Order settings</span><small x-text="ORDER_NAMES[orderMode]"></small></summary>
+    <label class="pl-check"><input type="checkbox" :checked="tpPrompt" @change="setTpPrompt($event.target.checked)"> Auto-sell prompt after buy</label>
+    <small id="pl-otype">Order type</small>
+    <div class="pl-seg pl-seg-sm pl-otype" role="radiogroup" aria-labelledby="pl-otype">
+      <template x-for="m in ORDERS" :key="m">
+        <button type="button" role="radio" :aria-checked="orderMode === m ? 'true' : 'false'" @click="setOrder(m)" :disabled="busy || sliding" x-text="ORDER_NAMES[m] + (m === ORDER_DEFAULT ? ' (default)' : '')"></button>
+      </template>
+    </div>
+    <small x-show="orderMode === 'market'">Market fills at the best price on offer right now, like Kalshi's Quick Order and Polymarket's market buy. Anything not filled at once is cancelled; it never pays more than the ask plus your market protection (Settings → Trade limits).</small>
+    <p class="pl-note amber" x-show="orderUnknown != null" x-text="'The saved order type (“' + orderUnknown + '”) was not recognised, so Market (the default) is used. Pick one to replace it.'" role="status"></p>
+    <template x-if="orderMode === 'limit'">
+      <div>
+        <small>Max price: how far over the ask you will pay rather than miss the entry</small>
+        <div class="pl-chips" role="radiogroup" aria-label="Max price over the ask">
+          <template x-for="x in SLIPS" :key="x">
+            <button type="button" role="radio" class="pl-chipbtn" :aria-checked="slip === x ? 'true' : 'false'" :aria-pressed="slip === x ? 'true' : 'false'" @click="setSlip(x)" x-text="'+' + x + '¢'"></button>
+          </template>
+        </div>
+        <small x-text="'Default: +' + SLIP_DEFAULT + '¢ over the ask (used until you pick one).'"></small>
+        <p class="pl-note amber" x-show="slipUnknown != null" x-text="'The saved max price setting (“' + slipUnknown + '”) was not recognised, so +' + SLIP_DEFAULT + '¢ (the default) is used. Pick one to replace it.'" role="status"></p>
+      </div>
+    </template>
+    <p class="muted pl-note">Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts.</p>
+  </details>
+
+  <p class="rc-gl">Mode for each venue</p>
+  <p class="error-box" x-show="rcModeErr" x-text="'Could not read the modes: ' + rcModeErr" role="alert"></p>
+  <div class="rc-group rc-modes">
+    <template x-for="m in modeRows()" :key="m.key">
+      <details class="rc-disc rc-mode" @toggle="if ($event.target.open) modeOpen(m)">
+        <summary><span x-text="m.label"></span><small class="rc-modeval" :class="m.known ? '' : 'pl-warn'" x-text="m.word"></small></summary>
+        <div class="rc-modebody">
+          <label class="field" :for="'rc-mode-' + m.key">Mode</label>
+          <select :id="'rc-mode-' + m.key" x-model="rcForms[m.key].mode">
+            <option value="shadow">Shadow (no money)</option>
+            <option value="sandbox" x-show="m.venue === 'kalshi'">Paper (Kalshi demo money)</option>
+            <option value="prod">Live (REAL MONEY)</option>
+          </select>
+          <label class="field" :for="'rc-confirm-' + m.key" x-show="rcForms[m.key].mode === 'prod'">Type exactly: <b class="mono" x-text="PROD_CONFIRM"></b></label>
+          <input :id="'rc-confirm-' + m.key" type="text" autocomplete="off" spellcheck="false" x-show="rcForms[m.key].mode === 'prod'" x-model="rcForms[m.key].confirm" aria-label="Real-money confirmation">
+          <button type="button" class="pl-btn" @click="setModeFor(m)" :disabled="!canSetModeFor(m)">Switch mode</button>
+          <p class="pl-note" x-text="rcForms[m.key].msg" role="status"></p>
+        </div>
+      </details>
+    </template>
+    <div class="rc-row is-off" x-show="rcModes && !modeRows().length"><span>No markets on this server.</span></div>
+  </div>
+  <small class="rc-foot">Perps' mode is in the Perps settings (Kalshi → BTC Perps, the gear).</small>
+</section>
+</div>
+<!-- ================= PERPS (Kalshi's BTC perpetual; web/views/perps.js, chart web/perpchart.js) ================= -->
+<section id="panel-perps" class="pl pv" aria-label="Perps" x-show="$store.app.view === 'perps'" x-cloak x-data="perpsView()">
+  <!-- Layout: the user's approved Perps wireframe (2026-10-30), with the design pass (2026-10-31): Play's top
+       (venue, the market picker, KILL, the money line), the hero price on the chart card, rows, the dock. -->
+  <div class="pl-top">
+    <div class="nv-row">
+      <div class="nv-seg" role="radiogroup" aria-label="Venue">
+        <button type="button" role="radio" aria-checked="true">Kalshi<i class="pl-odot" x-show="pos()" role="img" aria-label="open position"></i></button>
+        <button type="button" role="radio" aria-checked="false" @click="goVenue('polymarket')" :disabled="sliding || busy">Polymarket</button>
+      </div>
+      <button type="button" class="nv-gear" @click="openSheet()" aria-label="Settings" :aria-expanded="sheet ? 'true' : 'false'" aria-controls="pv-settings"><svg width="22" height="22" aria-hidden="true"><use href="#tb-gear"/></svg></button>
+    </div>
+    <div class="nv-hdr">
+      <div class="nv-picker" x-data="{ open: false }" @keydown.escape="open = false" @click.outside="open = false">
+        <button type="button" class="nv-pick" aria-haspopup="menu" :aria-expanded="open ? 'true' : 'false'" @click="open = !open" :disabled="sliding || busy" :aria-label="'Market: ' + pickerLabel() + '. Change market'">
+          <b><span x-text="pickerLabel()"></span><small aria-hidden="true">&#9662;</small></b>
+          <span class="nv-sub num" x-text="pickerSub()"></span>
+        </button>
+        <div class="nv-menu" role="menu" aria-label="Kalshi markets" x-show="open" x-cloak>
+          <button type="button" role="menuitemradio" aria-checked="false" @click="open = false; goVenue('kalshi')"><span>BTC 15m</span></button>
+          <button type="button" role="menuitemradio" aria-checked="true" @click="open = false"><span>BTC Perps</span><small x-show="v && !v.enabled">off</small><b class="nv-check" aria-hidden="true">&#10003;</b></button>
+        </div>
+      </div>
+      <span class="nv-sp"></span>
+      <button type="button" class="pl-kill" :class="killed() ? 'is-on' : ''" :aria-pressed="killed() ? 'true' : 'false'"
+        :aria-label="killed() ? (resumeLocked() ? 'Kill switch is on. Turn it off on the PC' : 'Kill switch is on. Resume trading') : 'Kill switch: stop all new trading'" @click="toggleKill()" :disabled="killBusy || resumeLocked() || !v" x-text="killLabel()"></button>
+    </div>
+    <p class="nv-money num" x-show="on()"><span class="nv-pill" :class="pillCls()" :aria-label="pillAria()" x-text="pillWord()"></span><span :class="v && v.balance ? '' : 'pl-warn'" x-text="cashLine()"></span><span class="pv-live" :class="liveCls()" role="status" x-text="liveText()"></span></p>
+  </div>
+  <p class="pl-killed" x-show="on() && killed()" x-cloak role="status"><b>Kill switch is on.</b> No new entries. Close, reduce and your stop and take profit still work.</p>
+  <p class="pl-msg red" x-show="killMsg" x-text="killMsg" role="alert"></p>
+  <p class="error-box" x-show="error" x-text="'Could not load: ' + error" role="alert"></p>
+
+  <!-- ===== banners: one by priority, the rest folded into a count ===== -->
+  <div class="pv-banners" x-show="on() && banners().length" role="status">
+    <template x-for="(b, i) in shownBanners()" :key="b.code + i">
+      <p :class="bannerCls(b)"><span x-text="b.text"></span></p>
+    </template>
+    <button type="button" class="pl-link pv-more" x-show="moreBanners() > 0" @click="allBanners = !allBanners" :aria-expanded="allBanners ? 'true' : 'false'"
+      x-text="allBanners ? 'Show fewer' : '+' + moreBanners() + ' more'"></button>
+  </div>
+  <p class="pl-msg" x-show="msg" :class="msgCls" x-text="msg" role="status"></p>
+
+  <!-- switched off: one card says why and what to do; nothing else on the screen -->
+  <div class="pl-choose nv-empty" x-show="v && !v.enabled" role="status">
+    <svg width="34" height="34" aria-hidden="true"><use href="#sv-mark"/></svg>
+    <h2>Perps are switched off</h2>
+    <p x-show="!v || (v.enabled_reason || '') !== 'Perps are switched off'" x-text="(v && v.enabled_reason) || 'The server sent no reason.'"></p>
+    <p>To trade Kalshi's BTC perpetual, turn perps on in the server's settings and restart it. BTC 15m and Polymarket work as usual.</p>
+    <button type="button" class="pl-choosebtn" @click="goVenue('kalshi')">Open BTC 15m</button>
+  </div>
+  <div class="pl-choose" x-show="on() && v.mode === 'off'" role="status">
+    <h2>Perps trading is off</h2>
+    <p>Pick a mode to read your perps balance and stream the price.</p>
+    <button type="button" class="pl-choosebtn" @click="openSheet()">Choose a mode</button>
+  </div>
+
+  <!-- ===== the outcome (R12: the server's sentence from recorded fills; tap to dismiss) ===== -->
+  <template x-if="on() && outcome()">
+    <button type="button" class="pl-card pl-outcome pv-outcome" @click="closeOutcome()" role="status">
+      <strong x-text="outcome().text"></strong>
+      <small x-text="'Recorded ' + BTC.fmt.time(outcome().at_ms) + ' · tap to dismiss'"></small>
+    </button>
+  </template>
+
+  <p class="pv-checking" x-show="on() && v.unknown_order" role="status"><b>Checking whether your order went through…</b> New entries wait until Kalshi's answer is known.</p>
+
+  <!-- ===== positions Settleview did not open (R17) ===== -->
+  <template x-for="(f, i) in (on() ? foreign() : [])" :key="'f' + i">
+    <div class="pl-card pv-foreign" :class="f.kind === 'app_isolated' ? '' : 'pv-foreign-x'">
+      <span class="pl-eyebrow" x-text="fHead(f)"></span>
+      <b class="num" x-text="fLine(f)"></b>
+      <small x-show="f.kind === 'app_isolated'">Manage it in Kalshi's app. It counts toward your limits.</small>
+      <template x-if="f.kind !== 'app_isolated'">
+        <div class="pv-adopt">
+          <small>New entries are blocked until you adopt it; closing it here always works.</small>
+          <button type="button" class="pl-btn" x-show="adoptAsk !== i" @click="adoptAsk = i" :disabled="busy" x-text="'Adopt ' + cnt(Math.abs(f.size)) + ' contracts…'"></button>
+          <div class="pl-grid2" x-show="adoptAsk === i">
+            <button type="button" class="pl-btn pl-yes" @click="adopt(f, i)" :disabled="busy" x-text="'Adopt: ' + sideWord(fDir(f)) + ' ' + cnt(Math.abs(f.size)) + ' (on Kalshi)'"></button>
+            <button type="button" class="pl-btn" @click="adoptAsk = null" :disabled="busy">Cancel</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <!-- ===== in a position: every parameter as a chip; stop and take profit open their form ===== -->
+  <div class="pl-params" x-show="on() && pos()" role="group" aria-label="Your position">
+    <template x-for="ch in pchips()" :key="ch.k">
+      <span class="pl-pchip num" :class="ch.cls">
+        <template x-if="ch.tap"><button type="button" class="pl-pchip-btn" @click="setAct('protect')" :disabled="sliding || busy" x-text="ch.text + ' ›'"></button></template>
+        <template x-if="!ch.tap"><span x-text="ch.text"></span></template>
+      </span>
+    </template>
+  </div>
+
+  <!-- ===== before entry: THE CALL (Play's lights as a lean, never an edge), target entry, the plan, the 15-min bar ===== -->
+  <div class="pl-card pl-verdict" :class="callCls()" x-show="on() && v.mode !== 'off' && !pos() && !outcome()">
+    <div class="pl-vhead">
+      <div>
+        <span class="pl-eyebrow">The call</span>
+        <strong x-text="pcall().headline"></strong>
+        <span class="pl-reason" x-text="pcall().reason"></span>
+      </div>
+      <button type="button" class="pl-agree num" x-show="agreeText()" @click="$refs.why.open = !$refs.why.open" aria-controls="pv-why"
+        :aria-label="agreeText() + '. Show details'"><span x-text="agreeText()"></span><i aria-hidden="true">&#8250;</i></button>
+    </div>
+    <div class="pl-tiles2 pl-tiles-in">
+      <div><small>Target entry</small><b class="num" x-text="targetPx()"></b><span class="num" x-text="targetSub()"></span></div>
+      <div class="pl-plan"><small x-text="planHead()"></small>
+        <p class="num"><b class="pl-up" x-text="planMove(1, 1)"></b> <span x-text="planWord(1, 1)"></span></p>
+        <p class="num"><b class="pl-up" x-text="planMove(5, 1)"></b> <span x-text="planWord(5, 1)"></span></p>
+        <p class="num"><b class="pl-down" x-text="planMove(1, -1)"></b> <span x-text="planWord(1, -1)"></span></p>
+        <span class="num pv-planliq" x-text="planLiq() + ' · after fees'"></span></div>
+    </div>
+    <div class="pl-trend">
+      <div class="pl-trend-line" role="status"><span x-text="marketHead()"></span></div>
+      <div class="pl-barwrap">
+        <div class="pl-bar" :class="rcall().mid_up == null ? 'pl-bar-none' : ''" role="img" :aria-label="'Kalshi 15-min market: UP ' + pct(rcall().mid_up)"><span :style="'width:' + upWidth()"></span></div>
+        <i class="pl-bar-fair" x-show="fairLeft() != null" :style="'left:' + fairLeft()" role="img" :aria-label="'Model ' + pct(rcall().fair_up) + ' UP'"></i>
+      </div>
+      <div class="pl-barlbl" aria-hidden="true">
+        <b class="pl-up" x-text="'▲ UP ' + pct(rcall().mid_up)"></b>
+        <span x-show="fairLeft() != null" :style="'left:' + fairLabelLeft()" x-text="'model ' + pct(rcall().fair_up)"></span>
+        <b class="pl-down" x-text="downPct() + ' ▼ DOWN'"></b>
+      </div>
+    </div>
+    <details id="pv-why" class="pl-why" x-ref="why">
+      <summary>Details</summary>
+      <small>The call is Play's call: the Kalshi 15-minute market's lean (ENTER UP = long, ENTER DOWN = short, WAIT = no side). That market prices the chance BTC ends its 15-minute window above the strike, so late in a window it mostly says where BTC is against the strike now, not where it goes next. It is well calibrated, not an edge, and a perp has no window: you make the call.</small>
+      <small class="muted">The bar is Kalshi's 15-minute BTC market (the chance BTC ends this window above its strike), shown as context for the move so far.</small>
+    </details>
+  </div>
+
+  <!-- ===== in a position: profit or loss now, and the distance to liquidation ===== -->
+  <div class="pl-card pl-chance pv-pos" :class="bandCls()" x-show="on() && pos()" role="group" aria-label="Profit or loss now">
+    <span class="pl-eyebrow">Profit or loss now</span>
+    <div class="pl-chance-row">
+      <strong class="pl-chance-big num" :class="pnlCls()" x-text="pos() ? sUsd(pos().unrealized_pnl) : '—'"></strong>
+      <div class="pl-chance-side">
+        <b class="num" :class="pnlCls()" x-text="btcMove()"></b>
+        <span class="num" x-text="pnlSub()"></span>
+      </div>
+    </div>
+    <div class="pv-distrow"><span>Distance to liquidation</span><b class="num" :class="pos() && pos().band === 'red' ? 'pl-down' : pos() && pos().band === 'amber' ? 'pl-warn' : 'pl-up'" x-text="distText() + ' · ' + distWord()"></b></div>
+    <div class="pv-distbar" :style="distBg()" role="img" :aria-label="'Distance to liquidation: ' + distText()"><i x-show="distLeft() != null" :style="'left:' + distLeft()"></i></div>
+    <small class="num" x-text="'Liquidation BTC ' + (pos() ? btcPx(pos().liquidation_price) : '—') + ' (' + (pos() && pos().liquidation_source === 'kalshi' ? 'Kalshi' : 'estimate') + ') · next funding ' + fundingNext()"></small>
+    <small><span :class="trigCls()" x-text="'Stop / take profit: ' + trigState()"></span></small>
+  </div>
+
+  <!-- ===== the chart: this page's received marks, with the signal lights before entry ===== -->
+  <div class="pl-card pl-ptb pv-chartcard" x-show="on() && v.mode !== 'off'">
+    <span class="pl-eyebrow" x-text="'BTC perpetual · ' + (mk().ticker || '—')"></span>
+    <div class="pl-ptb-head"><b class="pl-ptb-btc pv-hero num" :aria-label="'Mark, as a BTC price: ' + btcPx(mark())" x-text="btcPx(mark())"></b><span class="pl-ptb-chip num" x-text="v && v.funding ? 'Funding ' + pctf(v.funding.rate, 4) + (v.funding.rate > 0 ? ' · longs pay' : v.funding.rate < 0 ? ' · shorts pay' : '') : 'Funding —'"></span></div>
+    <small class="pl-ptb-sub num" x-text="markLine()"></small>
+    <div class="pl-sigs" x-show="!pos()" role="group" aria-label="Signals: tap one to read what it means">
+      <template x-for="ch in sigChips()" :key="ch.key">
+        <button type="button" class="pl-sigchip num" :class="ch.cls" :aria-pressed="sigTip === ch.tip ? 'true' : 'false'" @click="sigTap(ch)" x-text="ch.text"></button>
+      </template>
+    </div>
+    <p class="pl-sigtip" x-show="sigTip && !pos()" x-text="sigTip" role="status"></p>
+    <div class="pv-chartbox">
+      <canvas x-ref="pvchart" class="pv-chart" role="img" :aria-label="'Mark price chart: ' + px(mark())"></canvas>
+      <div class="pl-wempty" x-show="chartEmpty()">The chart starts with the next price update: only prices received while this screen is open are drawn.</div>
+    </div>
+    <p class="pl-note red" x-show="chartErr" x-text="chartErr" role="alert"></p>
+    <div class="pl-legend pv-legend"><span><i class="lg-entry"></i>Entry</span><span><i class="lg-liq"></i>Liquidation price</span><span><i class="lg-stop"></i>Stop loss</span><span><i class="lg-tp"></i>Take profit</span><span><i class="lg-amber"></i>Amber / red: near liquidation</span></div>
+  </div>
+
+  <!-- ===== in a position: keep holding vs close now, then the one-line advice (display only) ===== -->
+  <div class="pl-card pl-holdsell" x-show="on() && pos()" role="group" aria-label="Keep holding or close now">
+    <div>
+      <span class="pl-eyebrow">Keep holding</span>
+      <span class="num"><b class="pl-up" x-text="holdMove(1)"></b> <span x-text="holdUpWord()"></span></span>
+      <span class="num"><b class="pl-down" x-text="holdMove(-1)"></b> <span x-text="holdDnWord()"></span></span>
+      <span class="num" x-text="'funding so far ' + fundingSoFar()"></span>
+    </div>
+    <div>
+      <span class="pl-eyebrow">Close now</span>
+      <b class="num" :class="closeTicket() && closeTicket().est_realized_pnl < 0 ? 'pl-down' : closeTicket() ? 'pl-up' : ''" x-text="closeNow()"></b>
+      <span class="num" x-text="closeSub()"></span>
+    </div>
+  </div>
+  <div class="pl-card pl-advline" x-show="on() && pos() && advice()" :class="advice() ? advice().cls : ''" role="status">
+    <p><b x-text="advice() ? advice().action : ''"></b> · <span x-text="advice() ? advice().text : ''"></span></p>
+  </div>
+
+  <!-- ===== in a position: the reduce and stop / take-profit forms (the action itself is picked in the dock) ===== -->
+  <div class="pl-card" x-show="on() && pos() && (act === 'reduce' || act === 'protect')">
+    <template x-if="act === 'reduce'">
+      <div class="pv-reduce">
+        <span class="pl-eyebrow">Reduce by</span>
+        <div class="pl-chips pv-chips4" role="radiogroup" aria-label="How much to reduce">
+          <template x-for="f in REDUCE" :key="f">
+            <button type="button" role="radio" class="pl-chipbtn" :aria-checked="redPick === f ? 'true' : 'false'" :aria-pressed="redPick === f ? 'true' : 'false'" @click="setRed(f)" x-text="REDUCE_NAMES[f]"></button>
+          </template>
+          <button type="button" role="radio" class="pl-chipbtn" :aria-checked="redPick === 'count' ? 'true' : 'false'" :aria-pressed="redPick === 'count' ? 'true' : 'false'" @click="setRed('count')">Count</button>
+        </div>
+        <label class="pl-amount" x-show="redPick === 'count'"><input type="text" inputmode="numeric" autocomplete="off" x-model="redCount" @input="edit()" aria-label="Contracts to reduce by"><span>contracts</span></label>
+        <p class="pl-note pl-overline" x-show="reduceCount().err" x-text="reduceCount().err"></p>
+      </div>
+    </template>
+    <template x-if="act === 'protect'">
+      <div class="pv-fields">
+        <span class="pl-eyebrow">Stop loss and take profit</span>
+        <p class="pl-note pl-warn" x-show="trigEdited()">Kalshi's stop or take profit changed since this form was filled. <button type="button" class="pl-link" @click="fillTrig(); edit()">Reload them</button></p>
+        <label class="pv-field"><span>Stop loss (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="trigSl" @input="edit()" placeholder="none" aria-label="Stop loss price per contract"></span>
+          <small class="pl-down" x-show="trigSlWhy()" x-text="trigSlWhy()"></small><small class="num" x-show="!trigSlWhy()" x-text="trigSlFx()"></small></label>
+        <label class="pv-field"><span>Take profit (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="trigTp" @input="edit()" placeholder="none" aria-label="Take profit price per contract"></span>
+          <small class="pl-down" x-show="trigTpWhy()" x-text="trigTpWhy()"></small><small class="num" x-show="!trigTpWhy()" x-text="trigTpFx()"></small></label>
+        <button type="button" class="pl-link" @click="clearTrig()">Clear both (remove the stop and take profit)</button>
+        <small>Kalshi holds them and fires them on its own servers, for the whole position.</small>
+      </div>
+    </template>
+  </div>
+
+  <!-- ===== before entry: optional stop loss / take profit (Kalshi holds them) ===== -->
+  <details class="pl-card pv-opts" x-show="on() && v.mode !== 'off' && !pos()">
+    <summary><span>Stop loss / take profit</span><small x-text="(entrySl().v != null || entryTp().v != null) ? 'set' : 'optional · none'"></small></summary>
+    <div class="pv-fields">
+      <label class="pv-field"><span>Stop loss (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="slInput" @input="edit()" placeholder="none" aria-label="Stop loss price per contract"></span>
+        <small class="pl-down" x-show="entrySlWhy()" x-text="entrySlWhy()"></small><small class="num" x-show="!entrySlWhy()" x-text="entrySlFx()"></small></label>
+      <label class="pv-field"><span>Take profit (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="tpInput" @input="edit()" placeholder="none" aria-label="Take profit price per contract"></span>
+        <small class="pl-down" x-show="entryTpWhy()" x-text="entryTpWhy()"></small><small class="num" x-show="!entryTpWhy()" x-text="entryTpFx()"></small></label>
+    </div>
+  </details>
+
+  <!-- ===== the ticket on screen (the preview; the bound one while sliding): every number, one tap away ===== -->
+  <details class="pl-card pv-ticket" x-show="on() && (shown() || shownRefusal())" :open="!!shownRefusal()">
+    <summary><span x-text="ticketHead()"></span><small>every number</small></summary>
+    <p class="pl-note red" x-show="shownRefusal()" x-text="shownRefusal()" role="alert"></p>
+    <template x-if="shown()">
+      <div>
+        <dl class="pl-rows"><template x-for="row in rows()" :key="row[0]"><div><dt x-text="row[0]"></dt><dd class="num" x-text="row[1]"></dd></div></template></dl>
+        <div class="pv-tchips" x-show="chips().length"><template x-for="ch in chips()" :key="ch"><span class="pv-tchip" x-text="ch"></span></template></div>
+        <small x-text="ticketAge()"></small>
+      </div>
+    </template>
+  </details>
+  <!-- ===== rows: the position, then your record (the last closed positions, realized P&L from Kalshi's fills) ===== -->
+  <div class="rc-group pv-rows" x-show="on() && v.mode !== 'off' && !pos()">
+    <div class="rc-row"><span>Position</span><span class="nv-sp"></span><span class="rc-val">None</span></div>
+  </div>
+  <details class="rc-group rc-disc pl-hist" x-show="on() && v.mode !== 'off'" @toggle="recToggle($event.target.open)">
+    <summary><span>Your record</span><small class="num" x-text="recHead()"></small></summary>
+    <p class="pl-note red" x-show="recErr" x-text="'Could not load your record: ' + recErr" role="alert"></p>
+    <p class="pl-note muted" x-show="rec && rec.reason" x-text="rec && rec.reason"></p>
+    <p class="pl-note muted" x-show="rec && !rec.reason && !rec.rows.length">No closed perps positions yet in this mode.</p>
+    <ul class="pv-rec" x-show="rec && rec.rows && rec.rows.length">
+      <template x-for="r in (rec && rec.rows) || []" :key="r.id">
+        <li><span x-text="recLine(r)"></span><b class="num" :class="r.realized_pnl > 0 ? 'pl-up' : r.realized_pnl < 0 ? 'pl-down' : ''" x-text="sUsd(r.realized_pnl)"></b></li>
+      </template>
+    </ul>
+    <small x-show="rec && rec.rows && rec.rows.length" x-text="'Last ' + ((rec && rec.rows.length) || 0) + ' · after fees and funding'"></small>
+  </details>
+  <p class="pl-note muted" x-show="on() && v.limits && v.limits.text" x-text="v && v.limits && v.limits.text"></p>
+  <p class="pl-note muted" x-show="on() && v.exchange && v.exchange.maintenance_note" x-text="v && v.exchange && v.exchange.maintenance_note"></p>
+  <p class="pl-note muted pv-wnote" x-show="on()" x-text="(v && v.warnings_note) || 'Warnings show only while this screen is open.'"></p>
+
+  <!-- ===== the dock: side, amount and leverage (entry / add), or the action (in a position); one slide ===== -->
+  <div class="pl-bottom" x-show="on() && v.mode !== 'off'">
+    <p class="pv-nostop" x-show="pos() && hasBanner('no_stop')" role="alert"><b>Position open, no stop on Kalshi.</b> <button type="button" class="pl-link" x-show="act !== 'close'" @click="setAct('close')">Close it</button></p>
+    <div class="pl-seg pl-seg-sm pv-acts" role="radiogroup" aria-label="What to do" x-show="pos()">
+      <template x-for="a in DOCK_ACTS" :key="a">
+        <button type="button" role="radio" :aria-checked="act === a ? 'true' : 'false'" @click="setAct(a)" :disabled="sliding || busy" x-text="ACT_NAMES[a]"></button>
+      </template>
+    </div>
+    <div class="pl-sidepick" role="radiogroup" aria-label="Long or short" x-show="!pos()">
+      <button type="button" role="radio" class="pl-sidebtn pl-buy-up" :class="sideNow() === 'long' ? 'on' : ''" :aria-checked="sideNow() === 'long' ? 'true' : 'false'" @click="pickSide('long')" x-text="sideLabel('long')"></button>
+      <button type="button" role="radio" class="pl-sidebtn pl-buy-down" :class="sideNow() === 'short' ? 'on' : ''" :aria-checked="sideNow() === 'short' ? 'true' : 'false'" @click="pickSide('short')" x-text="sideLabel('short')"></button>
+    </div>
+    <div class="pv-sizing" x-show="kind() === 'entry' || kind() === 'add'">
+      <div class="pl-chips" role="group" :aria-label="pos() ? 'Collateral to add' : 'Collateral'">
+        <template x-for="x in CHIPS" :key="x">
+          <button type="button" class="pl-chipbtn" :aria-pressed="collOn(x) ? 'true' : 'false'" :disabled="collOff(x)" @click="pickColl(x)" x-text="'$' + x"></button>
+        </template>
+        <button type="button" class="pl-chipbtn" :aria-pressed="otherOn() ? 'true' : 'false'" @click="pickOther()">Other</button>
+      </div>
+      <label class="pl-amount" x-show="otherOn()"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="collInput" @input="collAuto = false; edit()" @change="saveColl()" aria-label="Collateral in dollars"></label>
+      <p class="pl-note muted pl-avail" x-text="availHint()"></p>
+      <p class="pl-note amber" x-show="collUnknown != null" x-text="'The saved collateral (“' + collUnknown + '”) was not a dollar amount, so the amount starts empty.'"></p>
+      <div class="pv-levrow"><small>Leverage</small><b class="num" x-text="lev(levNow())"></b></div>
+      <input type="range" class="pl-range pv-lev" min="1" :max="levMax()" step="0.01" :value="levNow()" @input="setLev(Number($event.target.value))" :disabled="maxLev() == null || sliding || busy" aria-label="Leverage" :aria-valuetext="lev(levNow())">
+      <small class="num" x-text="levNote()"></small>
+    </div>
+    <p class="pl-slideinfo num" x-show="dockLine()" x-text="dockLine()"></p>
+    <p class="pl-slideinfo pv-make" x-show="(kind() === 'entry' || kind() === 'add') && makeLine()" x-text="makeLine()"></p>
+    <p class="pl-slideinfo pv-atrisk" x-show="kind() === 'entry' || kind() === 'add'" x-text="worstLine()"></p>
+    <p class="pl-slideinfo pl-warn" x-show="!busy && !drag && !pulse && slideWhy()" x-text="slideWhy()"></p>
+    <div class="pl-slide" x-ref="pvtrack" :class="slideCls()">
+      <div class="pl-slide-fill" :style="'width:' + (slideX + 60) + 'px'"></div>
+      <span class="pl-slide-text" aria-live="polite"><span x-text="slideText()"></span><small x-show="dockLine2()" x-text="dockLine2()"></small></span>
+      <button type="button" class="pl-slide-knob" :style="'transform:translateX(' + slideX + 'px)'"
+        :aria-label="slideAria()" :disabled="!slideOk() && !sliding"
+        @pointerdown="slideStart($event)" @pointermove="slideMove($event)" @pointerup="slideEnd()" @pointercancel="slideReset()">&#8250;&#8250;</button>
+    </div>
+  </div>
+
+  <!-- ===== take profit and stop after an entry (optional; sits above the dock so the close slide stays usable) ===== -->
+  <div class="pl-sheet pl-tpsheet" x-show="tpSheet && pos()" x-cloak role="dialog" aria-labelledby="pv-tp-title">
+    <h2 id="pv-tp-title">Take profit and stop</h2>
+    <small class="muted">Kalshi holds them and closes the whole position when BTC reaches either one.</small>
+    <label class="pl-check pl-slcheck"><input type="checkbox" x-model="tpOn"> Take profit</label>
+    <input type="range" class="pl-range" x-show="tpOn" :min="PCT_STEP" max="10" :step="PCT_STEP" :value="tpPct" @input="tpPct = Number($event.target.value)" aria-label="Take profit distance from the entry, in percent" :aria-valuetext="tpLabel()">
+    <p class="pl-tplabel" :class="tpOn ? 'pl-up' : 'muted'" x-text="tpLabel()"></p>
+    <p class="pl-note pl-down" x-show="tpWhyNow()" x-text="tpWhyNow()"></p>
+    <label class="pl-check pl-slcheck"><input type="checkbox" x-model="slOn"> Stop loss</label>
+    <input type="range" class="pl-range" x-show="slOn" :min="PCT_STEP" :max="slMax()" :step="PCT_STEP" :value="slPct" @input="slPct = Number($event.target.value)" aria-label="Stop loss distance from the entry, in percent" :aria-valuetext="slLabel()">
+    <p class="pl-tplabel" :class="slOn ? 'pl-down' : 'muted'" x-text="slLabel()"></p>
+    <p class="pl-note pl-down" x-show="slWhyNow()" x-text="slWhyNow()"></p>
+    <p class="pl-msg red" x-show="tpMsg" x-text="tpMsg" role="alert"></p>
+    <div class="pl-grid2">
+      <button type="button" class="pl-btn pl-yes" @click="tpSave()" :disabled="tpBusy || busy">Submit</button>
+      <button type="button" class="pl-btn" @click="tpClose()" :disabled="tpBusy">Close</button>
+    </div>
+    <label class="pl-check"><input type="checkbox" x-model="tpNoMore"> Don't show this again</label>
+  </div>
+
+  <!-- ===== settings (the gear): mode, kill switch, entry options, warnings, theme; limits live in Play's sheet ===== -->
+  <div class="pl-dim" x-show="sheet" x-cloak @click="sheet = false"></div>
+  <div id="pv-settings" class="pl-sheet pl-set" x-show="sheet" x-cloak role="dialog" aria-modal="true" aria-labelledby="pv-set-title" @keydown.escape="sheet = false">
+    <div class="pl-row pv-sethead"><h2 id="pv-set-title">Perps settings</h2><button type="button" class="pl-btn" @click="sheet = false">Done</button></div>
+    <section class="pl-set-sec" aria-labelledby="pv-set-mode">
+      <h3 id="pv-set-mode">Mode for perps trades</h3>
+      <label class="field" for="pv-mode">Mode</label>
+      <select id="pv-mode" x-model="modeForm.mode">
+        <template x-for="m in modes()" :key="m"><option :value="m" x-text="modeName(m)"></option></template>
+      </select>
+      <label class="field" for="pv-confirm" x-show="modeForm.mode === 'perp_prod'">Type exactly: <b class="mono" x-text="PROD_CONFIRM"></b></label>
+      <input id="pv-confirm" type="text" autocomplete="off" spellcheck="false" x-show="modeForm.mode === 'perp_prod'" x-model="modeForm.confirm" aria-label="Real-money confirmation">
+      <button type="button" class="pl-btn" @click="setMode()" :disabled="!canSetMode()">Switch mode</button>
+      <p x-text="modeMsg" role="status"></p>
+    </section>
+    <section class="pl-set-sec" aria-labelledby="pv-set-kill">
+      <h3 id="pv-set-kill">Kill switch</h3>
+      <p class="pl-note" x-text="killed() ? 'On: no new entries anywhere.' : 'Off.'"></p>
+      <small>The KILL button at the top stops new trades on Kalshi, Polymarket and perps. Close, reduce and your stop and take profit still work.<span x-show="phone()"> Resume on the PC.</span></small>
+    </section>
+    <section class="pl-set-sec" aria-labelledby="pv-set-entry">
+      <h3 id="pv-set-entry">How entries fill</h3>
+      <div class="pl-seg pl-seg-sm" role="radiogroup" aria-label="How the entry fills">
+        <template x-for="f in FILLS" :key="f">
+          <button type="button" role="radio" :aria-checked="fill === f ? 'true' : 'false'" @click="setFill(f)" :disabled="sliding || busy" x-text="FILL_NAMES[f] + (f === 'market' ? ' (default)' : '')"></button>
+        </template>
+      </div>
+      <small x-show="fill === 'market'">Fills at the best prices on offer right now, up to the protective price shown as “at most $P”; anything not filled at once is cancelled.</small>
+      <small x-show="fill === 'all_or_nothing'">Fills the whole size at once up to the protective price, or nothing.</small>
+      <label class="pl-amount" x-show="fill === 'limit'"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="limitInput" @input="edit()" @change="saveLimit()" aria-label="Limit price per contract"></label>
+      <small x-show="fill === 'limit'">Fills only at your limit price or better; anything not filled at once is cancelled.</small>
+      <p class="pl-note amber" x-show="fillUnknown != null" x-text="'The saved fill option (“' + fillUnknown + '”) was not recognised, so Market (the default) is used. Pick one to replace it.'"></p>
+      <p class="pl-note amber" x-show="limitUnknown != null" x-text="'The saved limit price (“' + limitUnknown + '”) was not a price, so the field starts empty.'"></p>
+      <small id="pv-band-l">Market protection: how far through the best price a market-style entry may fill</small>
+      <div class="pl-chips pv-chips5" role="radiogroup" aria-labelledby="pv-band-l">
+        <button type="button" role="radio" class="pl-chipbtn" :aria-checked="band == null ? 'true' : 'false'" :aria-pressed="band == null ? 'true' : 'false'" @click="setBand(null)" x-text="bandName(null)"></button>
+        <template x-for="b in BANDS" :key="b">
+          <button type="button" role="radio" class="pl-chipbtn" :aria-checked="band === b ? 'true' : 'false'" :aria-pressed="band === b ? 'true' : 'false'" @click="setBand(b)" x-text="bandName(b)"></button>
+        </template>
+      </div>
+      <p class="pl-note amber" x-show="bandUnknown != null" x-text="'The saved band (“' + bandUnknown + '”) was not recognised, so the default is used. Pick one to replace it.'"></p>
+      <label class="pl-check"><input type="checkbox" :checked="tpPrompt" @change="setTpPrompt($event.target.checked)"> Take-profit and stop prompt after an entry</label>
+    </section>
+    <section class="pl-set-sec" aria-labelledby="pv-set-warn">
+      <h3 id="pv-set-warn">Warnings near liquidation</h3>
+      <small x-text="bandsLine()"></small>
+    </section>
+    <section class="pl-set-sec" aria-labelledby="pv-set-theme">
+      <h3 id="pv-set-theme">Theme</h3>
+      <fieldset class="pl-seg pl-theme">
+        <legend>Theme</legend>
+        <template x-for="m in THEMES" :key="m">
+          <label><input type="radio" name="pv-theme" :value="m" :checked="themeMode === m" @change="setTheme(m)"><span x-text="THEME_NAMES[m]"></span></label>
+        </template>
+      </fieldset>
+      <p class="pl-note amber" x-show="themeUnknown != null" x-text="'The saved theme (“' + themeUnknown + '”) was not recognised, so System is used. Pick one to replace it.'" role="status"></p>
+      <p class="pl-note amber" x-show="themeMsg" x-text="themeMsg" role="status"></p>
+    </section>
+    <section class="pl-set-sec" aria-labelledby="pv-set-lim">
+      <h3 id="pv-set-lim">Trade limits and phone access</h3>
+      <small>One set for every venue, perps included (the per-day limit is one total).</small>
+      <button type="button" class="pl-btn" @click="openPlaySettings()">Open them</button>
+    </section>
+  </div>
+</section>
+<!-- ================= AGENTS (web/views/agent.js, styles in agent.css; the approved fleet wireframe). The fleet: a
+     summary card, "Needs you" first (amber), one row per agent (by market when there are many), New agent, Fleet
+     limits and the fleet's audit (All agents). One agent: today's per-session view for its live run (else its last):
+     status, positions, Latest, and rows that open their own screens (note, settings, scorecard, instructions,
+     Telegram); All activity spans every run of the agent. New agent: one market first; a slide starts it.
+     Desktop (>=1000px) while an agent's run is live: three columns (status | activity | scorecard). ================= -->
+<section id="panel-agent" class="pl ag" aria-label="Agents" x-show="$store.app.view === 'agent'" x-cloak x-data="agentView()">
+  <div class="nv-titlebar ag-titlebar">
+    <button type="button" class="ag-back ag-top-back" x-show="page !== 'fleet'" @click="toFleet()">‹ Agents</button>
+    <h1 class="nv-title" x-text="titleText()"></h1>
+    <span class="nv-titlesub" x-show="subText()" x-text="subText()"></span>
+    <button type="button" class="ag-plus" x-show="page === 'fleet' && $store.agent.enabled" @click="openNew()" aria-label="New agent"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M11 3 V19 M3 11 H19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+  </div>
+  <div class="pl-choose" x-show="$store.agent.enabled === false" role="status">
+    <h2>Agent mode is off (BTCFLOW_AGENT_ENABLED)</h2>
+    <p>The server has no agent routes. Set BTCFLOW_AGENT_ENABLED=true in its settings and restart it to launch agents.</p>
+  </div>
+  <p class="pl-note muted" x-show="$store.agent.enabled === null && !$store.agent.statusErr">Reading the agent status…</p>
+  <p class="error-box" x-show="$store.agent.statusErr" x-text="'Could not read the agent status: ' + $store.agent.statusErr" role="alert"></p>
+  <p class="error-box" x-show="$store.agent.fleetErr" x-text="'Could not read the agents: ' + $store.agent.fleetErr" role="alert"></p>
+  <p class="error-box" x-show="page === 'agent' && $store.agent.selErr" x-text="'Could not read this agent: ' + $store.agent.selErr" role="alert"></p>
+  <template x-for="w in $store.agent.settleWarnings()" :key="w.id"><p class="warn" role="alert" x-text="w.venue_label + ': ' + w.message"></p></template>
+  <!-- an action's error stays here; every other message is a toast -->
+  <p class="pl-msg" x-show="$store.agent.msg && $store.agent.msgCls === 'red'" :class="$store.agent.msgCls" x-text="$store.agent.msg" role="alert"></p>
+
+  <div class="ag-page" x-show="$store.agent.enabled" :class="wideLive() ? 'ag-3col' : 'ag-1col'" :data-mode="mode()" :data-screen="screen">
+
+    <!-- ===== column 1 / the page ===== -->
+    <div class="ag-colA ag-main" x-show="mainOn()">
+
+      <!-- ===== THE FLEET ===== -->
+      <div class="ag-fleet" x-show="mode() === 'fleet'">
+        <div class="ag-card ag-sum" role="region" aria-label="All agents today">
+          <div class="ag-sumhead num"><b class="ag-hero" :class="clsOf(heroNet())" x-text="netOf(heroNet())" data-flash></b><span x-text="heroSub()"></span></div>
+          <div class="ag-tiles num">
+            <div class="ag-tile ag-t-win"><span>Winning</span><b x-text="tileWin()"></b><span x-text="tileOf()"></span></div>
+            <div class="ag-tile ag-t-budget"><span>Budget</span><b x-text="tileBudget()"></b><span x-text="tileBudgetOf()"></span></div>
+            <div class="ag-tile ag-t-api"><span>API</span><b x-text="tileApi()"></b><span x-text="tileApiOf()"></span></div>
+          </div>
+          <small class="ag-quiet">Today: every agent’s trades closed since midnight (your local time, as Record), after every fee. Budget and API: the running agents.</small>
+        </div>
+        <div class="ag-mktbar" x-show="mkt" role="status">
+          <span x-text="'Only ' + mktLabel(mkt)"></span><button type="button" class="ag-link" @click="mkt = null">Show all</button>
+        </div>
+
+        <span class="ag-eyebrow ag-need-h" x-show="needRows().length" x-text="'Needs you · ' + needRows().length"></span>
+        <div class="ag-need ag-agents num" x-show="needRows().length" role="list" aria-label="Agents that need you">
+          <template x-for="r in needRows()" :key="r.id">
+            <button type="button" class="ag-ag" role="listitem" @click="openRow(r)" :aria-label="r.name + ': ' + needSub(r)">
+              <span class="ag-nm"><i class="is-warn" aria-hidden="true"></i><span x-text="r.name"></span></span>
+              <span class="ag-agsub" x-text="needSub(r)"></span>
+              <span class="ag-r"><b :class="needRight(r) === 'Review' ? '' : clsOf(r.net)" x-text="needRight(r)"></b></span>
+            </button>
+          </template>
+        </div>
+
+        <!-- a few agents: one row each; many: by market, and one sentence for the rest -->
+        <div class="ag-group ag-agents num" x-show="!grouped() && okRows().length" role="list" aria-label="Agents">
+          <template x-for="r in okRows()" :key="r.id">
+            <button type="button" class="ag-ag" role="listitem" @click="openRow(r)">
+              <span class="ag-nm"><i :class="dotCls(r)" aria-hidden="true"></i><span x-text="r.name"></span></span>
+              <span class="ag-agsub" x-text="r.line"></span>
+              <span class="ag-r"><b :class="clsOf(r.net)" x-text="netOf(r.net)"></b>
+                <svg class="ag-spark" :class="sparkCls(r)" viewBox="0 0 56 18" width="56" height="18" role="img" :aria-label="sparkAria(r)"><path :d="sparkPath(r.spark)" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            </button>
+          </template>
+        </div>
+        <template x-if="grouped()">
+          <div class="ag-grouped">
+            <span class="ag-eyebrow">By market</span>
+            <div class="ag-group ag-bymkt num" role="list">
+              <template x-for="m in byMarket()" :key="m.market">
+                <button type="button" class="ag-row" role="listitem" @click="mkt = m.market"><span x-text="m.market_label"></span><span class="ag-sp"></span><span class="ag-val"><span x-text="m.count + ' · '"></span><span :class="clsOf(m.net)" x-text="netOf(m.net)"></span></span><span class="ag-chev" aria-hidden="true">›</span></button>
+              </template>
+            </div>
+            <p class="ag-foot ag-normal" x-text="normalLine()"></p>
+          </div>
+        </template>
+        <p class="ag-ask" x-show="$store.agent.fleet && !liveRows().length"><svg class="ag-glyph" width="18" height="18" aria-hidden="true"><use href="#sv-mark"/></svg><span class="ag-ask-t" x-text="mkt ? 'No agent is running on ' + mktLabel(mkt) + '.' : 'No agent is running.'"></span></p>
+
+        <span class="ag-eyebrow" x-show="idleAgents().length">Not running</span>
+        <div class="ag-group ag-agents ag-idle num" x-show="idleAgents().length" role="list" aria-label="Agents not running">
+          <template x-for="a in idleAgents()" :key="a.id">
+            <button type="button" class="ag-ag" role="listitem" @click="openAgent(a.id)">
+              <span class="ag-nm"><i class="is-off" aria-hidden="true"></i><span x-text="a.name"></span></span>
+              <span class="ag-agsub" x-text="idleSub(a)"></span>
+              <span class="ag-r"><b :class="clsOf(a.last_run && a.last_run.net)" x-text="netOf(a.last_run && a.last_run.net)"></b><small>last run</small></span>
+            </button>
+          </template>
+        </div>
+
+        <div class="ag-group ag-rows" role="list">
+          <button type="button" class="ag-row ag-new-row" role="listitem" @click="openNew()"><span>New agent</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row ag-limits-row" role="listitem" @click="openLimits()"><span>Fleet limits</span><span class="ag-sp"></span><span class="ag-val" x-text="limitsVal()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row ag-audit-row" role="listitem" @click="openAudit()"><span>All agents’ activity</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+        </div>
+        <div class="ag-group ag-rows" role="list">
+          <button type="button" class="ag-row" role="listitem" @click="open('score')"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="open('prompts')"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="open('telegram')"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val" x-text="tgLine()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+        </div>
+        <small class="ag-killnote">Each agent trades one market inside its own limits and touches only its own positions. The kill switch (KILL at the top of Play) blocks all new orders, everywhere, and pauses every agent.</small>
+      </div>
+
+      <!-- external agent's token: shown once -->
+      <div class="ag-card ag-token" x-show="token && page === 'agent'" role="alert">
+        <span class="ag-eyebrow">External agent token</span>
+        <code class="mono ag-tok" x-text="token"></code>
+        <div class="ag-btns">
+          <button type="button" class="ag-btn" @click="copyToken()">Copy</button>
+          <button type="button" class="ag-btn" @click="token = ''; copied = ''">Hide it</button>
+        </div>
+        <small>Shown once; if lost, stop the agent and start it again.</small>
+        <small x-show="copied" x-text="copied"></small>
+      </div>
+      <p class="pl-note muted" x-show="page === 'agent' && !mode() && !$store.agent.selErr">Reading this agent…</p>
+
+      <!-- ===== ONE AGENT: RUNNING / PAUSED ===== -->
+      <div class="ag-live" x-show="mode() === 'live'">
+        <div id="proposal-cards" x-init="window.proposalCards.mount($el, { session: function () { return $store.agent.selSid; } })"></div>
+        <div class="ag-card ag-status" role="region" aria-label="Agent now" :class="$store.agent.stale() ? 'is-stale' : ''">
+          <div class="ag-status-h">
+            <span class="ag-chip" :class="'is-' + $store.agent.chip().key"><i aria-hidden="true"></i><b class="ag-state" x-text="$store.agent.chip().word"></b></span>
+            <span class="ag-since num" x-text="$store.agent.chip().since"></span>
+            <span class="ag-sp"></span>
+            <span class="ag-pill" :class="$store.agent.pill().cls" :aria-label="$store.agent.pill().aria" x-text="$store.agent.pill().text"></span>
+            <button type="button" class="ag-stopbtn" @click="$store.agent.stop()" :disabled="$store.agent.busy" :aria-label="'Stop ' + (($store.agent.session() && $store.agent.session().name) || 'this agent') + ' now'">Stop</button>
+          </div>
+          <p class="ag-nowline" aria-live="polite" x-text="$store.agent.nextLine()"></p>
+          <p class="ag-last" x-show="$store.agent.decision" x-text="'Last: ' + $store.agent.nowLine()"></p>
+          <div class="ag-tiles num">
+            <div class="ag-tile ag-t-budget"><span>Budget used</span><b x-text="$store.agent.budget() ? usdOf($store.agent.budget().used) : '—'"></b><span x-text="$store.agent.budget() ? 'of ' + usdOf($store.agent.budget().limit) : ''"></span>
+              <div class="ag-meter" role="progressbar" aria-label="Budget used" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="budgetPct()"><span :style="'width:' + budgetPct() + '%'"></span></div></div>
+            <div class="ag-tile ag-t-net"><span>Net</span><b :class="netCls()" x-text="netText()" data-flash></b><span x-text="tradesWord()"></span></div>
+            <div class="ag-tile ag-t-ends"><span>Ends in</span><b x-text="leftShort()"></b><span x-text="endsClock()"></span></div>
+          </div>
+          <p class="ag-quiet num" x-text="apiLine()"></p>
+          <p class="ag-quiet ag-also" x-show="alsoLine()" x-text="alsoLine()"></p>
+          <p class="ag-stale" x-show="$store.agent.stale()" x-text="$store.agent.staleText()" role="status"></p>
+
+          <!-- paused: the reason and the one action it allows -->
+          <div class="ag-paused" x-show="$store.agent.session() && $store.agent.session().state === 'paused'" role="status">
+            <b x-text="($store.agent.session() && $store.agent.session().pause_reason) || 'No reason sent.'"></b>
+            <small>The agent sends no new orders while paused. Open positions keep their take profit and stops.</small>
+            <div class="ag-act" x-show="$store.agent.pauseKind() === 'kill'">
+              <button type="button" class="ag-btn" disabled>Resume</button>
+              <small>Turn the kill switch off first (KILL at the top of Play<span x-show="phone()">, on the PC</span>).</small>
+              <small class="amber" x-show="$store.agent.killed === null && $store.agent.killErr" x-text="'Kill switch state unknown: ' + $store.agent.killErr"></small>
+            </div>
+            <div class="ag-act" x-show="$store.agent.pauseKind() === 'mode'">
+              <small>This run cannot continue on a different mode. End it and start the agent again.</small>
+              <button type="button" class="ag-btn" @click="$store.agent.stop()" :disabled="$store.agent.busy">End run</button>
+            </div>
+            <div class="ag-act" x-show="$store.agent.pauseKind() === 'kill_off' || $store.agent.pauseKind() === 'other'">
+              <label class="field" for="ag-resume-in" x-show="phone()"><span>On the phone, type RESUME</span></label>
+              <input id="ag-resume-in" type="text" autocomplete="off" spellcheck="false" x-show="phone()" x-model="resumeTyped" aria-label="Type RESUME to resume">
+              <button type="button" class="ag-btn ag-btn-go" @click="$store.agent.resume(phone() ? resumeTyped.trim() : null)" :disabled="$store.agent.busy || (phone() && resumeTyped.trim() !== 'RESUME')">Resume</button>
+            </div>
+          </div>
+        </div>
+
+        <span class="ag-eyebrow" x-show="$store.agent.openPositions().length">Open</span>
+        <template x-for="p in $store.agent.openPositions()" :key="p.id">
+          <div class="ag-card ag-pos num">
+            <div class="ag-pos-1"><b :class="sideCls(p)" x-text="sideWord(p)"></b><span x-text="posTitle(p)"></span></div>
+            <span class="ag-pos-2" x-text="posSub(p)"></span>
+          </div>
+        </template>
+
+        <div class="ag-latest" x-show="!wideLive()">
+          <span class="ag-eyebrow">Latest</span>
+          <div class="ag-group ag-feedlist num">
+            <template x-for="it in latest()" :key="it.key">
+              <div class="ag-ev" :class="'is-' + it.kind"><time x-text="hm(it.ts)"></time><span class="ag-ev-t"><b :class="it.cls" x-text="it.title"></b><small x-show="it.sub" x-text="it.sub"></small></span></div>
+            </template>
+            <p class="ag-ev-empty" x-show="!latest().length" x-text="$store.agent.session() && $store.agent.session().kind === 'external' ? 'No trades or decisions yet; waiting for the external agent.' : 'No trades or decisions yet. The agent’s wakes are under All activity.'"></p>
+            <button type="button" class="ag-more" @click="openActivity('trades')">All activity ›</button>
+          </div>
+        </div>
+
+        <div class="ag-group ag-rows" role="list">
+          <button type="button" class="ag-row" role="listitem" @click="open('note')"><span>Note to the agent</span><span class="ag-sp"></span><span class="ag-val" x-text="$store.agent.notes.length ? $store.agent.notes.length + ' sent' : ''"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="open('settings')"><span>Run settings</span><span class="ag-sp"></span><span class="ag-val" x-text="settingsVal()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" x-show="!wideLive()" @click="open('score')"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="open('prompts')"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <button type="button" class="ag-row" role="listitem" @click="open('telegram')"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val" x-text="tgLine()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+        </div>
+        <small class="ag-killnote">The kill switch (KILL at the top of Play) blocks all new orders, everywhere, and pauses every agent.</small>
+      </div>
+
+      <!-- ===== ONE AGENT: ITS LAST RUN ENDED ===== -->
+      <div class="ag-ended" x-show="mode() === 'ended'" role="status">
+        <div class="ag-card">
+          <div class="ag-status-h"><span class="ag-chip" :class="'is-' + $store.agent.chip().key"><i aria-hidden="true"></i><b class="ag-state" x-text="$store.agent.chip().word"></b></span><span class="ag-since num" x-text="$store.agent.chip().since"></span></div>
+          <b class="ag-endwhy" x-text="$store.agent.endWords()"></b>
+          <div class="ag-big num"><small>Last run’s net</small><b :class="netCls()" x-text="netText()"></b></div>
+          <div class="ag-tiles num">
+            <div class="ag-tile"><span>Trades</span><b x-text="traded().length"></b><span x-text="wonCount() + ' won'"></span></div>
+            <div class="ag-tile"><span>Ran</span><b x-text="ranText()"></b><span x-text="plannedText()"></span></div>
+            <div class="ag-tile"><span>API</span><b x-text="apiUsd()"></b><span x-text="wakesWord()"></span></div>
+          </div>
+          <small>Won: made money after every fee. Net is the run's realized result.</small>
+        </div>
+        <div class="ag-group ag-rule-results num" x-show="ruleResults().length">
+          <template x-for="x in ruleResults()" :key="x.rule"><div class="ag-row"><span x-text="x.rule"></span><span class="ag-sp"></span><span class="ag-val" :class="x.cls" x-text="x.text"></span></div></template>
+        </div>
+        <div class="ag-group">
+          <div class="ag-row"><span>Open positions handed back</span><span class="ag-sp"></span><span class="ag-val" x-text="handedBack()"></span></div>
+          <template x-for="p in $store.agent.openPositions()" :key="p.id"><div class="ag-row ag-row-sub num"><span x-text="$store.agent.posLine(p)"></span></div></template>
+          <button type="button" class="ag-row" @click="openActivity('trades')"><span>All activity</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+        </div>
+        <button type="button" class="ag-primary" x-show="!archivedSel()" @click="runAgain()">Run this agent again</button>
+        <small class="ag-foot" x-show="!archivedSel()">Opens New agent with this run’s settings; nothing starts until you type START and slide.</small>
+        <small class="ag-foot" x-show="archivedSel()">This agent is retired: it keeps its runs and cannot run again.</small>
+      </div>
+
+      <!-- ===== NEW AGENT: one market first, then the rest; a slide starts it ===== -->
+      <form class="ag-launch" x-show="mode() === 'new'" @submit.prevent @input="touched = true" aria-labelledby="ag-launch-h">
+        <h2 id="ag-launch-h" class="sr-only">New agent</h2>
+        <small class="ag-foot">An agent trades one market inside limits you set: max loss, per-trade cap, end time and API spend. You can stop it from any tab in one tap.</small>
+
+        <!-- presets -->
+        <div class="ag-presets" x-show="presetsAvail === false || presets.length || presetsErr">
+          <p class="ag-gl">Start from preset</p>
+          <div class="ag-group">
+            <div class="ag-row is-off" x-show="presetsAvail === false"><span>Presets</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div>
+            <p class="ag-row red" x-show="presetsErr" x-text="'Presets could not be read: ' + presetsErr"></p>
+            <template x-for="p in presetsShown()" :key="p.name">
+              <div class="ag-row ag-preset">
+                <button type="button" class="ag-preset-go" @click="startFrom(p)" :aria-label="'Start from preset ' + p.name"><b x-text="p.name"></b><small x-text="presetLine(p)"></small></button>
+                <button type="button" class="ag-link" x-show="!phone()" @click="deletePreset(p)" :disabled="presetBusy" :aria-label="'Delete preset ' + p.name">Delete</button>
+              </div>
+            </template>
+          </div>
+        </div>
+        <p class="ag-foot" x-show="filledLine()" x-text="filledLine()"></p>
+
+        <p class="ag-gl" id="ag-gl-market">Market · pick one</p>
+        <div class="ag-mkts" role="radiogroup" aria-labelledby="ag-gl-market">
+          <template x-for="k in venueKeys()" :key="k">
+            <button type="button" class="ag-mk" role="radio" :aria-checked="form.market === k ? 'true' : 'false'" :disabled="!marketOn(k) || !!form.agent_id && form.market !== k" @click="pickMarket(k)">
+              <b x-text="venueLabel(k)"></b><span x-text="marketSub(k)"></span>
+            </button>
+          </template>
+        </div>
+
+        <div class="ag-group" x-show="form.market">
+          <label class="ag-row"><span>Name</span><span class="ag-sp"></span>
+            <input class="ag-in ag-in-name" type="text" autocomplete="off" maxlength="40" x-model="form.name" :readonly="!!form.agent_id" @input="typedName()" aria-label="Agent name"></label>
+        </div>
+        <p class="ag-foot" x-show="form.market" x-text="nameFoot()"></p>
+
+        <p class="ag-gl" id="ag-gl-control" x-show="form.market">How much control</p>
+        <div class="ag-group" x-show="form.market">
+          <div class="ag-row"><span>Level</span><span class="ag-sp"></span>
+            <div class="ag-seg" role="radiogroup" aria-labelledby="ag-gl-control">
+              <button type="button" role="radio" :aria-checked="form.level === 'assist' ? 'true' : 'false'" @click="setLevel('assist')">Assist</button>
+              <button type="button" role="radio" :aria-checked="form.level === 'auto' ? 'true' : 'false'" @click="setLevel('auto')">Auto</button>
+            </div>
+          </div>
+          <label class="ag-row" x-show="form.level === 'assist'"><span>Proposal window</span><span class="ag-sp"></span>
+            <input class="ag-in" type="text" inputmode="numeric" autocomplete="off" placeholder="20" x-model="form.proposal_ttl_s" aria-label="Proposal window (10 to 60 seconds)"><span class="ag-unit">s</span></label>
+        </div>
+        <p class="ag-foot" x-show="form.market" x-text="levelFoot()"></p>
+        <p class="ag-foot" x-show="form.market && form.level === 'assist'">Each proposal waits 10–60 seconds (empty: 20). Assist needs at least one rule ticked below.</p>
+
+        <p class="ag-gl" x-show="form.market">Rules</p>
+        <div class="ag-group ag-rules" x-show="form.market && form.kind === 'in_app' && ruleList().length">
+          <template x-for="x in ruleList()" :key="x.id">
+            <label class="ag-row ag-check"><input type="checkbox" x-model="form.rules[x.id]"><span class="ag-check-t"><span class="ag-rule-id" x-text="x.id"></span><small x-text="x.description"></small></span><span class="ag-val ag-rule-rec" x-text="ruleRecord(x.id)"></span></label>
+          </template>
+          <label class="ag-row ag-check ag-one-bet"><input type="checkbox" x-model="form.one_bet"><span class="ag-check-t"><span>One bet per window</span></span></label>
+          <button type="button" class="ag-row ag-score-row" @click="open('score')"><span>Rule scorecard</span><span class="ag-sp"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+        </div>
+        <div class="ag-group" x-show="form.market && form.kind === 'in_app' && !ruleList().length"><p class="ag-row ag-norules">No rules yet for this market: the model’s judgment only.</p></div>
+        <p class="ag-foot" x-show="form.market && form.kind === 'in_app' && ruleList().length">With a rule on, only the rule opens entries (with its BTC stop); the agent cannot buy and supervises them. None on: the agent decides entries itself. Retired rules are not offered.</p>
+
+        <p class="ag-gl" x-show="form.market">Limits</p>
+        <div class="ag-group num" x-show="form.market">
+          <label class="ag-row"><span>Max loss</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="form.budget" aria-label="Max loss (budget) $"></label>
+          <label class="ag-row"><span>Per trade</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="form.per_trade" aria-label="Per-trade cap $"></label>
+          <label class="ag-row"><span>Runs for</span><span class="ag-sp"></span><input class="ag-in" type="text" inputmode="numeric" autocomplete="off" x-model="form.minutes" aria-label="Runs for (minutes)"><span class="ag-unit">min</span></label>
+        </div>
+        <p class="ag-foot" x-show="form.market && endsAt()" x-text="endsAt()"></p>
+        <p class="ag-foot" x-show="form.market && $store.agent.status && $store.agent.status.allow_production === false">The server runs agents in paper mode for now: a market in production is refused. The market's mode is pinned at start; changing it pauses the agent.</p>
+
+        <details class="ag-group ag-adv" x-show="form.market">
+          <summary class="ag-row"><span>Model</span><span class="ag-sp"></span><span class="ag-val" x-text="advancedLine()"></span><span class="ag-chev" aria-hidden="true">›</span></summary>
+          <div class="ag-row"><span>Who trades</span><span class="ag-sp"></span>
+            <div class="ag-seg" role="radiogroup" aria-label="Who trades">
+              <button type="button" role="radio" :aria-checked="form.kind === 'in_app' ? 'true' : 'false'" @click="setKind('in_app')">In-app</button>
+              <button type="button" role="radio" :aria-checked="form.kind === 'external' ? 'true' : 'false'" @click="setKind('external')">External (MCP)</button>
+            </div>
+          </div>
+          <p class="ag-row ag-key" x-show="form.kind === 'in_app'"><span>Anthropic key</span><span class="ag-sp"></span><b class="ag-val" x-text="keyLine()"></b></p>
+          <label class="ag-row ag-stack" x-show="form.kind === 'in_app'"><span>Model (rates in $ per million tokens)</span>
+            <select x-model="form.model">
+              <option value="">Pick a model</option>
+              <template x-for="m in ($store.agent.status && $store.agent.status.models) || []" :key="m.id"><option :value="m.id" x-text="modelLine(m)"></option></template>
+            </select>
+          </label>
+          <label class="ag-row num" x-show="form.kind === 'in_app'"><span>API spend cap</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" x-model="form.spend_cap" aria-label="API spend cap $"></label>
+          <button type="button" class="ag-row" @click="open('prompts')"><span>Instructions</span><span class="ag-sp"></span><span class="ag-val" x-text="promptsShort()"></span><span class="ag-chev" aria-hidden="true">›</span></button>
+          <div class="ag-row ag-stack" x-show="form.kind === 'external'"><span>External agent (MCP)</span>
+            <small>An agent outside this app (e.g. over MCP) trades through the app's tools, inside these limits. Starting shows its token once: copy it into the agent's settings.</small></div>
+          <label class="ag-row ag-check"><input type="checkbox" disabled><span class="ag-check-t"><span>Sell agent positions on stop</span><small>Not built yet. Off: on stop, positions keep their take profit and stops and pass to you in Play.</small></span></label>
+          <p class="ag-row ag-stack"><small x-text="dailyLine()"></small><small x-text="promptsLine()"></small></p>
+        </details>
+
+        <p class="ag-gl" x-show="form.market">Save as preset</p>
+        <div class="ag-group" x-show="form.market">
+          <div class="ag-row is-off" x-show="presetsAvail === false"><span>Presets</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div>
+          <div class="ag-row" x-show="presetsAvail !== false && phone()"><small>Save and delete presets on the PC.</small></div>
+          <div class="ag-row" x-show="presetsAvail !== false && !phone()">
+            <input class="ag-in ag-in-wide" type="text" autocomplete="off" maxlength="40" placeholder="Preset name" x-model="presetName" aria-label="Preset name" @keydown.enter.prevent="savePreset()">
+            <button type="button" class="ag-link" @click="savePreset()" :disabled="presetBusy || !presetName.trim() || presetsAvail === null">Save as preset</button>
+          </div>
+        </div>
+        <p class="ag-foot" x-show="presetMsg" :class="presetMsgCls" x-text="presetMsg" role="status"></p>
+
+        <p class="pl-note red" x-show="inAppBlocked()" x-text="inAppBlocked()" role="status"></p>
+        <label class="ag-gl" for="ag-confirm">Type START, then slide</label>
+        <input id="ag-confirm" class="ag-confirm" type="text" autocomplete="off" spellcheck="false" x-model="form.confirm" @keydown.enter.prevent>
+        <div class="ag-slide" x-ref="agtrack" :class="canLaunch() || launching ? '' : 'off'">
+          <div class="ag-slide-fill" :style="'width:' + (slideX + 52) + 'px'"></div>
+          <span class="ag-slide-text" aria-live="polite"><span x-text="slideText()"></span><small x-show="slideHint()" x-text="slideHint()"></small></span>
+          <button type="button" class="ag-slide-knob" :style="'transform:translateX(' + slideX + 'px)'" :disabled="!canLaunch()"
+            aria-label="Slide to start agent (or press Enter)" @pointerdown="slideStart($event)" @pointermove="slideMove($event)" @pointerup="slideEnd()" @pointercancel="slideX = 0; sliding = false"
+            @keydown.enter.prevent="launch()" @keydown.space.prevent="launch()">&#8250;&#8250;</button>
+        </div>
+        <p class="pl-msg red ag-launch-msg" x-show="launchMsg" x-text="launchMsg" role="alert"></p>
+        <small class="ag-foot">Typing START is always required. A market in production trades real money.</small>
+        <small class="ag-killnote">The kill switch (KILL at the top of Play) blocks all new orders, everywhere, and pauses every agent.</small>
+      </form>
+
+      <!-- ===== FLEET LIMITS (KD3: off by default; set on the PC) ===== -->
+      <div class="ag-glim" x-show="mode() === 'limits'">
+        <div class="ag-group num">
+          <label class="ag-row"><span>Max loss per day</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" placeholder="off" x-model="gl.max_loss_day" :readonly="phone()" aria-label="Fleet max loss per day $ (empty: off)"></label>
+          <label class="ag-row"><span>API per day</span><span class="ag-sp"></span><span class="ag-unit">$</span><input class="ag-in" type="text" inputmode="decimal" autocomplete="off" placeholder="off" x-model="gl.api_day" :readonly="phone()" aria-label="Fleet API spend per day $ (empty: off)"></label>
+        </div>
+        <p class="ag-foot num" x-text="glUsed()"></p>
+        <p class="ag-foot">Across every agent, each day (midnight local time). Reaching one pauses every agent; an entry that would pass the max loss is refused. Empty is off (the default).</p>
+        <button type="button" class="ag-primary" x-show="!phone()" @click="glSave()" :disabled="gl.busy">Save fleet limits</button>
+        <p class="pl-note amber" x-show="phone()">Change the fleet limits on the PC.</p>
+        <p class="ag-foot" x-show="gl.msg" :class="gl.cls" x-text="gl.msg" role="status"></p>
+      </div>
+    </div>
+
+    <!-- ===== sheets: one job each, back to the page they came from ===== -->
+    <section class="ag-colA ag-sheet ag-note" x-show="sheet('note')" aria-labelledby="ag-note-h">
+      <div class="ag-bar"><button type="button" class="ag-back" @click="back()" x-text="backWord()"></button><h2 id="ag-note-h">Note to the agent</h2></div>
+      <div class="ag-card" x-show="$store.agent.sessionLive()">
+        <label for="ag-note-in" class="ag-eyebrow">Your note</label>
+        <textarea id="ag-note-in" rows="3" maxlength="1000" x-model="noteText" placeholder="It reads this on its next wake"></textarea>
+        <button type="button" class="ag-btn ag-btn-go" @click="sendNote()" :disabled="noteBusy || !noteText.trim()" x-text="noteBusy ? 'Sending…' : 'Send note'"></button>
+        <p class="pl-note red" x-show="noteMsg" x-text="noteMsg" role="alert"></p>
+      </div>
+      <p class="ag-foot" x-show="!$store.agent.sessionLive()">Notes go to a running agent.</p>
+      <ul class="ag-group ag-notes" x-show="$store.agent.notes.length">
+        <template x-for="n in $store.agent.notes.slice().reverse()" :key="n.id"><li class="ag-row"><span x-text="'“' + n.text + '”'"></span> <small :class="n.state === 'delivered' ? 'green' : 'amber'" x-text="noteState(n)"></small></li></template>
+      </ul>
+    </section>
+
+    <section class="ag-colA ag-sheet ag-settings" x-show="sheet('settings')" aria-labelledby="ag-set-h">
+      <div class="ag-bar"><button type="button" class="ag-back" @click="back()" x-text="backWord()"></button><h2 id="ag-set-h">Run settings</h2></div>
+      <div class="ag-group num" x-show="$store.agent.session()">
+        <div class="ag-row"><span>Who trades</span><span class="ag-sp"></span><span class="ag-val" x-text="$store.agent.session() && $store.agent.session().kind === 'external' ? 'External agent (MCP)' : 'In-app agent'"></span></div>
+        <div class="ag-row"><span>Level</span><span class="ag-sp"></span><span class="ag-val" x-text="levelWord() + ($store.agent.session() && $store.agent.session().limits && $store.agent.session().limits.proposal_ttl_s ? ' · proposals wait ' + $store.agent.session().limits.proposal_ttl_s + ' s' : '')"></span></div>
+        <div class="ag-row"><span>Market</span><span class="ag-sp"></span><span class="ag-val" x-text="marketsWord() + ' · ' + $store.agent.pill().text"></span></div>
+        <div class="ag-row ag-stack"><span>Budget</span><small x-text="$store.agent.budgetLine()"></small></div>
+        <div class="ag-row"><span>Per trade</span><span class="ag-sp"></span><span class="ag-val" x-text="$store.agent.session() && $store.agent.session().limits ? usdOf($store.agent.session().limits.per_trade) : '—'"></span></div>
+        <div class="ag-row"><span>Ends</span><span class="ag-sp"></span><span class="ag-val" x-text="endsClock() + ' · ' + $store.agent.timeLeft()"></span></div>
+        <div class="ag-row ag-stack"><span>API</span><small x-text="apiLine()"></small></div>
+        <div class="ag-row ag-stack" x-show="$store.agent.rulesLine()"><span>Rules</span><small x-text="$store.agent.rulesLine()"></small></div>
+        <div class="ag-row ag-stack"><span>Instructions</span><small x-text="sessionVersions() || promptsLine()"></small></div>
+      </div>
+      <p class="ag-foot">Limits are fixed for the run. To change them, stop it and run the agent again.</p>
+    </section>
+
+    <!-- the prompts (edits on the PC only) -->
+    <section class="ag-colA ag-sheet ag-prompts" x-show="sheet('prompts')" aria-labelledby="ag-pr-h">
+      <div class="ag-bar"><button type="button" class="ag-back" @click="back()" x-text="backWord()"></button><h2 id="ag-pr-h">Instructions (prompts)</h2></div>
+      <p class="ag-foot" x-text="promptsLine()"></p>
+      <p class="pl-note" x-show="sessionVersions()" x-text="sessionVersions()"></p>
+      <p class="pl-note amber" x-show="phone()">Change this on the PC.</p>
+      <p class="error-box" x-show="prErr" x-text="'Could not read the prompts: ' + prErr" role="alert"></p>
+      <small>Each agent's limits are added as data on every wake, so no edit can remove a limit.</small>
+      <template x-for="l in ['system', 'user']" :key="l">
+        <section class="ag-card ag-layer" x-show="pr">
+          <h3 x-text="layerHead(l)"></h3>
+          <small x-show="l === 'user'">Sent after the system prompt.</small>
+          <textarea rows="8" x-model="drafts[l]" :readonly="phone()" :aria-label="l === 'system' ? 'System prompt' : 'User prompt'"></textarea>
+          <div class="ag-btns">
+            <button type="button" class="ag-btn" @click="savePrompt(l)" :disabled="phone() || prBusy || !dirty(l)">Save as new version</button>
+            <button type="button" class="ag-btn" x-show="dirty(l)" @click="discard(l)">Discard</button>
+            <button type="button" class="ag-btn" @click="resetPrompt(l)" :disabled="phone() || prBusy">Reset to default</button>
+          </div>
+          <details class="ag-hist">
+            <summary x-text="'Versions (' + history(l).length + ')'"></summary>
+            <ul class="ag-list">
+              <template x-for="x in history(l)" :key="x.version">
+                <li><span x-text="histLine(x)"></span> <b x-show="current(l, x)">current</b><button type="button" class="pl-link" x-show="!current(l, x)" @click="restorePrompt(l, x.version)" :disabled="phone() || prBusy">Restore</button></li>
+              </template>
+            </ul>
+          </details>
+        </section>
+      </template>
+      <p x-show="prMsg" :class="prMsgCls" x-text="prMsg" role="status"></p>
+    </section>
+
+    <!-- Telegram: pairing and alert choices (GET /api/telegram/status; writes on the PC only) -->
+    <section class="ag-colA ag-sheet ag-tg" x-show="sheet('telegram')" aria-labelledby="ag-tg-h">
+      <div class="ag-bar"><button type="button" class="ag-back" @click="back()" x-text="backWord()"></button><h2 id="ag-tg-h">Telegram</h2></div>
+      <div class="ag-group" x-show="tgAvail === false"><div class="ag-row is-off"><span>Telegram</span><span class="ag-sp"></span><span class="ag-val">Not available in this app</span></div></div>
+      <p class="error-box" x-show="tgErr" x-text="'Could not read the Telegram status: ' + tgErr" role="alert"></p>
+      <p class="ag-foot" x-show="tgAvail === null && !tgErr">Reading the Telegram status…</p>
+      <div class="ag-group" x-show="tg && !tg.configured"><p class="ag-row ag-tg-off">Add a bot token in .env to use Telegram.</p></div>
+      <template x-if="tg && tg.configured">
+        <div class="ag-tg-on">
+          <div class="ag-group">
+            <div class="ag-row"><span>Bot</span><span class="ag-sp"></span><span class="ag-val" x-text="tg.running ? 'running' : 'not running'"></span></div>
+            <div class="ag-row"><span>Paired</span><span class="ag-sp"></span><span class="ag-val ag-tg-who" x-text="tg.paired ? (tg.user_label || 'yes') : 'not paired'"></span></div>
+            <div class="ag-row" x-show="!phone() && !tg.paired"><button type="button" class="ag-link" @click="tgPair()" :disabled="tgBusy" x-text="tgCode ? 'New code' : 'Pair'"></button></div>
+            <div class="ag-row" x-show="!phone() && tg.paired"><button type="button" class="ag-link red" @click="tgUnpair()" :disabled="tgBusy">Unpair</button></div>
+          </div>
+          <div class="ag-card ag-tg-code" x-show="tgCode && !tg.paired" role="status">
+            <span>Send <code class="ag-code" x-text="'/start ' + (tgCode ? tgCode.code : '')"></code> to <span class="ag-tg-bot" x-text="tg.bot_username ? '@' + tg.bot_username : 'your bot'"></span></span>
+            <small class="num" x-text="tgLeft()"></small>
+          </div>
+          <p class="ag-gl">Alerts</p>
+          <div class="ag-group ag-tg-alerts">
+            <template x-for="a in alerts" :key="a[0]">
+              <label class="ag-row ag-check"><span class="ag-check-t"><span x-text="a[1]"></span></span><span class="ag-sp"></span>
+                <input type="checkbox" role="switch" :checked="tgAlert(a[0])" :disabled="phone() || tgBusy || !(tg.alerts && a[0] in tg.alerts)" @change="tgSetAlert(a[0], $event.target.checked)" :aria-label="a[1] + ' alerts'"></label>
+            </template>
+          </div>
+          <div class="ag-group ag-tg-daily" x-show="tg.alerts && 'daily' in tg.alerts">
+            <label class="ag-row"><span>Daily summary at</span><span class="ag-sp"></span>
+              <input type="time" class="num" :value="tgDailyAt()" :disabled="phone() || tgBusy || !tgAlert('daily')" @change="tgSetDaily($event.target.value)" aria-label="Daily summary time"></label>
+          </div>
+          <p class="ag-foot">Session activity: what each agent does, as it happens, at most one message every 20 s; and an hourly how-it's-going. Daily summary: the day's trades, sent once at that time.</p>
+          <p class="ag-foot" x-show="phone()">Pair, unpair and alert changes are made on the PC.</p>
+        </div>
+      </template>
+      <p class="ag-foot" x-show="tgMsg" :class="tgMsgCls" x-text="tgMsg" role="status"></p>
+    </section>
+
+    <!-- ===== All activity across every run (one agent), or every agent's (the audit): the same filters ===== -->
+    <section class="ag-colB ag-feedwrap ag-activity" x-show="activityOn()" :class="$store.agent.stale() ? 'is-stale' : ''" aria-labelledby="ag-feed-h">
+      <div class="ag-bar"><button type="button" class="ag-back" x-show="!wideLive() && page === 'agent'" @click="back()" x-text="backWord()"></button><h2 id="ag-feed-h" x-text="page === 'audit' ? 'Every agent, every run' : 'All activity'"></h2></div>
+      <div class="ag-chips" role="group" aria-label="Show">
+        <template x-for="f in [['trades', 'Trades'], ['decisions', 'Decisions'], ['thinking', 'Thinking'], ['everything', 'Everything']]" :key="f[0]">
+          <button type="button" class="ag-chip" :aria-pressed="filter === f[0] ? 'true' : 'false'" @click="setFilter(f[0])" x-text="f[1]"></button>
+        </template>
+      </div>
+      <p class="ag-stale" role="status" x-show="$store.agent.stale()" x-text="$store.agent.staleText()"></p>
+      <p class="pl-note amber" x-show="page === 'agent' && $store.agent.streamNote" x-text="$store.agent.streamNote"></p>
+      <!-- Thinking: the run on screen's live feed (every wake's full card), then the earlier runs' wakes -->
+      <div class="ag-thinking" x-show="filter === 'thinking' && page === 'agent'">
+        <p class="pl-note muted" x-show="!$store.agent.everLive && $store.agent.enabled && $store.agent.sessionLive()">Connecting to the live feed…</p>
+        <p class="pl-note muted" x-show="$store.agent.sessionLive() && !$store.agent.runCount" x-text="$store.agent.session() && $store.agent.session().kind === 'external' ? 'Waiting for the external agent: no tool call yet.' : 'Waiting for the first event: no wake yet.'"></p>
+        <p class="pl-note muted" x-show="$store.agent.ended() && !$store.agent.runCount">No wakes are recorded for this run.</p>
+        <div id="ag-feed" class="ag-feed" x-ignore></div>
+        <small x-show="$store.agent.runCount">The newest 50 wakes of this run are kept on this screen.</small>
+      </div>
+      <p class="error-box" x-show="jr.err" x-text="'Could not read the activity: ' + jr.err" role="alert"></p>
+      <div class="ag-group ag-feedlist ag-jr num">
+        <template x-for="it in jrItems()" :key="it.key">
+          <div class="ag-jr-item">
+            <template x-if="it.kind === 'run'"><div class="ag-run-div" :class="it.live ? 'is-live' : ''" x-text="it.title"></div></template>
+            <template x-if="it.kind !== 'run'">
+              <details class="ag-ev ag-ev-d" :class="'is-' + it.kind">
+                <summary><time x-text="hm(it.ts)"></time><span class="ag-ev-t"><b :class="it.cls" x-text="it.title"></b><small x-show="it.sub" x-text="it.sub"></small></span></summary>
+                <div class="ag-ev-more">
+                  <template x-for="(l, i) in it.lines" :key="i"><p x-text="l"></p></template>
+                  <button type="button" class="ag-link" x-show="it.run" @click="showRun(it.run)">Open the full run ›</button>
+                </div>
+              </details>
+            </template>
+          </div>
+        </template>
+        <p class="ag-ev-empty" x-show="!jrItems().length && emptyText(filter)" x-text="emptyText(filter)"></p>
+        <button type="button" class="ag-more ag-older" x-show="jrMore()" @click="jrLoad(true)" :disabled="jr.busy" x-text="jr.busy ? 'Reading…' : 'Older ›'"></button>
+        <div class="ag-sentinel" x-init="watchMore($el)" aria-hidden="true"></div>
+      </div>
+    </section>
+
+    <!-- ===== the rule scorecard: live vs backtest per rule x market; retirement is enforced by the server ===== -->
+    <section class="ag-colC ag-scorewrap" x-show="scoreOn()" aria-labelledby="ag-score-h">
+      <div class="ag-bar"><button type="button" class="ag-back" x-show="!wideLive()" @click="back()" x-text="backWord()"></button><h2 id="ag-score-h">Rule scorecard</h2></div>
+      <div class="ag-card ag-score">
+        <small>Every agent, closed trades only (settling ones wait for the result). Win % means nothing without the break-even the price paid implies.</small>
+        <p class="ag-foot" x-show="!$store.agent.card && !$store.agent.cardErr">Reading the scorecard…</p>
+        <p class="error-box" x-show="$store.agent.cardErr" x-text="'Could not read the scorecard: ' + $store.agent.cardErr" role="alert"></p>
+        <template x-for="x in cardRules()" :key="x.rule">
+          <div class="ag-score-rule" :class="isRetired(x) ? 'is-retired' : ''">
+            <div class="ag-score-head">
+              <b x-text="x.rule"></b>
+              <span class="ag-score-status" :class="isRetired(x) ? 'muted' : 'green'" x-text="statusWord(x)"></span>
+            </div>
+            <small class="ag-score-reason" x-show="isRetired(x) && x.status.reason" x-text="x.status.reason"></small>
+            <div class="ag-score-bar" x-show="!isRetired(x)" role="progressbar" :aria-valuenow="x.bar.trades" aria-valuemin="0" :aria-valuemax="x.bar.of" :aria-label="x.rule + ' 30-trade bar'">
+              <span :style="'width:' + barPct(x) + '%'"></span>
+            </div>
+            <small class="ag-score-barline" x-show="!isRetired(x)" x-text="barLine(x)"></small>
+            <ul class="ag-list ag-score-rows">
+              <template x-for="r in cardRows(x.rule)" :key="r.rule + ':' + r.market">
+                <li class="num">
+                  <span class="ag-score-mkt" x-text="r.market_label"></span>
+                  <span class="ag-score-win" x-text="winLine(r.live)"></span>
+                  <span class="ag-score-net" x-text="netLine(r.live)"></span>
+                  <small x-show="extraLine(r.live)" x-text="extraLine(r.live)"></small>
+                </li>
+              </template>
+            </ul>
+            <small class="ag-score-bt" x-text="btLine(x.backtest)" :title="x.backtest ? x.backtest.note : ''"></small>
+            <div class="ag-btns" x-show="!phone()">
+              <button type="button" class="ag-btn" x-show="!isRetired(x)" @click="setRule(x.rule, 'retired')" :disabled="!!rsBusy">Retire</button>
+              <template x-if="isRetired(x)">
+                <span class="ag-score-react">
+                  <input type="text" autocomplete="off" spellcheck="false" x-model="rsTyped[x.rule]" :placeholder="'Type ' + phrase(x.rule)" :aria-label="'Type ' + phrase(x.rule) + ' to reactivate'">
+                  <button type="button" class="ag-btn" @click="setRule(x.rule, 'active')" :disabled="!!rsBusy || String(rsTyped[x.rule] || '').trim() !== phrase(x.rule)">Reactivate</button>
+                </span>
+              </template>
+            </div>
+          </div>
+        </template>
+        <p class="pl-note amber" x-show="phone()">Retire or reactivate a rule on the PC.</p>
+        <p x-show="rsMsg" :class="rsMsgCls" x-text="rsMsg" role="status"></p>
+      </div>
+    </section>
+  </div>
+</section>
+</div>
+<!-- ================= the tab bar: Play · Agents · Record (glass on chrome only; solid under Reduce Transparency).
+     Above it, while any agent runs: the accessory "N agents · ±$X" (amber with "· N need you" when any agent needs
+     you) and a round Stop: one agent stops in one tap (R18); several ask "Stop all?" on screen first (the server
+     asks nothing). Toasts sit above both. ===== -->
+<div class="nv-toast" x-data x-show="$store.app.toastText" x-cloak role="status" aria-live="polite" :class="$store.app.toastCls" x-text="$store.app.toastText"></div>
+<nav id="tabbar" class="nv-tabbar" x-data aria-label="Sections">
+  <div id="ag-acc" class="nv-acc num" x-show="$store.agent.accShow()" x-cloak role="region" aria-label="Agents" :class="$store.agent.needCount() ? 'is-amber' : ''">
+    <template x-if="!$store.agent.stopAsk">
+      <div class="nv-acc-in">
+        <button type="button" class="nv-acc-open" @click="agentOpen()" :aria-label="'Open the Agents tab. ' + $store.agent.accHead() + ' ' + $store.agent.accLine()">
+          <span class="nv-acc-dot" :class="$store.agent.needCount() ? 'is-paused' : 'is-watching'" aria-hidden="true"></span>
+          <b x-text="$store.agent.accHead()"></b><span class="nv-acc-t" x-text="$store.agent.accLine()"></span>
+        </button>
+        <button type="button" class="nv-acc-stop" @click="$store.agent.accStop()" :disabled="$store.agent.busy" :aria-label="$store.agent.fleetCount() === 1 ? 'Stop the agent now' : 'Stop all agents'"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor"/></svg></button>
+      </div>
+    </template>
+    <template x-if="$store.agent.stopAsk">
+      <div class="nv-acc-in nv-acc-ask" role="alertdialog" aria-label="Stop all agents?">
+        <b x-text="'Stop all ' + $store.agent.fleetCount() + ' agents?'"></b>
+        <span class="nv-sp"></span>
+        <button type="button" class="nv-acc-btn" @click="$store.agent.stopAsk = false">Cancel</button>
+        <button type="button" class="nv-acc-btn is-stop" @click="$store.agent.stopAll()" :disabled="$store.agent.busy">Stop all</button>
+      </div>
+    </template>
+  </div>
+  <p class="nv-acc-stale" x-show="$store.agent.enabled && $store.agent.sessionLive() && $store.agent.stale()" x-cloak x-text="$store.agent.staleText()" role="status"></p>
+  <div class="nv-tabs" role="tablist">
+    <button type="button" role="tab" class="nv-tab" :aria-selected="$store.app.section() === 'play' ? 'true' : 'false'" @click="navTo('play')"><svg width="26" height="26" aria-hidden="true"><use href="#tb-play"/></svg><span>Play</span></button>
+    <button type="button" role="tab" class="nv-tab" :aria-selected="$store.app.section() === 'agent' ? 'true' : 'false'" @click="navTo('agent')"><svg width="26" height="26" aria-hidden="true"><use href="#sv-mark"/></svg><span>Agents</span></button>
+    <button type="button" role="tab" class="nv-tab" :aria-selected="$store.app.section() === 'record' ? 'true' : 'false'" @click="navTo('record')"><svg width="26" height="26" aria-hidden="true"><use href="#tb-record"/></svg><span>Record</span></button>
+  </div>
+</nav>
+</main>
+<div class="sr-only" aria-live="polite" x-data x-text="$store.app.announcement"></div>
+
+<script src="vendor/lightweight-charts-5.0.8.standalone.production.js"></script>
+<script src="app.js"></script>
+<script src="playchart.js"></script>
+<script src="views/play.js"></script>
+<script src="perpchart.js"></script>
+<script src="views/perps.js"></script>
+<script src="views/proposal.js"></script>
+<script src="views/agent.js"></script>
+<script defer src="vendor/alpine-3.14.9.min.js"></script>
+</body>
+</html>

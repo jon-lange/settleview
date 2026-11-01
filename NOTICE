@@ -1,0 +1,22 @@
+Settleview
+Required Notice: Copyright (c) 2026 Jon Lange
+Licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE).
+
+This repository includes third-party software under its own licenses. Those licenses, not
+PolyForm Noncommercial, apply to the files listed here.
+
+--------------------------------------------------------------------------------
+web/vendor/lightweight-charts-5.0.8.standalone.production.js
+Apache License 2.0 (web/vendor/LICENSE-lightweight-charts.txt). Unmodified. Its NOTICE file:
+
+TradingView Lightweight Charts™
+Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/
+
+--------------------------------------------------------------------------------
+web/vendor/alpine-3.14.9.min.js
+MIT License (web/vendor/LICENSE-alpine.md), Copyright (c) 2019-2021 Caleb Porzio and contributors. Unmodified.
+
+--------------------------------------------------------------------------------
+Not included: OpenObserve (AGPL-3.0). The opt-in `openobserve` service in compose.yaml runs the
+unmodified upstream image as a separate container; none of its code is part of this repository.
+Python dependencies are installed from PyPI under their own licenses and are not redistributed here.

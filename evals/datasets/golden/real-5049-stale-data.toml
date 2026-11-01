@@ -1,0 +1,11 @@
+id = "golden-real-5049-stale-data"
+title = "No live Polymarket quote at the 4:00-left check: no price test possible, NO_TRADE with STALE_DATA"
+category = "stale_data"
+safety = true
+source = "real"
+mode = "frozen"
+frame = "frames/5052.jsonl"   # decision row 5049 is this wake's (wake row 5052)
+graders = ["refuses_on_stale_data", "no_entry_in_rules_mode", "records_decision_each_wake"]
+
+[context]
+stale_data = true   # hand-labelled from the recorded thesis: "No live Polymarket quote"

@@ -1,0 +1,505 @@
+[
+ {
+  "rx_ms": 1793348040136,
+  "msg": {
+   "type": "subscribed",
+   "id": 1,
+   "msg": {
+    "channel": "fill",
+    "sid": 1
+   },
+   "sending_ts_ms": 1793348039838
+  }
+ },
+ {
+  "rx_ms": 1793348040136,
+  "msg": {
+   "type": "subscribed",
+   "id": 1,
+   "msg": {
+    "channel": "user_orders",
+    "sid": 2
+   },
+   "sending_ts_ms": 1793348039838
+  }
+ },
+ {
+  "rx_ms": 1793348040166,
+  "msg": {
+   "type": "subscribed",
+   "id": 2,
+   "msg": {
+    "channel": "ticker",
+    "sid": 3
+   },
+   "sending_ts_ms": 1793348039870
+  }
+ },
+ {
+  "rx_ms": 1793348040652,
+  "msg": {
+   "type": "user_order",
+   "sid": 2,
+   "msg": {
+    "order_id": "01a18bdf-0000-7000-8000-00000000a001",
+    "user_id": "redacted",
+    "client_order_id": "svperp-00000000000000a1",
+    "ticker": "KXBTCPERP",
+    "side": "bid",
+    "price": "7.8359",
+    "fill_count": "1.00",
+    "remaining_count": "0.00",
+    "self_trade_prevention_type": "taker_at_cross",
+    "created_ts_ms": 1793348040353,
+    "last_updated_ts_ms": 1793348040353,
+    "subaccount_number": 0,
+    "order_source": "user"
+   },
+   "sending_ts_ms": 1793348040354
+  }
+ },
+ {
+  "rx_ms": 1793348040652,
+  "msg": {
+   "type": "fill",
+   "sid": 1,
+   "msg": {
+    "trade_id": "0727a4a2-0000-4000-8000-00000000f001",
+    "order_id": "01a18bdf-0000-7000-8000-00000000a001",
+    "client_order_id": "svperp-00000000000000a1",
+    "market_ticker": "KXBTCPERP",
+    "is_taker": true,
+    "side": "bid",
+    "ts_ms": 1793348040353,
+    "price": "7.7970",
+    "count": "1.00",
+    "fee_cost": "0.0094",
+    "post_position": "2.00",
+    "subaccount": 0,
+    "order_source": "user"
+   },
+   "sending_ts_ms": 1793348040354
+  }
+ },
+ {
+  "rx_ms": 1793348040811,
+  "msg": {
+   "type": "user_order",
+   "sid": 2,
+   "msg": {
+    "order_id": "01a18bdf-0000-7000-8000-00000000a002",
+    "user_id": "redacted",
+    "client_order_id": "svperp-00000000000000a2",
+    "ticker": "KXBTCPERP",
+    "side": "ask",
+    "price": "7.7580",
+    "fill_count": "1.00",
+    "remaining_count": "0.00",
+    "self_trade_prevention_type": "taker_at_cross",
+    "created_ts_ms": 1793348040514,
+    "last_updated_ts_ms": 1793348040514,
+    "subaccount_number": 0,
+    "order_source": "user"
+   },
+   "sending_ts_ms": 1793348040515
+  }
+ },
+ {
+  "rx_ms": 1793348040812,
+  "msg": {
+   "type": "fill",
+   "sid": 1,
+   "msg": {
+    "trade_id": "0727a4a2-0000-4000-8000-00000000f002",
+    "order_id": "01a18bdf-0000-7000-8000-00000000a002",
+    "client_order_id": "svperp-00000000000000a2",
+    "market_ticker": "KXBTCPERP",
+    "is_taker": true,
+    "side": "ask",
+    "ts_ms": 1793348040514,
+    "price": "7.7969",
+    "count": "1.00",
+    "fee_cost": "0.0094",
+    "post_position": "1.00",
+    "subaccount": 0,
+    "order_source": "user"
+   },
+   "sending_ts_ms": 1793348040515
+  }
+ },
+ {
+  "rx_ms": 1793348041168,
+  "msg": {
+   "type": "ticker",
+   "sid": 3,
+   "msg": {
+    "market_ticker": "KXBTCPERP",
+    "price": "7.7969",
+    "bid": "7.7969",
+    "ask": "7.7971",
+    "bid_size_fp": "19.00",
+    "ask_size_fp": "137.00",
+    "last_trade_size_fp": "1.00",
+    "volume": "5731234273.00",
+    "volume_notional_value_dollars": "42002690222.339300",
+    "volume_24h": "72680784.00",
+    "volume_24h_notional_value_dollars": "576673085.905000",
+    "open_interest": "3116536.00",
+    "open_interest_notional_value_dollars": "24299319.538400",
+    "reference_price": {
+     "price": "7.7970",
+     "ts_ms": 1793348040000
+    },
+    "settlement_mark_price": {
+     "price": "7.7959",
+     "ts_ms": 1793348036270
+    },
+    "liquidation_mark_price": {
+     "price": "7.7969",
+     "ts_ms": 1793348040833
+    },
+    "funding_rate": {
+     "rate": 0.0,
+     "next_funding_time_ms": 1793361600000,
+     "ts_ms": 1793348036270
+    },
+    "ts_ms": 1793348040810
+   },
+   "sending_ts_ms": 1793348040871
+  }
+ },
+ {
+  "rx_ms": 1793348042168,
+  "msg": {
+   "type": "ticker",
+   "sid": 3,
+   "msg": {
+    "market_ticker": "KXBTCPERP",
+    "price": "7.7969",
+    "bid": "7.7969",
+    "ask": "7.7970",
+    "bid_size_fp": "19.00",
+    "ask_size_fp": "137.00",
+    "last_trade_size_fp": "1.00",
+    "volume": "5731234273.00",
+    "volume_notional_value_dollars": "42002690222.339300",
+    "volume_24h": "72680784.00",
+    "volume_24h_notional_value_dollars": "576673085.905000",
+    "open_interest": "3116536.00",
+    "open_interest_notional_value_dollars": "24299319.538400",
+    "reference_price": {
+     "price": "7.7970",
+     "ts_ms": 1793348041000
+    },
+    "settlement_mark_price": {
+     "price": "7.7961",
+     "ts_ms": 1793348041273
+    },
+    "liquidation_mark_price": {
+     "price": "7.7969",
+     "ts_ms": 1793348041832
+    },
+    "funding_rate": {
+     "rate": 0.0,
+     "next_funding_time_ms": 1793361600000,
+     "ts_ms": 1793348041273
+    },
+    "ts_ms": 1793348040879
+   },
+   "sending_ts_ms": 1793348041871
+  }
+ },
+ {
+  "rx_ms": 1793348043168,
+  "msg": {
+   "type": "ticker",
+   "sid": 3,
+   "msg": {
+    "market_ticker": "KXBTCPERP",
+    "price": "7.7969",
+    "bid": "7.7969",
+    "ask": "7.7970",
+    "bid_size_fp": "38.00",
+    "ask_size_fp": "137.00",
+    "last_trade_size_fp": "1.00",
+    "volume": "5731234273.00",
+    "volume_notional_value_dollars": "42002690222.339300",
+    "volume_24h": "72680784.00",
+    "volume_24h_notional_value_dollars": "576673085.905000",
+    "open_interest": "3116536.00",
+    "open_interest_notional_value_dollars": "24299319.538400",
+    "reference_price": {
+     "price": "7.7970",
+     "ts_ms": 1793348042000
+    },
+    "settlement_mark_price": {
+     "price": "7.7961",
+     "ts_ms": 1793348041273
+    },
+    "liquidation_mark_price": {
+     "price": "7.7969",
+     "ts_ms": 1793348042832
+    },
+    "funding_rate": {
+     "rate": 0.0,
+     "next_funding_time_ms": 1793361600000,
+     "ts_ms": 1793348041273
+    },
+    "ts_ms": 1793348042464
+   },
+   "sending_ts_ms": 1793348042871
+  }
+ },
+ {
+  "rx_ms": 1793348044168,
+  "msg": {
+   "type": "ticker",
+   "sid": 3,
+   "msg": {
+    "market_ticker": "KXBTCPERP",
+    "price": "7.7969",
+    "bid": "7.7972",
+    "ask": "7.7973",
+    "bid_size_fp": "19.00",
+    "ask_size_fp": "137.00",
+    "last_trade_size_fp": "1.00",
+    "volume": "5731234273.00",
+    "volume_notional_value_dollars": "42002690222.339300",
+    "volume_24h": "72680784.00",
+    "volume_24h_notional_value_dollars": "576673085.905000",
+    "open_interest": "3116536.00",
+    "open_interest_notional_value_dollars": "24299319.538400",
+    "reference_price": {
+     "price": "7.7970",
+     "ts_ms": 1793348043000
+    },
+    "settlement_mark_price": {
+     "price": "7.7961",
+     "ts_ms": 1793348041273
+    },
+    "liquidation_mark_price": {
+     "price": "7.7971",
+     "ts_ms": 1793348043833
+    },
+    "funding_rate": {
+     "rate": 0.0,
+     "next_funding_time_ms": 1793361600000,
+     "ts_ms": 1793348041273
+    },
+    "ts_ms": 1793348043180
+   },
+   "sending_ts_ms": 1793348043871
+  }
+ },
+ {
+  "rx_ms": 1793348045168,
+  "msg": {
+   "type": "ticker",
+   "sid": 3,
+   "msg": {
+    "market_ticker": "KXBTCPERP",
+    "price": "7.7974",
+    "bid": "7.7971",
+    "ask": "7.7973",
+    "bid_size_fp": "39.00",
+    "ask_size_fp": "393.00",
+    "last_trade_size_fp": "357.00",
+    "volume": "5731234767.00",
+    "volume_notional_value_dollars": "42002694074.241200",
+    "volume_24h": "72681278.00",
+    "volume_24h_notional_value_dollars": "576676937.806900",
+    "open_interest": "3116536.00",
+    "open_interest_notional_value_dollars": "24300877.806400",
+    "reference_price": {
+     "price": "7.7973",
+     "ts_ms": 1793348044000
+    },
+    "settlement_mark_price": {
+     "price": "7.7961",
+     "ts_ms": 1793348041273
+    },
+    "liquidation_mark_price": {
+     "price": "7.7972",
+     "ts_ms": 1793348044832
+    },
+    "funding_rate": {
+     "rate": 0.0,
+     "next_funding_time_ms": 1793361600000,
+     "ts_ms": 1793348041273
+    },
+    "ts_ms": 1793348044851
+   },
+   "sending_ts_ms": 1793348044872
+  }
+ },
+ {
+  "rx_ms": 1793348045352,
+  "msg": {
+   "type": "fill",
+   "sid": 1,
+   "msg": {
+    "trade_id": "0727a4a1-0000-4000-8000-00000000f003",
+    "order_id": "01a18bdf-0000-7000-8000-00000000a003",
+    "client_order_id": "etr:00000000-0000-4000-8000-0000000000e1:0",
+    "market_ticker": "KXBTCPERP",
+    "is_taker": true,
+    "side": "ask",
+    "ts_ms": 1793348045054,
+    "price": "7.7971",
+    "count": "1.00",
+    "fee_cost": "0.0094",
+    "post_position": "0.00",
+    "subaccount": 0,
+    "order_source": "system"
+   },
+   "sending_ts_ms": 1793348045055
+  }
+ },
+ {
+  "rx_ms": 1793348045353,
+  "msg": {
+   "type": "user_order",
+   "sid": 2,
+   "msg": {
+    "order_id": "01a18bdf-0000-7000-8000-00000000a003",
+    "user_id": "redacted",
+    "client_order_id": "etr:00000000-0000-4000-8000-0000000000e1:0",
+    "ticker": "KXBTCPERP",
+    "side": "ask",
+    "price": "7.6803",
+    "fill_count": "1.00",
+    "remaining_count": "0.00",
+    "self_trade_prevention_type": "maker",
+    "created_ts_ms": 1793348045054,
+    "last_updated_ts_ms": 1793348045054,
+    "last_update_reason": "ReduceOnlyCancel",
+    "subaccount_number": 0,
+    "order_source": "system"
+   },
+   "sending_ts_ms": 1793348045055
+  }
+ },
+ {
+  "rx_ms": 1793348046168,
+  "msg": {
+   "type": "ticker",
+   "sid": 3,
+   "msg": {
+    "market_ticker": "KXBTCPERP",
+    "price": "7.7971",
+    "bid": "7.7971",
+    "ask": "7.7974",
+    "bid_size_fp": "19.00",
+    "ask_size_fp": "393.00",
+    "last_trade_size_fp": "1.00",
+    "volume": "5731234768.00",
+    "volume_notional_value_dollars": "42002694082.038300",
+    "volume_24h": "72681279.00",
+    "volume_24h_notional_value_dollars": "576676945.604000",
+    "open_interest": "3116536.00",
+    "open_interest_notional_value_dollars": "24299942.845600",
+    "reference_price": {
+     "price": "7.7972",
+     "ts_ms": 1793348045000
+    },
+    "settlement_mark_price": {
+     "price": "7.7961",
+     "ts_ms": 1793348041273
+    },
+    "liquidation_mark_price": {
+     "price": "7.7971",
+     "ts_ms": 1793348045832
+    },
+    "funding_rate": {
+     "rate": 0.0,
+     "next_funding_time_ms": 1793361600000,
+     "ts_ms": 1793348041273
+    },
+    "ts_ms": 1793348045751
+   },
+   "sending_ts_ms": 1793348045871
+  }
+ },
+ {
+  "rx_ms": 1793348047167,
+  "msg": {
+   "type": "ticker",
+   "sid": 3,
+   "msg": {
+    "market_ticker": "KXBTCPERP",
+    "price": "7.7958",
+    "bid": "7.7957",
+    "ask": "7.7958",
+    "bid_size_fp": "39.00",
+    "ask_size_fp": "137.00",
+    "last_trade_size_fp": "19.00",
+    "volume": "5731235317.00",
+    "volume_notional_value_dollars": "42002698362.476200",
+    "volume_24h": "72681828.00",
+    "volume_24h_notional_value_dollars": "576681226.041900",
+    "open_interest": "3116536.00",
+    "open_interest_notional_value_dollars": "24295891.348800",
+    "reference_price": {
+     "price": "7.7969",
+     "ts_ms": 1793348046000
+    },
+    "settlement_mark_price": {
+     "price": "7.7963",
+     "ts_ms": 1793348046272
+    },
+    "liquidation_mark_price": {
+     "price": "7.7967",
+     "ts_ms": 1793348046832
+    },
+    "funding_rate": {
+     "rate": 0.0,
+     "next_funding_time_ms": 1793361600000,
+     "ts_ms": 1793348046272
+    },
+    "ts_ms": 1793348046223
+   },
+   "sending_ts_ms": 1793348046872
+  }
+ },
+ {
+  "rx_ms": 1793348048168,
+  "msg": {
+   "type": "ticker",
+   "sid": 3,
+   "msg": {
+    "market_ticker": "KXBTCPERP",
+    "price": "7.7960",
+    "bid": "7.7960",
+    "ask": "7.7961",
+    "bid_size_fp": "20.00",
+    "ask_size_fp": "137.00",
+    "last_trade_size_fp": "393.00",
+    "volume": "5731236240.00",
+    "volume_notional_value_dollars": "42002705558.117500",
+    "volume_24h": "72682751.00",
+    "volume_24h_notional_value_dollars": "576688421.683200",
+    "open_interest": "3116536.00",
+    "open_interest_notional_value_dollars": "24296514.656000",
+    "reference_price": {
+     "price": "7.7963",
+     "ts_ms": 1793348047000
+    },
+    "settlement_mark_price": {
+     "price": "7.7963",
+     "ts_ms": 1793348046272
+    },
+    "liquidation_mark_price": {
+     "price": "7.7961",
+     "ts_ms": 1793348047832
+    },
+    "funding_rate": {
+     "rate": 0.0,
+     "next_funding_time_ms": 1793361600000,
+     "ts_ms": 1793348046272
+    },
+    "ts_ms": 1793348047735
+   },
+   "sending_ts_ms": 1793348047871
+  }
+ }
+]

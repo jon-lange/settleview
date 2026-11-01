@@ -1,0 +1,33 @@
+{
+  "_note": "BUILT FROM THE SPEC, NOT CAPTURED. The demo account is not margin-enabled (2026-10-30), so no real fill or user_order message exists yet. Each message below follows perps_asyncapi.yaml (downloaded 2026-10-30): components/schemas/marginFillPayload and marginUserOrderPayload, with every required field and the optional ones named there. Values are invented for the test; replace with real captures once demo margin is enabled.",
+  "fill_user": {
+    "type": "fill", "sid": 4, "sending_ts_ms": 1793347200123,
+    "msg": {"trade_id": "11111111-2222-4333-8444-555555555555", "order_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "client_order_id": "sv-perp-0001", "market_ticker": "KXBTCPERP1", "is_taker": true, "side": "bid",
+            "ts_ms": 1793347200100, "price": "7.9997", "count": "3.00", "fee_cost": "0.0288",
+            "post_position": "3.00", "subaccount": 7, "order_source": "user"}
+  },
+  "fill_system": {
+    "type": "fill", "sid": 4, "sending_ts_ms": 1793347260456,
+    "msg": {"trade_id": "66666666-7777-4888-8999-000000000000", "order_id": "ffffffff-0000-4111-8222-333333333333",
+            "market_ticker": "KXBTCPERP1", "is_taker": true, "side": "ask",
+            "ts_ms": 1793347260400, "price": "7.6012", "count": "3.00", "fee_cost": "0.0274",
+            "post_position": "0.00", "subaccount": 7, "order_source": "system"}
+  },
+  "user_order_user": {
+    "type": "user_order", "sid": 5, "sending_ts_ms": 1793347200120,
+    "msg": {"order_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "user_id": "12345678-90ab-4cde-8f01-234567890abc",
+            "client_order_id": "sv-perp-0001", "ticker": "KXBTCPERP1", "side": "bid", "price": "8.0397",
+            "fill_count": "3.00", "remaining_count": "0.00", "self_trade_prevention_type": "taker_at_cross",
+            "created_ts_ms": 1793347200090, "last_updated_ts_ms": 1793347200100, "last_update_reason": "Trade",
+            "subaccount_number": 7, "order_source": "user"}
+  },
+  "user_order_system": {
+    "type": "user_order", "sid": 5, "sending_ts_ms": 1793347260450,
+    "msg": {"order_id": "ffffffff-0000-4111-8222-333333333333", "user_id": "12345678-90ab-4cde-8f01-234567890abc",
+            "client_order_id": "", "ticker": "KXBTCPERP1", "side": "ask", "price": "7.5600",
+            "fill_count": "3.00", "remaining_count": "0.00", "created_ts_ms": null,
+            "last_updated_ts_ms": 1793347260400, "last_update_reason": "Trade",
+            "subaccount_number": 7, "order_source": "system"}
+  }
+}

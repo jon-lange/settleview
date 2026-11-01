@@ -1,0 +1,137 @@
+[project]
+name = "settleview"
+version = "0.1.0"
+description = "Settleview: see where the window is likely to settle, then make your own call. A local decision aid for BTC Up/Down 15- and 5-minute prediction markets on Kalshi and Polymarket US."
+readme = "README.md"
+# Source-available, not OSI open source: free for noncommercial use; commercial use needs a separate license.
+license = "PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE", "NOTICE", "web/vendor/LICENSE-*"]
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "fastapi==0.162.0",
+  "uvicorn==0.54.0",
+  "pydantic==2.14.1",
+  "pydantic-settings==2.16.2",
+  "sqlalchemy==2.1.6",
+  "alembic==1.20.1",
+  "ccxt==4.5.64",
+  "httpx==0.28.1",
+  "websockets==17.3",
+  "numpy==2.5.4",
+  "pandas==3.1.0",
+  "scipy==1.18.1",
+  "ta-lib==0.8.2",
+  "apscheduler==3.11.3",
+  # cryptography: 50.0.2 (2026-09-30, the newest release older than two weeks; fixes CVE-2026-26007, CVE-2026-69247,
+  # CVE-2026-69249, GHSA-537c-gmf6-5ccf) everywhere it has a wheel, the Docker image and CI included. Windows ARM64
+  # keeps 46.0.3, the newest release with a win_arm64 wheel (later ones would build from source with Rust there): a
+  # residual risk on that dev host only, which runs no service anyone else reaches (docs/operations.md, "Quality gates").
+  "cryptography==50.0.2; sys_platform != 'win32' or platform_machine != 'ARM64'",
+  "cryptography==46.0.3; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "polymarket-us==2.4.1",  # Polymarket US official SDK (user-approved 2026-10-29); pulls pynacl
+  "kalshi_python_async==3.35.0",  # Kalshi official SDK (user-approved 2026-10-29); pulls aiohttp, aiohttp-retry
+  "aiohttp==3.14.5",  # the SDK's HTTP client; backend.py relies on its private _retry_connection switch
+  "aiohttp-retry==2.9.1",  # imported by the SDK; unused (retries=None)
+  "tzdata==2026.6",  # IANA time zones for zoneinfo (Windows has no system database)
+  "anthropic==1.15.0",  # Agent mode: official Anthropic SDK (user-approved 2026-10-30); runs on httpx2
+  "mcp==2.3.0",  # Agent mode: official MCP SDK for the stdio server (user-approved 2026-10-30)
+  "claude-agent-sdk==0.2.168",  # Agent mode: the in-app agent's model loop runs on the Claude Agent SDK (user-approved 2026-10-30; newest release older than 2 weeks). No win_arm64 wheel: there pip builds the sdist, which bundles no CLI, so set BTCFLOW_AGENT_CLI_PATH
+  "httpx2==2.13.1",  # pulled by anthropic and mcp; pinned so a resolve never picks a release under two weeks old
+  "httpcore2==2.13.1",  # httpx2 pins this to its own version
+  "sse-starlette==3.5.0",  # pulled by mcp; pinned for the same reason
+  "python-telegram-bot==22.8",  # U11 Telegram bot (user-approved 2026-10-30): async, long polling only; runs on httpx 0.28
+  "opentelemetry-api==1.45.1",  # pulled by fastapi, anthropic and mcp; pinned (the SDK and exporters are the `otel` extra)
+  "urllib3==2.8.0",  # pulled by kalshi_python_async and requests; pinned at the release that fixes CVE-2026-97687/97689
+  "setuptools==84.0.0",  # pulled by ccxt at run time; pinned (>= 78.1.1 for CVE-2025-47273; 84.2.x is under two weeks old)
+]
+
+[project.optional-dependencies]
+# The Postgres driver (docs/plans/2026-10-31-0900-feat-postgres-plan.md; psycopg 3 user-approved 2026-10-31; 3.3.6 is
+# the newest release older than two weeks). In the Docker image and CI's Postgres job. The binary wheel bundles libpq;
+# there is none for Windows ARM64, where the app runs on SQLite, so the marker skips it there.
+postgres = [
+  "psycopg[binary]==3.3.6; sys_platform != 'win32' or platform_machine != 'ARM64'",
+]
+# OpenTelemetry (docs/plans/2026-10-31-1400-infra-observability-evaluation.md; core set user-approved 2026-10-31):
+# traces, metrics and logs over OTLP/HTTP, inert unless OTEL_EXPORTER_OTLP_ENDPOINT is set (bootstrap/telemetry.py).
+# In the Docker image. 1.45.1 / 0.66b1 (2026-10-06) is the newest release older than two weeks; the transitive pins
+# below keep a resolve from picking anything newer. All pure Python except protobuf (py3-none-any fallback) and wrapt
+# (win_arm64 wheel), so it installs on every dev host.
+otel = [
+  "opentelemetry-api==1.45.1",
+  "opentelemetry-sdk==1.45.1",
+  "opentelemetry-exporter-otlp-proto-http==1.45.1",
+  "opentelemetry-instrumentation-fastapi==0.66b1",
+  "opentelemetry-instrumentation-httpx==0.66b1",
+  "opentelemetry-instrumentation-sqlalchemy==0.66b1",
+  "opentelemetry-instrumentation-asyncio==0.66b1",
+  "opentelemetry-instrumentation-logging==0.66b1",
+  "protobuf==7.36.2",  # pulled by opentelemetry-proto; pinned
+  "googleapis-common-protos==1.75.5",  # pulled by the OTLP exporter; pinned
+  "wrapt==2.5.1",  # pulled by the instrumentations; pinned
+  "asgiref==3.12.1",  # pulled by the ASGI instrumentation; pinned
+]
+dev = [
+  "pytest==9.2.0",
+  "hypothesis==6.170.13",
+  "time-machine==3.6.0",
+  "import-linter==2.15",
+  "playwright==1.64.0",  # e2e browser tests of the web app (tests/e2e; user-approved 2026-10-30): drives the installed Edge/Chrome; pulls greenlet, pyee
+  "greenlet==3.5.6",  # pulled by playwright; pinned
+  "pyee==14.0.0",  # pulled by playwright; pinned
+  "ruff==0.17.1",  # the linter (user-approved 2026-10-31; newest release older than two weeks): `ruff check .`, scripts/quality.py
+]
+
+[build-system]
+requires = ["setuptools>=78.1.1"]  # 78.1.1: CVE-2025-47273 (path traversal in package_index)
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["btc_signal_engine*"]
+
+# Ruff (scripts/quality.py and CI's `lint` job run `ruff check .`): bugs and security smells, not style. The house style
+# (long lines, one-line `if x: return`, `a = 1; b = 2`) is left alone until a deliberate one-time `ruff format` commit
+# (docs/plans/2026-10-31-1800-review-fix-plan.md, "Regular quality gates"); `ruff format` is not run or checked yet.
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+src = ["."]
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "S", "ASYNC", "SIM"]
+ignore = [
+  "E501",  # line length: 120 is the house limit, but enforcing it now would rewrap ~370 lines; the ruff format commit
+  "E701",  # `if x: return` on one line: house style (as above)
+  "E702",  # `a = 1; b = 2` on one line: house style (as above)
+  "SIM105",  # contextlib.suppress instead of try/except/pass: style; a bare `pass` is still flagged by S110
+  "SIM108",  # ternary instead of if/else: style
+  "SIM117",  # one `with` for several context managers: style, and long `with` lines read worse here
+  "E741",  # `l` / `O` as names: the domain's own OHLC names (o, h, l, c) in candles and the research scripts
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's parameter markers are meant as defaults (`body: dict = Body(...)`)
+extend-immutable-calls = ["fastapi.Body", "fastapi.Header", "fastapi.Path", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: pytest's asserts, made-up passwords and tokens, the loopback / any-address servers and temp paths they start,
+# subprocesses of this repo's own entry points, and non-cryptographic randomness for generated data.
+# Also: SQL the tests build from their own table names (S608), teardown that awaits a task it just cancelled and ignores how it ended (S110), and test harness code that polls
+# a condition, takes a timeout argument, or blocks the loop on purpose to simulate a stall (ASYNC109/110/240/251).
+"tests/**" = ["S101", "S104", "S105", "S106", "S108", "S110", "S608", "S311", "S603", "S607", "ASYNC109", "ASYNC110", "ASYNC240",
+              "ASYNC251"]
+# Research scripts (run by hand, never imported by the app): sanity asserts, quick one-off files and lambdas, imports
+# after an argv check.
+"scripts/**" = ["S101", "E402", "E731", "SIM115"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = [
+  "e2e: browser end-to-end tests (tests/e2e; skipped without a browser; leave out with -m \"not e2e\")",
+  "script(*steps): the e2e app's scripted model turns (tests/e2e/conftest.py)",
+  "peer(ip): the e2e page's requests arrive from this address, as a phone's do (tests/e2e/server.py)",
+  "unpaired: the e2e page is this PC's browser before pairing (no PC cookie; tests/e2e/conftest.py)",
+]

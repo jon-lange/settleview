@@ -1,0 +1,5 @@
+# Strategy B: multi-timeframe EMA trend alignment confirmed by 60s momentum.
+name = "trend_alignment"
+signals = ["trend_alignment"]
+combine = "first_match"
+horizons = [60, 300, 900]

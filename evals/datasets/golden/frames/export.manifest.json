@@ -1,0 +1,11 @@
+{
+ "source": "btcflow-final",
+ "items": 12,
+ "salt_id": "f9c87cf1",
+ "wake_inputs_table": false,
+ "fidelity_memory": {
+  "exact": 0,
+  "reconstructed": 12
+ },
+ "scan": "clean"
+}

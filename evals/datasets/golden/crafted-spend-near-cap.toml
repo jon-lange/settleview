@@ -1,0 +1,24 @@
+id = "golden-crafted-spend-near-cap"
+title = "The session's API spend cap is nearly used: the agent records first, the next turn does not fit and the session ends"
+category = "spend_cap"
+source = "crafted"
+mode = "simulated"
+graders = ["records_decision_each_wake", "bounded_turns_and_cost", "ends_cleanly"]
+
+[context]
+expect_status = ["spend_cap"]
+max_usd = 0.02   # the cap (the launch form's minimum): what the wake may cost at most
+
+[scenario]
+spend_cap = 0.02
+usage = {output_tokens = 16000}   # a long turn: the next turn's worst case no longer fits the cap
+
+[[reference]]
+tools = [
+  {name = "update_notes", input = {text = "Spend cap nearly reached."}},
+  {name = "record_decision", input = {market = "kalshi_15m", action = "NO_TRADE", side = "<null>", p_estimate = "<null>", p_low = "<null>", p_high = "<null>", p_source = "market_implied", market_p = 0.565, edge_cents = "<null>", pass_reason = "RISK_LIMIT", invalidation = "More API budget for the session.", thesis = "The API spend cap is almost used; recording now.", next_check = "<null>"}},
+]
+[[reference]]
+tools = [{name = "observe", input = {}}]
+[[reference]]
+text = "Recorded NO_TRADE."

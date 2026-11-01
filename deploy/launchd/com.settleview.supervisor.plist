@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Example only: start the portable supervisor at login on macOS (launchd). No logic lives here.
+     Copy to ~/Library/LaunchAgents/, adjust the paths, then:
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.settleview.supervisor.plist
+     Stop: launchctl bootout gui/$(id -u)/com.settleview.supervisor (SIGTERM: the supervisor stops its children).
+     Logs: <data dir>/logs/*.log. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.settleview.supervisor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/settleview/.venv/bin/python</string>
+    <string>-m</string>
+    <string>btc_signal_engine.supervise</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/you/settleview</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ExitTimeOut</key><integer>120</integer>
+</dict>
+</plist>

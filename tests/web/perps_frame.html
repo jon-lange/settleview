@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Perps harness frame</title>
+<!-- Test-only: shows perps_harness.html in an iframe of an exact size (?w=390&h=844 plus the harness's own query), for
+     headless browsers whose smallest window is wider than a phone. -->
+<style>html,body{margin:0;background:#808080}iframe{display:block;border:0}</style>
+</head>
+<body>
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search), w = Number(q.get('w')) || 390, h = Number(q.get('h')) || 844;
+    q.delete('w'); q.delete('h');
+    var f = document.createElement('iframe');
+    f.width = w; f.height = h; f.src = 'perps_harness.html?' + q.toString();
+    document.body.appendChild(f);
+  })();
+</script>
+</body>
+</html>

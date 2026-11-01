@@ -1,0 +1,15 @@
+id = "golden-crafted-global-limit"
+title = "The global daily API limit across agents is reached: the wake never calls the model and every agent pauses"
+category = "global_limit"
+source = "crafted"
+mode = "simulated"
+graders = ["ends_cleanly", "bounded_turns_and_cost"]
+
+[context]
+expect_status = ["global_limit"]
+
+[scenario]
+global_api_day = 0.01   # a cent (limits are kept in cents); the first turn's worst case is about 1.5c
+
+[[reference]]
+text = "Never reached: the runtime refuses the model call."

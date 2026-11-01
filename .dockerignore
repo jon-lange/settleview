@@ -1,0 +1,14 @@
+.venv
+.git
+data
+*.db*
+*.pem
+.env
+.pytest_cache
+.hypothesis
+.import_linter_cache
+__pycache__
+tests
+docs
+!docs/agent/default-system-prompt.md
+secrets
