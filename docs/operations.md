@@ -48,7 +48,21 @@ after 10 s (`DOWN_AFTER_MS`) of an unservable book otherwise; it comes back afte
 A window that has just opened has 30 s to send its first book before it counts against the feed (it is never priced without one). While it is down, the trading service polls every 2 s. Entries never depend on that state: every ticket re-reads the
 cache's servable check. On 2026-10-31 13:59-14:45 CDT the venue sent trades and no book for 45 minutes: under this rule
 every Polymarket book is refused within 2 s of its last update and stays refused until books return
-([docs/solutions/2026-10-31-pm-quiet-book-vs-dead-book-feed.md](solutions/2026-10-31-pm-quiet-book-vs-dead-book-feed.md)). Kalshi's freshness is unchanged.
+([docs/solutions/2026-10-31-pm-quiet-book-vs-dead-book-feed.md](solutions/2026-10-31-pm-quiet-book-vs-dead-book-feed.md)). Kalshi's
+event-contract freshness is unchanged.
+
+**Kalshi perps use the same rule** (`domain/book_freshness.py`, 2026-11-01): the perps quote is judged by the age of
+the book's last update (snapshot or delta), never by "any message". The ticker channel sends one message a second
+even when nothing changes, so before this a frozen `orderbook_delta` subscription was served as fresh. A ticker or any
+other message keeps the connection alive (15 s) but never makes the book fresh; a quiet perps book is served for at
+most 30 s and only while the `trade` subscription is confirmed and no print arrived after the book (a print without a
+book update within 2 s refuses it as "book feed broken"; a trade sequence gap stops vouching until the next book
+update). The view's quote age is the book's age.
+
+**A refused Polymarket private subscription is not a healthy feed** (2026-11-01). The server answers a refused
+ORDER / POSITION / ACCOUNT_BALANCE subscription with an error naming our request id (`pmpriv<n>`): the trading feed
+goes down at once with the reason ("private ORDER subscription refused: ..."), the service polls every 2 s, and the
+socket reconnects and subscribes again; it comes back up only once a session has held every subscription for 5 s.
 
 ## Orders whose answer was lost
 
@@ -81,11 +95,31 @@ committed risk is held until confirmed.** In practice:
   current mode: a production position can be sold by hand or by its agent session after a credential problem has
   dropped the service to sandbox.
 - A perps approval holds the trading lock for at most 30 s of venue calls (`PerpConfig.send_deadline_s`); an order
-  still unanswered then is left unknown and resolved as above.
+  still unanswered then is left unknown and resolved as above. Nothing queues behind it: another approval, an adopt
+  or a perps mode change waits at most 2 s (`PerpConfig.lock_wait_s`) and is then refused `busy` with nothing sent.
 
 What only the venues show (not verified by tests): how long Kalshi's and the perps order lists and fills lists really
 lag a placement, whether Polymarket US activity trades are always quoted in YES terms, and how soon they appear. See
 [docs/solutions/2026-10-31-lost-order-answers.md](solutions/2026-10-31-lost-order-answers.md).
+
+## Venue retries, reconnects and bounds
+
+One policy for every venue path (`adapters/retry.py`, 2026-11-01): exponential backoff with **full jitter** (a uniform
+draw between 0 and the current ceiling), so the Polymarket pool's sockets, both Kalshi streams, the perps stream and
+the Coinbase feed never reconnect in lockstep after a network blip. Reconnects: 1 s doubling to 30 s (Coinbase 1.5 s),
+reset after a connection that lasted a minute. Request retries (Kalshi REST, perps REST: transport error, 429, 5xx;
+our own loop is the only one and re-sends the SAME body, same `client_order_id`): 0.2 s doubling for a transport error
+or a 5xx; a 429 waits at least its `Retry-After` (capped at 10 s so an order path never stalls) plus up to 1 s of
+jitter, or backs off from 1 s without one. Backfill readers (Kalshi markets and portfolio, Coinbase REST): 1 s
+doubling to 30 s, at least a 429's `Retry-After`. Polymarket's shared rate limiter pauses every caller for a 429's
+`Retry-After` (1 s without one) plus jitter; a Polymarket create is still never re-sent.
+
+Bounds: the Kalshi and perps WebSockets accept frames up to 8 MB, the Coinbase ws-feed up to 16 MB (a level2 snapshot
+is a few MB); the Polymarket SDK keeps its websockets default (1 MB). The Coinbase transport-to-consumer queue holds at
+most 10,000 updates: behind a slow consumer the oldest is dropped (WARNING on the first and every 1,000th, a dropped
+trade becomes a recorded trade-id gap that the repair job fills). The quotes recorder keeps at most 200,000 rows per
+buffer through a database outage, oldest dropped (WARNING). Both drops are counted by the OpenTelemetry counter
+`settleview.venue.dropped` {`settleview.component`: `coinbase_stream` | `pm_quotes_recorder`, `settleview.buffer`}.
 
 ## Logs
 
@@ -185,7 +219,8 @@ not wait for it, and a stop waits at most 5 s for the last export.
   `settleview.agent.wakes` (by status), `gen_ai.client.token.usage`, `gen_ai.client.operation.duration`,
   `settleview.agent.cost`, `settleview.agent.tool_calls`, `settleview.order_gate.decisions` (by strategy, stage
   prepare / approve, result and code), `process.memory.usage` (current RSS, unlike `/api/health`'s `memory_mb`, which
-  is the peak on Linux) and `process.cpu.time`.
+  is the peak on Linux), `process.cpu.time` and `settleview.venue.dropped` (rows or messages a bounded venue buffer
+  dropped, by component and buffer: "Venue retries, reconnects and bounds").
 - Logs: every record the root logger handles, with the trace and span id when it was written inside a span.
 
 **What is never exported**: prompts, model output, thinking, tool arguments or results, order tickets, request or
@@ -1062,8 +1097,12 @@ devices are refused until a PIN is set, then sign in with it (`adapters/http/acc
 Until a PIN is set, every non-local request gets 403 "Phone access is off — set a PIN on the PC (Phone access card)"
 and no data. A PIN set under the old 4-digit rule no longer works: phones see "Phone access needs a new 6–8 digit PIN —
 set it on the PC." and the Phone access card shows "New PIN needed" until a new PIN is set there. Five wrong PINs from
-one address within 10 minutes lock that address out for 15 minutes, and 20 wrong PINs across all addresses within 10
-minutes lock every login for 15 minutes (both logged at WARNING, without the PIN). Lockouts live in memory: a restart
+one client within 10 minutes lock that client out for 15 minutes, and 20 wrong PINs across all clients within 10
+minutes lock every login for 15 minutes (both logged at WARNING, without the PIN). A client is its address plus its
+device: the login page gives each browser a signed `btcflow_device` cookie (HttpOnly, SameSite=Strict, path `/login`),
+so behind Docker's port publishing, where every phone arrives from the bridge gateway's one address, one phone's
+wrong PINs no longer lock the others out. A client without that cookie (a script) is counted under its bare address;
+`X-Forwarded-For` is never read, and uvicorn's proxy-header rewriting is off. Lockouts live in memory: a restart
 or a new PIN clears them. A login body over 2 KB is refused with 413 before it is read further. There is **no HTTPS**:
 the PIN and the session cookie cross the network in clear text. Use it only on the home LAN or over a VPN, and
 **never port-forward port 8000**. A reverse proxy on this same computer connects from 127.0.0.1, which (without a PC

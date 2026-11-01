@@ -91,6 +91,12 @@ Codes include `mode_changed`, `disabled`, `not_configured`, `not_reconciled`, `k
 `over_order_cap`, `max_open`, `over_window_limit`, `over_day_limit`, `confirm`, `invalid`, `not_found`, `no_bid`,
 `already_closed`, `already_closing`; send failures return `rejected` or `unknown` (being reconciled).
 
+Perps (`adapters/http/perp_routes.py`): `POST /api/perps/approve`, `POST /api/perps/adopt` and `POST /api/perps/mode`
+answer `{"ok": false, "code": "busy", "reason"}` (HTTP 200, nothing sent or changed) when another perps approval is
+still sending and holds the service lock for more than 2 s (`PerpConfig.lock_wait_s`); the request never waits for the
+whole send (up to 30 s, `send_deadline_s`). Try again once the other order is answered. A perps quote (`GET
+/api/perps/view`, `quote.age_ms`) is the age of the book's last update, not of the newest message.
+
 - `POST /api/trading/prepare` body `{"strategy", "ticker", "side": "UP|DOWN", "stake", "price_mode": "limit|market",
   "max_price"? (limit only), "take_profit", "stop"?, "stop_index_below"?, "stop_index_above"?, "window_end"?,
   "fair_up"?}` → `{"ok": true, "token", "ticket"}`. The token is single-use and expires after 10 s.
@@ -146,6 +152,10 @@ lan_url, in_container, session_hours, note, how_to_find_ip}`; `lan_url` is `BTCF
 {pin, pin_again}, `POST /api/access/signout` (every phone), `POST /api/access/clear`, `POST /api/access/pc-signout`
 (every PC browser, this one too: a new PC secret; the answer clears this browser's PC cookie) → `{ok, reason}`.
 Phones: `GET|POST /login` (form `pin`; the body is read up to 2 KB, more answers 413; see docs/operations.md).
+`GET /login` also sets `btcflow_device` (a random, signed id; HttpOnly, SameSite=Strict, `Path=/login`, a year) unless
+the browser holds a valid one: wrong PINs are counted per address plus device, so phones behind one gateway address
+are locked out one by one; a POST without it (or with a forged one) counts under the bare address. A wrong PIN answers
+401, a lockout 429; the POST never sets the device cookie.
 
 ## Other
 

@@ -73,7 +73,9 @@ in-app launch as one supervised task. Each tick:
 3. Each session's `AgentRunner.step` runs as its own task. That covers its account diff, its event engine and its
    armed rules, which open or propose entries in code. A session's slow order never delays another session, and a
    step never overlaps the same session's previous one. Rules run every tick, even while that session's model wake is
-   running or queued.
+   running or queued. Every rule entry has one price cap, Auto or Assist alike (`agent_rules.entry_cap`): the ask the
+   rule matched (Assist: the ask shown in the proposal) + 2¢, never above the rule's own cap; a match without a usable
+   ask sends nothing. A setup light's match carries the same cap.
 4. New overlaps are warned once.
 5. Each session whose engine says a wake is due is offered to the wake queue.
 
