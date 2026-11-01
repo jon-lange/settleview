@@ -10,6 +10,7 @@ cannot be read is an error naming the variable (never its value); nothing falls 
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from pathlib import Path
@@ -197,7 +198,8 @@ class Settings(BaseSettings):
     api_port: int = 8000
     # Phone access (adapters/http/access.py): set BTCFLOW_API_HOST=0.0.0.0 to listen on the home LAN. Other devices are
     # refused until a PIN is set on the PC (the Phone access card; stored hashed in the database, never here), then
-    # must sign in with it. No HTTPS: home LAN / VPN only, never port-forward it to the internet.
+    # must sign in with it. The app speaks plain HTTP: phones get HTTPS from the Tailscale sidecar (compose profile
+    # `tailscale`; forwarded_allow_ips below); never port-forward it to the internet.
     access_session_hours: float = Field(12.0, gt=0, le=24 * 30)  # BTCFLOW_ACCESS_SESSION_HOURS
     # Extra Host names the dashboard answers to, comma-separated (a VPN DNS name, e.g. "pc.tailnet.example"; the port
     # is added unless given). 127.0.0.1, localhost, [::1] and this machine's own addresses are always allowed; any
@@ -219,9 +221,17 @@ class Settings(BaseSettings):
     # external session's token. It binds BTCFLOW_AGENT_HOST (default 127.0.0.1; compose: 0.0.0.0 inside the container).
     agent_port: int | None = Field(None, ge=1, le=65535)
     agent_host: str | None = None
-    # The address phones open (BTCFLOW_PUBLIC_URL, e.g. http://192.168.1.10:8000): shown on the Phone access card and
-    # added to the allowed Hosts. In a container the app cannot see the host's LAN address, so set it there.
+    # The address phones open (BTCFLOW_PUBLIC_URL, e.g. http://192.168.1.10:8000, or with the Tailscale sidecar
+    # https://settleview.<tailnet>.ts.net): shown on the Phone access card and added to the allowed Hosts (and so to
+    # the allowed Origins). In a container the app cannot see the host's LAN address, so set it there.
     public_url: str = ""
+    # uvicorn's forwarded_allow_ips for the phone listener (BTCFLOW_FORWARDED_ALLOW_IPS): the reverse proxies whose
+    # X-Forwarded-Proto / X-Forwarded-For uvicorn applies (proxy_headers), comma-separated addresses or CIDR networks,
+    # e.g. 10.89.250.2 (the Tailscale sidecar's fixed address on the compose network tailscale-edge). Empty (default):
+    # proxy headers off. Never applied to the PC or agent listener. uvicorn would take a typo as a literal that never
+    # matches, so every entry must be an IP address or network here, and "*" or a network covering every address is
+    # refused: a bad value stops the start.
+    forwarded_allow_ips: str = ""
     workers: int = 1
 
     _horizons: tuple[Horizon, ...] = ()
@@ -251,7 +261,17 @@ class Settings(BaseSettings):
             if (parts.scheme not in ("http", "https") or not parts.hostname or parts.path not in ("", "/")
                     or parts.query or parts.fragment):
                 raise ValueError("BTCFLOW_PUBLIC_URL must be an http(s) address with no path, e.g. "
-                                 "http://192.168.1.10:8000")
+                                 "http://192.168.1.10:8000 or https://settleview.example.ts.net")
+        for item in (i.strip() for i in self.forwarded_allow_ips.split(",")):
+            if not item:
+                continue
+            try:
+                net = ipaddress.ip_network(item)
+            except ValueError:
+                raise ValueError(f"BTCFLOW_FORWARDED_ALLOW_IPS: {item!r} is not an IP address or network (e.g. "
+                                 "10.89.250.2)") from None
+            if net.prefixlen == 0:
+                raise ValueError(f"BTCFLOW_FORWARDED_ALLOW_IPS: {item!r} trusts every address; name the proxy's own")
         if self.telegram_bot_username is not None:
             name = self.telegram_bot_username.strip().removeprefix("@")
             if not name:

@@ -844,12 +844,16 @@ class Runtime:
         counts); with BTCFLOW_AGENT_PORT set, the agent listener on BTCFLOW_AGENT_HOST:BTCFLOW_AGENT_PORT (external
         agents' tool API only). Same app, same process; the access middleware tells them apart by the port a request
         arrived on. Only the main server runs the ASGI lifespan and owns the signal handlers: the others run with
-        lifespan off and leave signals alone, and `serve_all` stops them together. `proxy_headers` is off on every one:
-        uvicorn would otherwise let a loopback peer rewrite the client address from X-Forwarded-For, and the access
-        middleware's client (the lockout key, the PC's place) must be the TCP peer only (adapters/http/access.py)."""
+        lifespan off and leave signals alone, and `serve_all` stops them together. uvicorn's `proxy_headers` is off
+        on the PC and agent listeners always, and on the main one unless BTCFLOW_FORWARDED_ALLOW_IPS names the reverse
+        proxy (the Tailscale sidecar): uvicorn's default would let a loopback peer rewrite the client address from
+        X-Forwarded-For. With it, uvicorn's own ProxyHeadersMiddleware sets the scheme and client from that peer's
+        headers only (adapters/http/access.py reads the result)."""
         s = self.settings
+        proxies = s.forwarded_allow_ips.strip()
         servers = [uvicorn.Server(uvicorn.Config(app, host=s.api_host, port=s.api_port, log_level="warning",
-                                                 proxy_headers=False))]
+                                                 proxy_headers=bool(proxies),
+                                                 forwarded_allow_ips=proxies or None))]
 
         def extra(host: str, port: int):
             srv = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning", lifespan="off",

@@ -1,0 +1,38 @@
+// Settleview's part of your tailnet policy file (Tailscale admin console -> Access controls; HuJSON, Tailscale's own
+// format: https://tailscale.com/kb/1337/policy-syntax). Not used by compose: merge these sections into your policy
+// by hand. Replacing the default "allow everything" policy with only this cuts every other connection in your
+// tailnet; keep your existing grants next to these. docs/operations.md, "Phones over HTTPS (Tailscale)".
+{
+	// Only you (an admin of your tailnet) may create devices tagged tag:settleview, e.g. with the auth key the sidecar
+	// uses. A tagged device belongs to the tag, not to a person, and its key does not expire by default.
+	"tagOwners": {
+		"tag:settleview": ["autogroup:admin"],
+	},
+
+	// The people whose devices (your phones) may open Settleview. Replace the address with your Tailscale login.
+	"groups": {
+		"group:settleview-users": ["you@example.com"],
+	},
+
+	"grants": [
+		// Your devices -> the sidecar's HTTPS port, nothing else on it. The sidecar itself gets no grant: it starts no
+		// connection into your tailnet (Tailscale denies whatever is not granted).
+		{
+			"src": ["group:settleview-users"],
+			"dst": ["tag:settleview"],
+			"ip": ["tcp:443"],
+		},
+	],
+
+	// The console refuses a policy whose tests fail: this pins the rule above.
+	"tests": [
+		{
+			"src": "you@example.com",
+			"accept": ["tag:settleview:443"],
+			"deny": ["tag:settleview:80", "tag:settleview:22", "tag:settleview:8000"],
+		},
+	],
+
+	// No "funnel" node attribute for tag:settleview: Funnel (the public internet) stays impossible for it even if a
+	// serve config asked for it. No "ssh" rules for it either.
+}

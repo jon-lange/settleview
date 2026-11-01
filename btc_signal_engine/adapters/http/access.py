@@ -31,8 +31,9 @@
   sets `btcflow_device` (random, HMAC-signed under the per-process secret, HttpOnly, SameSite=Strict, path /login, a
   year); a POST with a valid one is counted under "<ip>#<device>", one without (a script, a cookie-less client) under
   the bare IP, and a POST never hands one out, so dropping the cookie only lands in the shared bucket and never frees
-  another device's (rotating fresh cookies from the page still meets the cap across all clients). The cookie cannot be forged (signed) and no header is trusted for it: X-Forwarded-For is
-  never read and uvicorn's proxy-header rewriting is off (bootstrap/app.py). Logs name the device too.
+  another device's (rotating fresh cookies from the page still meets the cap across all clients). The cookie cannot be forged (signed) and no header is trusted for it:
+  uvicorn's proxy-header rewriting is on only for the peers in BTCFLOW_FORWARDED_ALLOW_IPS (below; off by
+  default), and this module never reads X-Forwarded-For itself. Logs name the device too.
   The PBKDF2 comparison runs in a worker thread so a login never blocks the event loop; logins from one address are
   checked one at a time, and each attempt counts as a (pending) failure from before its hash starts until it succeeds,
   so the cap stays exact when logins arrive in parallel.
@@ -62,8 +63,19 @@
   files (plus the login keypad, by hash; the PC-only Swagger UI at /api/docs may also load cdn.jsdelivr.net and run
   its inline boot script); /api, /login and /pair are never cached.
 
-There is no HTTPS: use it only on the home LAN or over a VPN, and never port-forward it to the internet. The client IP
-is the TCP peer address; X-Forwarded-For is ignored on purpose (a header must never make a request "local").
+- HTTPS (P3 #1, 2026-11-01): the app itself speaks plain HTTP; phones get HTTPS from the Tailscale sidecar (compose
+  profile `tailscale`, Tailscale Serve on https://settleview.<tailnet>.ts.net -> app:8000). The proxy headers are
+  uvicorn's own job (its ProxyHeadersMiddleware): on the phone listener only, and only for a peer in
+  BTCFLOW_FORWARDED_ALLOW_IPS (uvicorn's forwarded_allow_ips; empty = proxy headers off), uvicorn sets the scheme
+  from X-Forwarded-Proto and the client from X-Forwarded-For (each phone's tailnet address). This module reads only
+  the result: an https/wss scheme makes the session and device cookies `Secure` and adds HSTS; the client address is
+  the lockout key's address as always (plus the device cookie). The PC and agent listeners never trust proxy headers.
+  The public HTTPS name (BTCFLOW_PUBLIC_URL) is on the Host allow-list without a port, so it is also an allowed Origin
+  for the cross-site and WebSocket checks.
+
+Without the sidecar there is no HTTPS: use the phone port only on the home LAN or over a VPN, and never port-forward
+it to the internet. The client IP is the TCP peer address unless uvicorn rewrote it for a configured proxy; a header
+from any other peer changes nothing (a header must never make a request "local").
 """
 
 from __future__ import annotations
@@ -164,6 +176,9 @@ SECURITY_HEADERS = {
     "Content-Security-Policy": CSP,
 }
 NO_STORE = "no-store, max-age=0"
+# HTTPS only (a trusted proxy said so): browsers keep to HTTPS for this name for a year. Never sent over plain HTTP
+# (browsers ignore it there anyway, and the LAN port must stay usable).
+HSTS = "max-age=31536000"
 
 
 def is_loopback_host(host: str) -> bool:
@@ -205,15 +220,18 @@ class HostAllowList:
     names (BTCFLOW_ALLOWED_HOSTS), each with the app's port. `clock_ms` drives the re-list and log throttles."""
 
     def __init__(self, port: int, extra: str | Iterable[str] = (), *, api_host: str = "127.0.0.1",
-                 pc_port: int | None = None, agent_port: int | None = None,
+                 pc_port: int | None = None, agent_port: int | None = None, exact: Iterable[str] = (),
                  clock_ms: Callable[[], int] = lambda: time.time_ns() // 1_000_000) -> None:
+        """`exact`: Host values taken as they are (the public HTTPS name without a port, as a browser sends it for
+        https://name/ and in its Origin); main listener only."""
         self.port = port
         self.clock_ms = clock_ms
         names = list(extra.split(",") if isinstance(extra, str) else extra)
         names += LOOPBACK_HOSTS
         if api_host and api_host not in ("0.0.0.0", "::"):  # noqa: S104 - a comparison, not a bind
             names.append(api_host)
-        self._fixed = frozenset(v for n in names for v in self._forms(n))
+        self._fixed = (frozenset(v for n in names for v in self._forms(n))
+                       | frozenset(e.strip().lower() for e in exact if e.strip()))
         # The PC listener answers to loopback names on its own port only (no LAN, VPN or extra names: only this
         # computer reaches it, and a rebinding page's own name is refused).
         self._pc = (frozenset(v for n in LOOPBACK_HOSTS for v in self._forms(n, pc_port)) if pc_port is not None
@@ -532,7 +550,7 @@ _HEAD = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta n
          "content=\"width=device-width,initial-scale=1\"><title>BTC Coach</title>" + _STYLE + "</head><body>")
 
 
-def _login_page(message: str | None = None) -> str:
+def _login_page(message: str | None = None, *, https: bool = False) -> str:
     msg = f'<p class="err" role="alert">{html.escape(message)}</p>' if message else ""
     keys = "".join(f'<button type="button" data-k="{k}" aria-label="{k}">{k}</button>' for k in "123456789")
     return (_HEAD + '<form method="post" action="/login" id="f"><h1>BTC Coach</h1>' + msg +
@@ -543,7 +561,8 @@ def _login_page(message: str | None = None) -> str:
             '<button type="button" data-k="0" aria-label="0">0</button>'
             '<button type="submit" class="ok" aria-label="Sign in">OK</button></div>'
             "<small>Stays signed in for 12 hours. 5 wrong tries locks this phone out for 15 minutes.</small>"
-            "<small>Home network / VPN only. The connection is not encrypted (no HTTPS).</small></form>"
+            + ("<small>Encrypted (HTTPS) over your tailnet.</small></form>" if https else
+               "<small>Home network / VPN only. The connection is not encrypted (no HTTPS).</small></form>") +
             "<script>" + _KEYPAD_JS + "</script></body></html>")
 
 
@@ -570,6 +589,22 @@ def _pair_page(message: str | None = None, code: str = "") -> str:
 def _client_ip(scope: dict) -> str:
     client = scope.get("client")
     return client[0] if client else ""
+
+
+def _https(scope: dict) -> bool:
+    """Did this request arrive over HTTPS (uvicorn set the scheme from a configured proxy's X-Forwarded-Proto)?"""
+    return scope.get("scheme") in ("https", "wss")
+
+
+def _hsts_send(send):
+    """`send` adding Strict-Transport-Security to the response (HTTPS requests only)."""
+    async def wrapped(message):
+        if message["type"] == "http.response.start":
+            headers = [(k, v) for k, v in message.get("headers", []) if k.lower() != b"strict-transport-security"]
+            headers.append((b"strict-transport-security", HSTS.encode()))
+            message = {**message, "headers": headers}
+        await send(message)
+    return wrapped
 
 
 def _server_port(scope: dict) -> int | None:
@@ -680,6 +715,9 @@ class AccessMiddleware:
         path = scope.get("path", "")
         listener = self._listener(scope)
         conn = HTTPConnection(scope)  # (Request() takes HTTP scopes only)
+        # HTTPS (uvicorn set the scheme from a configured proxy's X-Forwarded-Proto): HSTS on every response.
+        if _https(scope):
+            send = _hsts_send(send)
         host_ok = await self.hosts.allows(conn.headers.get("host", ""), listener=listener)
         if listener == "agent":
             await self._agent(scope, receive, send, host_ok, path)
@@ -826,7 +864,7 @@ class AccessMiddleware:
         if request.method != "POST":
             if self.guard.valid(request.cookies.get(COOKIE)):
                 return RedirectResponse("/#play", status_code=303)
-            return self._with_device(request, HTMLResponse(_login_page()))
+            return self._with_device(request, HTMLResponse(_login_page(https=_https(request.scope))))
         device = self.guard.device_id(request.cookies.get(DEVICE_COOKIE))
         key = AccessGuard.client_key(_client_ip(request.scope), device)
         try:
@@ -836,17 +874,18 @@ class AccessMiddleware:
         pin = (form.get("pin") or [""])[0]
         ok, refusal = await self.guard.check_pin(key, pin)
         if not ok:  # (no device cookie handed out here: a cookie-less client stays in its IP's bucket)
-            return HTMLResponse(_login_page(refusal), status_code=429 if "Too many" in (refusal or "") else 401)
+            return HTMLResponse(_login_page(refusal, https=_https(request.scope)),
+                                status_code=429 if "Too many" in (refusal or "") else 401)
         resp = RedirectResponse("/#play", status_code=303)
         resp.set_cookie(COOKIE, self.guard.issue(), max_age=self.guard.session_ms // 1000, httponly=True,
-                        samesite="strict", path="/")
+                        samesite="strict", path="/", secure=_https(request.scope))
         return resp
 
     def _with_device(self, request: Request, resp: Response) -> Response:
         """Give the login page's browser its device cookie (the lockout key) unless it holds a valid one."""
         if self.guard.device_id(request.cookies.get(DEVICE_COOKIE)) is None:
             resp.set_cookie(DEVICE_COOKIE, self.guard.issue_device(), max_age=DEVICE_COOKIE_S, httponly=True,
-                            samesite="strict", path="/login")
+                            samesite="strict", path="/login", secure=_https(request.scope))
         return resp
 
     async def _pair(self, request: Request) -> Response:
@@ -989,6 +1028,20 @@ def local_client_set(extra: str | Iterable[str] = ()) -> frozenset[str]:
     return LOOPBACK_CLIENTS | names
 
 
+def public_hosts(public_url: str) -> list[str]:
+    """The Host values a browser sends for BTCFLOW_PUBLIC_URL: "name:port", plus the bare name when the port is the
+    scheme's default (https://settleview.example.ts.net -> "settleview.example.ts.net:443" and
+    "settleview.example.ts.net", the form a browser puts in Host and Origin). Empty for no URL."""
+    if not public_url.strip():
+        return []
+    parts = urlsplit(public_url.strip())
+    host = (parts.hostname or "").lower()
+    bare = f"[{host}]" if ":" in host else host
+    default = 443 if parts.scheme == "https" else 80
+    port = parts.port or default
+    return [f"{bare}:{port}"] + ([bare] if port == default else [])
+
+
 def install_access(app, guard: AccessGuard, *, allowed_hosts: str | Iterable[str] = (),
                    local_clients: str | Iterable[str] = (), pc_port: int | None = None,
                    agent_port: int | None = None, pc: PcCredentials | None = None, public_url: str = "",
@@ -1006,11 +1059,12 @@ def install_access(app, guard: AccessGuard, *, allowed_hosts: str | Iterable[str
         raise ValueError(f"the agent port ({agent_port}) must differ from the app's and the PC's ports")
     pc = pc or PcCredentials(clock_ms=guard.clock_ms)
     names = [n for n in (allowed_hosts.split(",") if isinstance(allowed_hosts, str) else allowed_hosts) if n]
+    exact = public_hosts(public_url)
     if public_url.strip():
-        names.append(urlsplit(public_url.strip()).netloc)
+        names.append(exact[0])
     register_access_routes(app, guard, pc=pc, public_url=public_url, allowed_hosts=names, **route_kw)
     hosts = HostAllowList(port, names, api_host=route_kw.get("api_host", "127.0.0.1"), pc_port=pc_port,
-                          agent_port=agent_port, clock_ms=guard.clock_ms)
+                          agent_port=agent_port, exact=exact, clock_ms=guard.clock_ms)
     app.add_middleware(AccessMiddleware, guard=guard, hosts=hosts, pc=pc, local_clients=local_client_set(local_clients),
                        pc_port=pc_port, agent_port=agent_port)
     app.state.pc_credentials = pc

@@ -1110,7 +1110,8 @@ newest quote ([docs/solutions/2026-10-31-pm-quiet-book-vs-dead-book-feed.md](sol
 | `BTCFLOW_PC_HOST` | The PC listener's bind address (default `127.0.0.1`; only with `BTCFLOW_PC_PORT`). `compose.yaml` sets `0.0.0.0` inside the container so its `127.0.0.1` port publish can reach it. |
 | `BTCFLOW_AGENT_PORT` | Optional listener for external agents (MCP): it serves only `/api/agent/tools`, `/api/agent/call/{tool}` and `/api/agent/events/wait`, its requests are never the PC or a person, and every tool call needs a live external session's token. Those paths answer 403 `agent_port` on the other listeners. Unset (default): external agents cannot call tools. Must differ from the other two ports. |
 | `BTCFLOW_AGENT_HOST` | The agent listener's bind address (default `127.0.0.1`; only with `BTCFLOW_AGENT_PORT`; compose: `0.0.0.0` inside the container). |
-| `BTCFLOW_PUBLIC_URL` | The address phones open, e.g. `http://<this PC's LAN address>:8000` (no path). The Phone access card shows it, and its host joins the allowed Hosts. In a container the app cannot see the host's LAN address, so set it there; without it the card falls back to the first `BTCFLOW_ALLOWED_HOSTS` name, then (not in a container) the detected LAN address. |
+| `BTCFLOW_PUBLIC_URL` | The address phones open, e.g. `http://<this PC's LAN address>:8000` or, with the Tailscale sidecar, `https://settleview.<tailnet>.ts.net` (no path). The Phone access card shows it, and its host joins the allowed Hosts (and so the allowed Origins; without a port it is allowed as the bare name a browser sends for https). In a container the app cannot see the host's LAN address, so set it there; without it the card falls back to the first `BTCFLOW_ALLOWED_HOSTS` name, then (not in a container) the detected LAN address. |
+| `BTCFLOW_FORWARDED_ALLOW_IPS` | uvicorn's `forwarded_allow_ips` for the phone listener: the reverse proxies whose `X-Forwarded-Proto` / `X-Forwarded-For` uvicorn applies (comma-separated IP addresses or networks). With the Tailscale sidecar: `10.89.250.2`. Empty (default): proxy headers off. Never applied to the PC or agent listener. Anything that is not an address or network, `*`, or a network covering every address stops the start. See "Phones over HTTPS (Tailscale)". |
 | `BTCFLOW_LOCAL_CLIENTS` | Without a PC listener only: extra client IPs that may pair as this PC on the main port (they still need a pairing code and then the cookie). Default: loopback. A non-loopback entry logs a WARNING. |
 | `BTCFLOW_<NAME>_FILE` | Read any setting from a file instead (Docker / Swarm secrets under `/run/secrets`), e.g. `BTCFLOW_POLYMARKET_SECRET_KEY_FILE`, `BTCFLOW_TELEGRAM_BOT_TOKEN_FILE`, `BTCFLOW_ANTHROPIC_API_KEY_FILE`. One trailing newline is dropped. Setting both forms, an unknown name or an unreadable file stops the start with an error that names the variable, never the value. |
 | `BTCFLOW_TELEGRAM_BOT_USERNAME` | The Telegram bot's @username (a leading `@` is optional), shown in the pairing instruction "Send /start CODE to @name". Optional: unset, the app learns it from Telegram's `getMe` when the bot starts, and until then the Agent tab says "your bot". A value that is not a bot username (5–32 letters, digits or `_`, ending in `bot`) stops the start. |
@@ -1174,9 +1175,10 @@ docker compose stop               # stop all (the app gets 60 s to shut down cle
   `http://localhost:8002` (published on `127.0.0.1` only) with their session token (see "Running in Docker: who
   counts as the PC" below). The phone
   port's host address is `BTCFLOW_PHONE_BIND` (default `0.0.0.0`, every interface, as on this PC). **On a Linux
-  server set it** in `.env` to the LAN address (or `127.0.0.1` behind a reverse proxy or VPN): Docker publishes ports
-  with its own iptables rules, ahead of ufw / firewalld, so a host firewall does not protect a port published on
-  `0.0.0.0`.
+  server set it** in `.env` to the LAN address (or `127.0.0.1` behind a reverse proxy or VPN, and once phones use the
+  Tailscale sidecar): Docker publishes ports with its own iptables rules, ahead of ufw / firewalld, so a host firewall
+  does not protect a port published on `0.0.0.0`. Phones over HTTPS: the opt-in `tailscale` profile ("Phones over
+  HTTPS (Tailscale)").
 - **Logs**: the `local` driver, 5 x 10 MB per container (see "Logs").
 
 **Docker: secrets as files.** No secret is an environment value (`docker inspect` and every child process, such as
@@ -1381,6 +1383,7 @@ cookie**, which only a browser paired with a one-time code gets.
 |---|---|---|---|
 | This PC | `http://localhost:8001` | `127.0.0.1:8001:8001` (loopback of the host only) | the PC cookie (pair once); without it only "Pair this browser" |
 | Phones | `http://<this PC's LAN address>:8000` | `0.0.0.0:8000:8000` | the PIN |
+| Phones over Tailscale | `https://settleview.<tailnet>.ts.net` | nothing (the `tailscale` sidecar serves it on your tailnet) | the PIN |
 | External agents (MCP) | `http://localhost:8002` | `127.0.0.1:8002:8002` | the session token on every tool call; never the PC or a person |
 
 **Pairing (once per browser, and after "Sign out PC browsers").**
@@ -1426,8 +1429,9 @@ Rules:
   neither.
 - **Phones in Docker**: set `BTCFLOW_PUBLIC_URL=http://<this PC's LAN address>:8000` in `.env` (the Phone access card
   shows it, and its host joins the allowed Hosts; the container cannot see the host's address), then set the PIN at
-  `http://localhost:8001`. Every phone may arrive from the same gateway address, so the per-address login lockout
-  covers all phones together. Allow port 8000 on the Private firewall profile only.
+  `http://localhost:8001`. Every phone may arrive from the same gateway address; the login's device cookie keeps
+  their lockouts apart. Allow port 8000 on the Private firewall profile only. For HTTPS use the Tailscale sidecar
+  ("Phones over HTTPS (Tailscale)").
 - **In the cloud**: do not route ingress to 8001 or 8002; reach the PC listener through an SSH tunnel and pair
   through it.
 - **Without Docker** (no `BTCFLOW_PC_PORT`): the PC's place is a loopback client of the main port
@@ -1441,11 +1445,137 @@ unchanged. See [docs/solutions/2026-10-31-pc-identity-by-pairing.md](solutions/2
 
 ### Before publishing to your home web
 
-- Put a reverse proxy in front (Caddy or nginx) with HTTPS.
-- Require a login for everything: the app's own phone PIN (below) is meant for the home LAN only and has no HTTPS.
+- Don't. Reach it from your phones over your tailnet instead ("Phones over HTTPS (Tailscale)"): HTTPS, no open port,
+  only your devices. The app's PIN is not an internet-grade login, and Funnel stays off.
 - Keep any Kalshi key file outside the image and mount it read-only (see `compose.yaml`). Never put it in `.env` files you commit.
 - Set up off-box copies of the backups: in Docker the `backup` service's `BACKUP_HOOK` (see "Postgres: backups");
   without Docker `data/backups/`, `data/btcflow-archive.db` and `data/research/polymarket_us.db`.
+
+## Phones over HTTPS (Tailscale)
+
+Owner decision 2026-11-01 (review plan P3 #1): phones reach Settleview over **HTTPS on your tailnet**, at
+`https://settleview.<tailnet>.ts.net`, instead of plain HTTP on the LAN. The standard Tailscale container pattern does
+it, with nothing installed on the server itself: the opt-in compose service `tailscale` (profile `tailscale`, the
+official `tailscale/tailscale` image pinned by version and digest) joins your tailnet as the device `settleview` and
+runs **Tailscale Serve** from `deploy/tailscale/serve.json` (`TS_SERVE_CONFIG`): HTTPS on port 443 with a certificate
+Tailscale gets for that name (Let's Encrypt), proxied to `http://app:8000` (the phone port) inside the compose network.
+Funnel (the public internet) is off and never used. The phone needs the Tailscale app, signed in to your tailnet; it
+works on the home Wi-Fi and away from home alike, and no port is opened or forwarded anywhere.
+
+```
+phone (Tailscale app) --WireGuard--> tailscale container (Serve: TLS on :443) --http--> app:8000 (phone port, PIN)
+                                     10.89.250.2 on tailscale-edge (internal network: only app and tailscale)
+```
+
+**How the app knows a request was HTTPS.** Serve keeps the `Host` and sets `X-Forwarded-Proto: https` and
+`X-Forwarded-For: <the phone's tailnet address>` (replacing anything the phone sent). uvicorn applies those headers
+(its own `proxy_headers` / `forwarded_allow_ips`) **only on the phone listener and only from the address in
+`BTCFLOW_FORWARDED_ALLOW_IPS`**: the sidecar's fixed address `10.89.250.2` on the internal network `tailscale-edge`,
+which only the app and the sidecar join and where dynamic addresses come from `10.89.250.4/30`, so nothing else can
+hold it. Empty (the default) means proxy headers stay off, as before. Then:
+
+- the session cookie and the login's device cookie get `Secure` (with `HttpOnly` and `SameSite=Strict` as before), and
+  every response carries `Strict-Transport-Security: max-age=31536000` (HTTPS requests only; the LAN port stays
+  plain HTTP and never sends it); the login page says "Encrypted (HTTPS) over your tailnet";
+- the PIN lockout counts each phone's own tailnet address (plus its device cookie), so one phone's wrong PINs never
+  lock the others out; the 20-across-all-clients cap stays;
+- `https://settleview.<tailnet>.ts.net` (from `BTCFLOW_PUBLIC_URL`) is an allowed Host and Origin: same-origin POSTs
+  and the WebSocket upgrade pass, any other origin is refused as before;
+- nothing changes on the PC listener (8001) or the agent listener (8002): they never apply proxy headers, and a
+  phone over Tailscale is a phone (the PIN), never the PC.
+
+A value in `BTCFLOW_FORWARDED_ALLOW_IPS` that is not an IP address or network, `*`, or a network covering every
+address stops the start with an error naming it (uvicorn alone would quietly keep a typo as a name that never matches).
+
+### Setting it up (once)
+
+1. **Tailscale admin console → DNS**: turn on MagicDNS and **HTTPS Certificates** (Serve needs both). Note the tailnet
+   name shown there (`<tailnet>.ts.net`). The device's full name, `settleview.<tailnet>.ts.net`, is published in the
+   public Certificate Transparency logs when the certificate is issued (Tailscale's documented trade-off).
+2. **Access controls**: merge `deploy/tailscale/policy.hujson` into your policy file (HuJSON): `tag:settleview` owned
+   by `autogroup:admin`, a group with your login, and one grant: that group → `tag:settleview` on `tcp:443`. Keep your
+   other grants; the file's `tests` block makes the console refuse a policy that breaks this rule.
+3. **Settings → Keys → Generate auth key**:
+   - **Reusable: off** (one device, once).
+   - **Ephemeral: off** (the node and its name must survive restarts; its state is in the `settleview-tailscale`
+     volume).
+   - **Pre-approved: on** if your tailnet requires device approval.
+   - **Tags: `tag:settleview`** (the device then belongs to the tag: no user, key expiry off by default, only the
+     grant above applies).
+   - **Expiration: 1 day** (the shortest that fits: the key is used once, at the first start).
+4. Save it on the server, next to `compose.yaml`, without printing it: paste it into the file `secrets/ts_authkey`
+   (`secrets/` is git- and docker-ignored; the sidecar reads it as a compose secret, `TS_AUTHKEY=file:...`, so the key
+   is never an environment value or a process argument).
+5. In `.env` next to `compose.yaml`:
+
+   ```bash
+   COMPOSE_PROFILES=tailscale                     # every `docker compose up -d` includes the sidecar
+                                                  # (with OpenObserve too: COMPOSE_PROFILES=observability,tailscale)
+   BTCFLOW_FORWARDED_ALLOW_IPS=10.89.250.2        # the sidecar's address: uvicorn applies its X-Forwarded-* headers
+   BTCFLOW_PUBLIC_URL=https://settleview.<tailnet>.ts.net   # the Phone access card's URL; allowed Host and Origin
+   ```
+
+6. `docker compose --profile tailscale up -d` (recreates the app with the new settings and starts the sidecar).
+   `docker compose ps tailscale` shows `healthy` once the node is on the tailnet (its `/healthz`, on the container's
+   loopback only); `docker compose logs tailscale` shows the login and the serve config being applied, and
+   `docker compose exec tailscale tailscale serve status` shows `https://settleview.<tailnet>.ts.net` →
+   `http://app:8000`. The first HTTPS request may take a few seconds while the certificate is issued.
+7. **Revoke the auth key** in the console (Settings → Keys) once the device `settleview` appears, and empty
+   `secrets/ts_authkey`: later starts use the node key in the volume (`TS_AUTH_ONCE`), not the auth key.
+8. **Phones**: install Tailscale from the App Store / Play Store, sign in with your tailnet account, turn it on. Open
+   `https://settleview.<tailnet>.ts.net`, sign in with the PIN (the same PIN; LAN sessions do not carry over), and use
+   "Add to Home Screen" again (the old LAN shortcut points at the HTTP address).
+9. **Close the LAN port** once every phone uses Tailscale: `BTCFLOW_PHONE_BIND=127.0.0.1` in `.env`, then
+   `docker compose up -d` (the sidecar reaches `app:8000` inside the compose network, not through the published
+   port), and remove the Windows firewall rule for 8000 if you made one. Until then the LAN address keeps working over
+   plain HTTP, exactly as before.
+
+If `10.89.250.0/29` clashes with a network on your host (`docker compose up` says the pool overlaps), change the
+subnet, the range and the sidecar's address in `compose.yaml` and `BTCFLOW_FORWARDED_ALLOW_IPS` together.
+
+**Upgrading the sidecar**: a deliberate change of the pinned `image:` line (the new version's tag and its index
+digest: `docker buildx imagetools inspect tailscale/tailscale:<version>`), then `docker compose up -d tailscale`. A
+restart of the sidecar drops phones' connections for a few seconds; it never restarts the app.
+
+### Security notes
+
+- **Exposure**: nothing is published on the host and Funnel is off, so only devices in your tailnet that the policy
+  grants (your group, `tcp:443` on `tag:settleview`) can reach the sidecar, and through it only the phone port: the PIN
+  still applies. The sidecar gets no grant of its own, so it cannot open connections into your tailnet; on the host it
+  shares only the internal `tailscale-edge` network with the app (not Postgres or the recorders) and its own
+  `tailscale-egress` network for the way out to Tailscale.
+- **Container**: userspace networking (`TS_USERSPACE=true`): no `/dev/net/tun`, no `NET_ADMIN`, no capability at all
+  (`cap_drop: [ALL]`, `no-new-privileges`), a read-only root filesystem (state on its volume, the socket on tmpfs).
+  The image runs as root inside the container because it owns its state volume; without capabilities that root
+  cannot change the host's network or devices. Measured 2026-11-01: it starts, writes its state and asks for a login
+  this way.
+- **If the auth key leaks** before it expires or is revoked: whoever has it can add a device to your tailnet tagged
+  `tag:settleview`. It gets that tag's permissions only (none outbound; inbound only from your group on 443), so it
+  cannot reach your other devices or the app, but it is a device in your tailnet that could pose as a Settleview
+  under another name (`settleview-1`). Revoke the key, remove the device in the console. Hence: non-reusable, one
+  day, revoked after first use, device approval on if you use it.
+- **If the node key leaks** (a copy of the `settleview-tailscale` volume): someone could run the device `settleview`
+  elsewhere and serve a fake login page at its name to collect the PIN. Remove the device in the console (its key dies
+  at once), then rotate below, and change the PIN on the PC.
+- **Rotation**: tagged devices do not expire by default. To rotate the node's key (yearly, or after a suspected leak):
+  remove the device `settleview` in the console, `docker compose stop tailscale`, `docker volume rm
+  settleview_settleview-tailscale`, a new auth key into `secrets/ts_authkey` (steps 3–4), `docker compose up -d`,
+  then revoke the key again (step 7). The certificate renews by itself (Serve fetches a new one before expiry).
+- **STRIDE** (the phone path): *Spoofing* — WireGuard device identity plus the ACL decide who reaches 443, then the
+  PIN; the app believes `X-Forwarded-*` only from `10.89.250.2`, an address only the sidecar can hold. *Tampering* and
+  *information disclosure* — TLS from the phone to the sidecar (inside WireGuard too); plain HTTP only on the internal
+  bridge between two containers on this host; `Secure` cookies never fall back to HTTP. *Repudiation* — logins and
+  lockouts are logged with each phone's tailnet address; the admin console logs device and policy changes.
+  *Denial of service* — the per-device and global PIN lockouts; a crash-looping sidecar (for example an invalid auth
+  key) affects only phone access, never the app or trading. *Elevation of privilege* — a proxied request is a phone
+  (PIN) at most, never the PC (pairing works only on the PC listener, which never trusts proxy headers); the sidecar
+  container has no capabilities.
+
+What only a real tailnet can show (not tested in CI): the login with a real key, the certificate issuance for the
+name, and the phone app's path. The serve config is checked against Tailscale's own Go types (`ipn.ServeConfig`), the
+sidecar was started with the compose settings, and the HTTPS path (Secure cookies, HSTS, the forwarded client, the
+WebSocket origin) was exercised through a stand-in TLS proxy at the sidecar's address
+(docs/solutions/2026-11-01-phones-https-tailscale-sidecar.md).
 
 ## Phone access on the home network (Play screen)
 
@@ -1473,8 +1603,10 @@ minutes lock every login for 15 minutes (both logged at WARNING, without the PIN
 device: the login page gives each browser a signed `btcflow_device` cookie (HttpOnly, SameSite=Strict, path `/login`),
 so behind Docker's port publishing, where every phone arrives from the bridge gateway's one address, one phone's
 wrong PINs no longer lock the others out. A client without that cookie (a script) is counted under its bare address;
-`X-Forwarded-For` is never read, and uvicorn's proxy-header rewriting is off. Lockouts live in memory: a restart
-or a new PIN clears them. A login body over 2 KB is refused with 413 before it is read further. There is **no HTTPS**:
+`X-Forwarded-For` counts only from the address in `BTCFLOW_FORWARDED_ALLOW_IPS` (the Tailscale sidecar; empty by
+default, so never), where uvicorn applies it and each phone is its tailnet address. Lockouts live in memory: a restart
+or a new PIN clears them. A login body over 2 KB is refused with 413 before it is read further. On the LAN port there
+is **no HTTPS** (use the Tailscale sidecar for that):
 the PIN and the session cookie cross the network in clear text. Use it only on the home LAN or over a VPN, and
 **never port-forward port 8000**. A reverse proxy on this same computer connects from 127.0.0.1, which (without a PC
 listener) is the PC's place: it still needs the PC cookie, but do not put one in front without its own login.

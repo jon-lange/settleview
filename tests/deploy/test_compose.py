@@ -8,8 +8,10 @@ run everywhere."""
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -23,21 +25,25 @@ SECRET_SETTINGS = ("BTCFLOW_POLYMARKET_KEY_ID", "BTCFLOW_POLYMARKET_SECRET_KEY",
                    "BTCFLOW_TELEGRAM_BOT_TOKEN", "BTCFLOW_KALSHI_KEY_ID", "BTCFLOW_TRADING_DEMO_KEY_ID",
                    "BTCFLOW_TRADING_PROD_KEY_ID", "BTCFLOW_DATABASE_PASSWORD", "POSTGRES_PASSWORD", "PGPASSWORD")
 PYTHON_SERVICES = ("migrate", "app", "rec-pm-quotes", "rec-pm-settle")
-ALL_SERVICES = ("postgres", "backup", "migrate", "app", "rec-pm-quotes", "rec-pm-settle", "openobserve")
+ALL_SERVICES = ("postgres", "backup", "migrate", "app", "rec-pm-quotes", "rec-pm-settle", "openobserve", "tailscale")
+SERVE = json.loads((ROOT / "deploy" / "tailscale" / "serve.json").read_text(encoding="utf-8"))
 
 
 def _config(tmp_path: Path, **env: str) -> dict:
     if shutil.which("docker") is None:
         pytest.skip("no docker CLI")
     (tmp_path / "deploy" / "postgres").mkdir(parents=True)
+    (tmp_path / "deploy" / "tailscale").mkdir(parents=True)
+    shutil.copy(ROOT / "deploy" / "tailscale" / "serve.json", tmp_path / "deploy" / "tailscale" / "serve.json")
     shutil.copy(ROOT / "compose.yaml", tmp_path / "compose.yaml")
     for f in ("initdb.sh", "roles.sh", "audit.sql", "backup.sh"):
         shutil.copy(ROOT / "deploy" / "postgres" / f, tmp_path / "deploy" / "postgres" / f)
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "openobserve.env").write_text("ZO_ROOT_USER_PASSWORD=dummy\n", encoding="utf-8")
     clean = {k: v for k, v in os.environ.items() if not k.startswith(("BTCFLOW_", "COMPOSE_", "OTEL_"))}
-    p = subprocess.run(["docker", "compose", "-p", "svp0dcfg", "--profile", "observability", "config", "--format",
-                        "json"], cwd=tmp_path, capture_output=True, text=True, timeout=60, env={**clean, **env})
+    p = subprocess.run(["docker", "compose", "-p", "svp0dcfg", "--profile", "observability", "--profile", "tailscale",
+                        "config", "--format", "json"], cwd=tmp_path, capture_output=True, text=True, timeout=60,
+                       env={**clean, **env})
     if p.returncode != 0:
         pytest.fail(f"docker compose config failed: {p.stderr[-2000:]}")
     return json.loads(p.stdout)
@@ -103,7 +109,7 @@ def test_the_recorders_healthcheck_is_process_local_liveness(tmp_path):
 
 
 def test_text_checks():
-    assert "x-logging: &logging" in COMPOSE and COMPOSE.count("logging: *logging") == 4  # x-service + 3 services
+    assert "x-logging: &logging" in COMPOSE and COMPOSE.count("logging: *logging") == 5  # x-service + 4 services
     assert '"${BTCFLOW_PHONE_BIND:-0.0.0.0}:8000:8000"' in COMPOSE and '"127.0.0.1:8001:8001"' in COMPOSE
     assert 'ENTRYPOINT ["/usr/bin/tini", "--"]' in DOCKERFILE and "apt-get install -y --no-install-recommends tini" \
         in DOCKERFILE
@@ -150,3 +156,53 @@ def test_the_python_services_run_a_local_build_or_the_digest_in_settleview_image
     services = _config(tmp_path / "pinned", SETTLEVIEW_IMAGE=ref)["services"]
     assert {services[s]["image"] for s in PYTHON_SERVICES} == {ref}
     assert services["postgres"]["image"] == services["backup"]["image"] == "postgres:17.10-bookworm"
+
+
+def test_the_tailscale_sidecar_is_opt_in_pinned_and_unprivileged(tmp_path):
+    """P3 #1: the official image by digest, profile `tailscale`, userspace networking (no tun device, no capability),
+    a read-only root, the auth key only as a secret file, nothing published on the host."""
+    ts = _config(tmp_path)["services"]["tailscale"]
+    assert ts["profiles"] == ["tailscale"]
+    image = ts["image"]
+    assert image.startswith("tailscale/tailscale:v") and re.search(r"@sha256:[0-9a-f]{64}$", image), image
+    assert ts["read_only"] is True and ts["cap_drop"] == ["ALL"] and "cap_add" not in ts
+    assert ts["security_opt"] == ["no-new-privileges:true"]
+    assert "devices" not in ts and "privileged" not in ts and "network_mode" not in ts and "ports" not in ts
+    env = ts["environment"]
+    assert env["TS_USERSPACE"] == "true" and env["TS_HOSTNAME"] == "settleview" and ts["hostname"] == "settleview"
+    assert env["TS_AUTHKEY"] == "file:/run/secrets/ts_authkey" and env["TS_AUTH_ONCE"] == "true"
+    assert env["TS_STATE_DIR"] == "/var/lib/tailscale" and env["TS_SERVE_CONFIG"] == "/config/serve.json"
+    assert env["TS_LOCAL_ADDR_PORT"].startswith("127.0.0.1:")  # the health endpoint never leaves the container
+    assert not any(k in env for k in ("TS_EXTRA_ARGS", "TS_TAILSCALED_EXTRA_ARGS", "TS_ROUTES", "TS_SOCKS5_SERVER",
+                                      "TS_OUTBOUND_HTTP_PROXY_LISTEN"))
+    assert [x["source"] for x in ts["secrets"]] == ["ts_authkey"]
+    assert [(c["source"], c["target"]) for c in ts["configs"]] == [("ts_serve", "/config/serve.json")]
+    assert {v["target"] for v in ts["volumes"]} == {"/var/lib/tailscale"}
+    assert ts["logging"]["driver"] == "local" and ts["deploy"]["resources"]["limits"]["memory"]
+
+
+def test_only_the_app_and_the_sidecar_share_the_internal_edge_network_at_a_fixed_address(tmp_path):
+    cfg = _config(tmp_path)
+    edge = cfg["networks"]["tailscale-edge"]
+    assert edge["internal"] is True
+    (pool,) = edge["ipam"]["config"]
+    sidecar = cfg["services"]["tailscale"]["networks"]["tailscale-edge"]["ipv4_address"]
+    subnet, dynamic = ipaddress.ip_network(pool["subnet"]), ipaddress.ip_network(pool["ip_range"])
+    assert ipaddress.ip_address(sidecar) in subnet and ipaddress.ip_address(sidecar) not in dynamic  # never handed out
+    assert ipaddress.ip_address(pool["gateway"]) not in dynamic and ipaddress.ip_address(pool["gateway"]) !=         ipaddress.ip_address(sidecar)
+    on_edge = {n for n, svc in cfg["services"].items() if "tailscale-edge" in (svc.get("networks") or {})}
+    assert on_edge == {"app", "tailscale"}
+    on_egress = {n for n, svc in cfg["services"].items() if "tailscale-egress" in (svc.get("networks") or {})}
+    assert on_egress == {"tailscale"}
+    assert set(cfg["services"]["app"]["networks"]) == {"default", "tailscale-edge"}
+    # proxy headers are opt-in: compose never sets the trusted address itself (the owner's .env does)
+    assert "BTCFLOW_FORWARDED_ALLOW_IPS" not in cfg["services"]["app"]["environment"]
+    assert f"BTCFLOW_FORWARDED_ALLOW_IPS={sidecar}" in COMPOSE  # the documented value is the sidecar's address
+
+
+def test_the_serve_config_publishes_https_443_to_the_phone_port_and_never_funnel():
+    assert SERVE["TCP"] == {"443": {"HTTPS": True}}
+    assert SERVE["Web"] == {"${TS_CERT_DOMAIN}:443": {"Handlers": {"/": {"Proxy": "http://app:8000"}}}}
+    assert not any(SERVE.get("AllowFunnel", {}).values())
+    assert set(SERVE) <= {"TCP", "Web", "AllowFunnel"}  # no Services, no Foreground
+

@@ -17,12 +17,13 @@ There are no versioned releases; fixes go to the default branch.
 Settleview is a **local, single-user app**. Read reports in light of how it is meant to run:
 
 - **It runs on your own computer.** By default the server listens on `127.0.0.1` only.
-- **Phone access is LAN-only.** With `BTCFLOW_API_HOST=0.0.0.0`, other devices are refused until a PIN is set on the
-  PC, and then must sign in with it. The PIN is stored as a salted PBKDF2 hash; repeated wrong PINs lock an address
-  out.
-- **There is no HTTPS.** The PIN and session cookie travel in clear text on your network. Use it only on a home LAN
-  or over a VPN. **Never expose it to the internet** (no port forwarding, no public reverse proxy). A reverse proxy
-  on the same machine makes every request look local and bypasses the PIN.
+- **Phone access is LAN or tailnet only.** With `BTCFLOW_API_HOST=0.0.0.0`, other devices are refused until a PIN
+  is set on the PC, and then must sign in with it. The PIN is stored as a salted PBKDF2 hash; repeated wrong PINs
+  lock a device out.
+- **HTTPS only over Tailscale.** The app itself speaks plain HTTP. Phones get HTTPS from the opt-in Tailscale sidecar
+  (compose profile `tailscale`, Tailscale Serve inside your tailnet, never Funnel); proxy headers are applied only
+  from the sidecar's fixed address (`BTCFLOW_FORWARDED_ALLOW_IPS`). On the LAN port the PIN and session cookie travel
+  in clear text. **Never expose it to the internet** (no port forwarding, no public reverse proxy, no Funnel).
 - **Keys stay local.** Venue API keys are read from your `.env` and from key files on your disk. They are never
   written to the database, logged, or sent to the browser. Never commit `.env` or `*.pem` files.
 
@@ -38,7 +39,7 @@ Out of scope:
 
 - Problems that only exist because the app was exposed to the internet or run behind a same-host reverse proxy
   against the guidance above.
-- Clear-text traffic on the LAN (a known, documented limitation).
+- Clear-text traffic on the LAN port (a known, documented limitation; use the Tailscale sidecar).
 - Vulnerabilities in Kalshi, Polymarket US or their SDKs. Report those to the vendor.
 - Trading losses. The app is not financial advice and makes no promise of profit.
 

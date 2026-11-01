@@ -20,6 +20,8 @@
 #   rec-pm-quotes  Polymarket US quotes + trades (WebSocket)        writes schema research (settleview_recorder)
 #   rec-pm-settle  Polymarket US settlement terms (public, no keys) writes schema research (settleview_recorder)
 #   openobserve    logs, metrics and traces (OpenTelemetry), profile `observability` only    127.0.0.1:5080: this PC
+#   tailscale      HTTPS for phones over your tailnet (Tailscale Serve -> app:8000), profile `tailscale` only;
+#                  publishes nothing on this host (docs/operations.md, "Phones over HTTPS (Tailscale)")
 #
 # Observability (docs/operations.md, "Observability"): every Python service exports OpenTelemetry over OTLP/HTTP once
 # OTEL_EXPORTER_OTLP_ENDPOINT is set in `.env` next to this file; unset, nothing is exported. The local backend is opt-in:
@@ -52,7 +54,18 @@
 #
 # The phone port's host address is BTCFLOW_PHONE_BIND (default 0.0.0.0, every interface). Docker publishes ports
 # around the host firewall (ufw / firewalld never see them): on a server set it to the LAN address, or 127.0.0.1
-# behind a reverse proxy or VPN, in `.env` next to this file.
+# behind a reverse proxy or VPN, in `.env` next to this file. Once every phone uses Tailscale (below), set it to
+# 127.0.0.1: the sidecar reaches app:8000 inside the compose network, not through the published port.
+#
+# Phones over HTTPS (docs/operations.md, "Phones over HTTPS (Tailscale)"): the opt-in `tailscale` sidecar joins your
+# tailnet as `settleview` with the auth key in secrets/ts_authkey and serves https://settleview.<tailnet>.ts.net
+# (Tailscale's certificate) -> http://app:8000 on the internal network tailscale-edge. Never Funnel (the public
+# internet; deploy/tailscale/serve.json turns it off). Once:
+#   (Tailscale admin console) a tagged auth key (tag:settleview) -> secrets/ts_authkey
+#   echo BTCFLOW_FORWARDED_ALLOW_IPS=10.89.250.2 >> .env   # the sidecar: uvicorn applies its X-Forwarded-*
+#   echo BTCFLOW_PUBLIC_URL=https://settleview.<tailnet>.ts.net >> .env
+#   echo COMPOSE_PROFILES=tailscale >> .env                # every `docker compose up -d` then includes it
+#   docker compose --profile tailscale up -d
 #
 # In the cloud, use the managed Postgres (Azure Database for PostgreSQL Flexible Server, Amazon RDS) instead of the
 # `postgres` and `backup` services: point BTCFLOW_DATABASE_URL at it (docs/operations.md, "Deploying to the cloud").
@@ -340,6 +353,11 @@ services:
       BTCFLOW_AGENT_PORT: 8002
       BTCFLOW_AGENT_HOST: 0.0.0.0
       OTEL_SERVICE_NAME: settleview-app
+    # default: Postgres, the recorders, the internet (venues). tailscale-edge: internal (no route out), shared with
+    # the Tailscale sidecar only, which reaches the phone port there as app:8000.
+    networks:
+      default: {}
+      tailscale-edge: {}
     secrets: [pg_app_password, otlp_headers, polymarket_key_id, polymarket_secret_key, anthropic_api_key,
               telegram_bot_token, kalshi_key_id, trading_demo_key_id, trading_prod_key_id]
     depends_on: *needs-migrated
@@ -464,6 +482,82 @@ services:
         limits: {cpus: "1.0", memory: 1g}
         reservations: {memory: 256m}
 
+  # HTTPS for phones over the owner's tailnet: opt-in, `docker compose --profile tailscale up -d` (docs/operations.md,
+  # "Phones over HTTPS (Tailscale)"). The official image at an exact release and its digest (v1.104.4, the stable
+  # channel on 2026-11-01; a deliberate bump moves both). containerboot logs in once with the auth key
+  # (secrets/ts_authkey; TS_AUTH_ONCE: later starts reuse the node key in the settleview-tailscale volume), then
+  # applies deploy/tailscale/serve.json: HTTPS on 443 with the tailnet's certificate (Let's Encrypt, via Tailscale)
+  # -> http://app:8000, Funnel off. Userspace networking (TS_USERSPACE): no /dev/net/tun, no NET_ADMIN, no
+  # capability at all; nothing is published on this host. Serve's proxy keeps the Host and sets X-Forwarded-Proto:
+  # https and X-Forwarded-For: <the phone's tailnet address>, which uvicorn (proxy_headers) applies only from this
+  # container's fixed address (BTCFLOW_FORWARDED_ALLOW_IPS=10.89.250.2 in .env).
+  tailscale:
+    image: tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c
+    profiles: [tailscale]
+    hostname: settleview
+    restart: unless-stopped
+    logging: *logging
+    # Runs as the image's root (it owns its state volume) with every capability dropped and no privilege gain; the
+    # root filesystem is read-only (state on the volume, the LocalAPI socket on tmpfs).
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/run/tailscale:size=1m  # the CLI's default socket path (a link to /tmp/tailscaled.sock)
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      TS_AUTHKEY: file:/run/secrets/ts_authkey  # `tailscale up --auth-key=file:...` reads the file: no key in env or ps
+      TS_AUTH_ONCE: "true"  # log in only while the state has no node key: the key is used once, then may expire
+      TS_HOSTNAME: settleview  # https://settleview.<tailnet>.ts.net
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_ACCEPT_DNS: "false"  # Docker's DNS keeps resolving `app`
+      TS_SERVE_CONFIG: /config/serve.json
+      # /healthz (200 once the node has a tailnet address) on the container's loopback only, for the healthcheck.
+      TS_ENABLE_HEALTH_CHECK: "true"
+      TS_LOCAL_ADDR_PORT: 127.0.0.1:9002
+    secrets: [ts_authkey]
+    configs:
+      - source: ts_serve
+        target: /config/serve.json
+    volumes:
+      - settleview-tailscale:/var/lib/tailscale
+    networks:
+      # tailscale-egress: the way out to Tailscale's control plane, DERP relays and direct peer connections (no other
+      # service on it). tailscale-edge: the app's phone port, from the fixed address the app trusts.
+      tailscale-egress: {}
+      tailscale-edge:
+        ipv4_address: 10.89.250.2
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9002/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    deploy:
+      <<: *deploy
+      resources:
+        limits: {cpus: "0.5", memory: 256m}
+        reservations: {memory: 32m}
+
+networks:
+  # Created by every `up` (the app is on it); only the app and the tailscale sidecar join it. Internal: no route to
+  # the internet or the host, so neither the published phone port nor the LAN reaches the app through it, and
+  # 10.89.250.2 can only be the sidecar (dynamic addresses come from 10.89.250.4/30). If 10.89.250.0/29 clashes with
+  # a network on your host, change the subnet, the range, the sidecar's address and BTCFLOW_FORWARDED_ALLOW_IPS
+  # together.
+  tailscale-edge:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.89.250.0/29
+          ip_range: 10.89.250.4/30
+          gateway: 10.89.250.1
+  tailscale-egress: {}
+
 secrets:
   # Files written by deploy/postgres/make_secrets.py (Swarm: `docker secret create`, then `external: true`).
   # otlp_headers: the OTLP backend's headers (OpenObserve's ingest-only organization token, written by
@@ -496,6 +590,10 @@ secrets:
     file: ./secrets/trading_demo_key_id
   trading_prod_key_id:
     file: ./secrets/trading_prod_key_id
+  # The Tailscale auth key (profile tailscale): created by you in the Tailscale admin console (docs/operations.md,
+  # "Phones over HTTPS (Tailscale)"), never by make_secrets.py. Read by the sidecar only.
+  ts_authkey:
+    file: ./secrets/ts_authkey
 
 configs:
   pg_initdb:
@@ -506,9 +604,12 @@ configs:
     file: ./deploy/postgres/audit.sql
   pg_backup:
     file: ./deploy/postgres/backup.sh
+  ts_serve:
+    file: ./deploy/tailscale/serve.json
 
 volumes:
   settleview-pg:  # the database files (Postgres's data directory)
   settleview-backups:  # the nightly dumps
   settleview-data:  # the app's local folder: logs, pid and stop files, the writer's dead-letter file
   settleview-o2:  # OpenObserve's data (profile observability)
+  settleview-tailscale:  # the sidecar's node key and certificates (profile tailscale); deleting it logs the node out

@@ -51,7 +51,8 @@ class App:
 
 
 def _runtime(tmp_path, monkeypatch, **kw) -> Runtime:
-    for k in ("BTCFLOW_API_HOST", "BTCFLOW_API_PORT", "BTCFLOW_PC_PORT", "BTCFLOW_PC_HOST", "BTCFLOW_TRADING_STREAM"):
+    for k in ("BTCFLOW_API_HOST", "BTCFLOW_API_PORT", "BTCFLOW_PC_PORT", "BTCFLOW_PC_HOST", "BTCFLOW_TRADING_STREAM",
+              "BTCFLOW_FORWARDED_ALLOW_IPS", "BTCFLOW_AGENT_PORT", "BTCFLOW_AGENT_HOST"):
         monkeypatch.delenv(k, raising=False)
     return Runtime(Settings(_env_file=None, db_path=tmp_path / "pc.db", trading_stream=False, **kw))
 
@@ -96,6 +97,16 @@ def test_two_servers_start_share_one_lifespan_and_stop_together(tmp_path, monkey
     assert asyncio.run(run()) is True
     assert all(s.should_exit for s in servers) and app.startups == 1 and app.shutdowns == 1
     assert _port_is_free(main_port) and _port_is_free(pc_port)
+
+
+def test_proxy_headers_are_uvicorns_on_the_phone_listener_only_and_only_when_configured(tmp_path, monkeypatch):
+    """BTCFLOW_FORWARDED_ALLOW_IPS (the Tailscale sidecar's address) turns on uvicorn's own proxy headers for the main
+    (phone) server with exactly that address; the PC and agent listeners never trust a forwarded header."""
+    rt = _runtime(tmp_path, monkeypatch, api_port=_free_port(), pc_port=_free_port(), agent_port=_free_port(),
+                  forwarded_allow_ips="10.89.250.2")
+    main, pc, agent = rt.make_servers(App())
+    assert main.config.proxy_headers is True and main.config.forwarded_allow_ips == "10.89.250.2"
+    assert pc.config.proxy_headers is False and agent.config.proxy_headers is False
 
 
 def test_stopping_the_pc_listener_stops_the_main_server_too(tmp_path, monkeypatch):

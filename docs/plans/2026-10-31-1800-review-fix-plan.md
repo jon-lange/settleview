@@ -109,6 +109,9 @@ Plan (after the P0 branches merge, to avoid conflicts with four parallel builds)
 In order:
 1. **TLS for phones** — today the PIN and session cookie cross Wi-Fi in plain HTTP. Tailscale (HTTPS + remote access,
    no open ports) or a Caddy container with a local CA; then cookies `Secure`.
+   *Done 2026-11-01 (owner chose Tailscale):* the opt-in `tailscale` compose sidecar with Tailscale Serve,
+   uvicorn's proxy headers from its fixed address only (`BTCFLOW_FORWARDED_ALLOW_IPS`), `Secure` cookies and HSTS on
+   HTTPS (docs/operations.md, "Phones over HTTPS (Tailscale)").
 2. **Alerting on telemetry** — SLIs/SLOs (feed freshness, event-loop lag, order-gate errors, writer queue, agent spend,
    recorder coverage) as OpenObserve alerts → Telegram.
 3. **Staging** — a `staging` compose profile on Kalshi demo + the shadow exchange; automated smoke tests gate every deploy.

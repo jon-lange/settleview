@@ -26,7 +26,8 @@ yourself.
   deliberate slide. Agents (below) trade only inside limits you set when you start them, through the same order gate,
   and you can stop one or all in one tap.
 - **Not a source of edge.** No tested rule survived the out-of-sample checks after fees.
-- **Not a hosted service.** There is no HTTPS and no internet-grade authentication. Never expose it to the internet.
+- **Not a hosted service.** There is no internet-grade authentication. Never expose it to the internet; phones get
+  HTTPS over your own tailnet (Tailscale), never the public internet.
 - **Not financial advice.**
 
 ## Screenshots
@@ -67,7 +68,8 @@ Three tabs: **Play** (`/#play`), **Agents** (`/#agent`) and **Record** (`/#recor
 - **Your limits**: per-trade and per-day limits that you set in the app (default: none). Raising or removing a limit
   needs a typed confirmation, and every change is audited.
 - **Kill switch**: one button (top right) that stops all new entries in every mode and strategy.
-- **Phone access**: sign in from your phone on the home network with a PIN that you set on the PC.
+- **Phone access**: sign in from your phone with a PIN that you set on the PC, over HTTPS on your tailnet
+  (Tailscale, home or away) or on the home network.
 - **Agents here**: one quiet line on Play when agents hold or watch the market you are looking at ("2 agents here ·
   one holds Up $1.00 (CUSHION100)"); tap it to see them.
 
@@ -259,13 +261,30 @@ about 30 minutes) for the research tools.
 
 4. On the phone, open the URL and sign in with the PIN. "Add to Home Screen" opens straight into Play.
 
-The PIN is stored only as a salted PBKDF2 hash. Five wrong PINs from one address lock it out for 15 minutes. Every
+The PIN is stored only as a salted PBKDF2 hash. Five wrong PINs from one phone lock it out for 15 minutes. Every
 restart signs out all phones.
 
-**There is no HTTPS.** The PIN and session cookie cross your network in clear text. Use phone access only on your
-home LAN or over a VPN. **Never port-forward the port to the internet**, and don't put a reverse proxy in front on
-the same machine (it would make every request look local and bypass the PIN). More detail is in
-[`docs/operations.md`](docs/operations.md).
+### Phones over HTTPS (Tailscale, recommended)
+
+On the LAN port the PIN and session cookie cross your network in clear text. With Docker, phones can use HTTPS
+instead, at home and away, with no port opened anywhere: the opt-in `tailscale` compose service joins your tailnet as
+`settleview` and serves `https://settleview.<tailnet>.ts.net` to the app (Tailscale Serve; never Funnel, so never the
+public internet).
+
+1. Tailscale admin console: turn on MagicDNS and HTTPS Certificates; merge
+   [`deploy/tailscale/policy.hujson`](deploy/tailscale/policy.hujson) into your access controls; generate a
+   one-off auth key (not reusable, not ephemeral, tag `tag:settleview`, 1 day) and save it as `secrets/ts_authkey`.
+2. In `.env`: `COMPOSE_PROFILES=tailscale`, `BTCFLOW_FORWARDED_ALLOW_IPS=10.89.250.2` and
+   `BTCFLOW_PUBLIC_URL=https://settleview.<tailnet>.ts.net`; then `docker compose --profile tailscale up -d`.
+3. On each phone: install Tailscale, sign in, open `https://settleview.<tailnet>.ts.net`, enter the PIN.
+4. Once every phone uses it, close the LAN port: `BTCFLOW_PHONE_BIND=127.0.0.1` in `.env`.
+
+Session cookies are then `Secure` and the app sends HSTS. Details, key rotation and the security notes:
+[`docs/operations.md`](docs/operations.md), "Phones over HTTPS (Tailscale)".
+
+**Without it there is no HTTPS.** Use the LAN port only on your home network. **Never port-forward the port to the
+internet**, and don't put another reverse proxy in front on the same machine (without a PC listener it would make
+every request look local).
 
 ## Trading modes and safety
 

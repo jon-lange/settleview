@@ -50,4 +50,5 @@ still bounds rotation. No header is trusted: uvicorn's `proxy_headers` is now of
 rewrite the client from `X-Forwarded-For`, which the docs already said was ignored).
 
 **How to avoid.** A per-client limit behind NAT needs a per-client identity the server issued; a forwarded header is
-only trustworthy from a proxy you configured.
+only trustworthy from a proxy you configured. (Since P3 #1, 2026-11-01, that proxy exists: uvicorn's `proxy_headers` is on for the phone port from the
+Tailscale sidecar's fixed address only, `BTCFLOW_FORWARDED_ALLOW_IPS`; solutions/2026-11-01-phones-https-tailscale-sidecar.md.)
