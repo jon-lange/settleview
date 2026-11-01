@@ -80,9 +80,10 @@ from btc_signal_engine.application.actor import (AGENT_PREFIX, actor, agent_sess
                                                  current_agent_session)
 from btc_signal_engine.application.agent_rules import RULES
 from btc_signal_engine.application.ports import Repository
+from btc_signal_engine.application.settings_store import put_setting
 from btc_signal_engine.application.rule_scores import BRACKETS, JOURNAL, OPEN_STATES, SETTLING, RuleBook
 from btc_signal_engine.application.trading import GateResult
-from btc_signal_engine.domain import days
+from btc_signal_engine.domain import brackets, days
 from btc_signal_engine.domain.markets import market as market_spec
 from btc_signal_engine.domain.markets import phone_markets
 
@@ -94,6 +95,15 @@ WAKE_INPUTS = "agent_wake_inputs"  # each wake's exact model input (migration 00
 # Agent venues = the Play tabs (market key -> the tab's trading strategy). Perps join when their gate is wired.
 VENUES: dict[str, str] = {m.key: m.phone_strategy for m in phone_markets()}
 VENUE_LABELS: dict[str, str] = {m.key: m.label for m in phone_markets()}
+_MARKET_OF_STRATEGY: dict[str, str] = {s: k for k, s in VENUES.items()}  # one Play market per phone strategy
+
+
+def market_of_strategy(strategy: str | None) -> str | None:
+    """The Play market key a bracket's strategy trades ("you" -> "kalshi_15m"); None for a strategy no Play market
+    has (perps, a removed lab strategy)."""
+    return _MARKET_OF_STRATEGY.get(strategy) if isinstance(strategy, str) else None
+
+
 # KD7's default agent names use the short market label: "Kalshi 15m agent", "Polymarket 5m agent"
 SHORT_LABELS: dict[str, str] = {k: v.replace(" min", "m").replace(" hour", "h") for k, v in VENUE_LABELS.items()}
 KINDS = ("in_app", "external")
@@ -187,9 +197,7 @@ def position_view(b: Mapping[str, Any]) -> dict:
     out["entry_fees"] = entry_fees
     out["fees"] = (round(float(entry_fees or 0.0) + float(b.get("tp_fees") or 0.0) + float(b.get("exit_fees") or 0.0), 4)
                    if filled > 0 else None)
-    out["realized"] = (round(float(b.get("proceeds") or 0.0) - float(cost or 0.0) - float(b.get("tp_fees") or 0.0)
-                             - float(b.get("exit_fees") or 0.0), 4)
-                       if b.get("state") == "closed" and filled > 0 else None)
+    out["realized"] = brackets.net(b) if b.get("state") == "closed" and filled > 0 else None
     return out
 
 
@@ -824,9 +832,7 @@ class AgentSessions:
             new = {**self.global_limits(), **{k: _limit_value(k, v) for k, v in changes.items()}}
         except LaunchError as e:
             return {"ok": False, "code": e.code, "reason": e.reason}
-        if not self.repo.update("strategy_settings", GLOBAL_LIMITS, {"value": new, "updated_ts": now}):
-            self.repo.insert("strategy_settings", [{**GLOBAL_LIMITS, "value": new, "updated_ts": now}],
-                             ignore_conflicts=False)
+        put_setting(self.repo, GLOBAL_LIMITS, new, now)
         self._global = {k: new.get(k) for k in GLOBAL_KEYS}
         return {"ok": True, "limits": new, "used": self.global_usage(now)}
 
@@ -1003,7 +1009,7 @@ class AgentSessions:
             up_s = {x["session_id"] for x in g["UP"]}
             down_s = {x["session_id"] for x in g["DOWN"]}
             if up_s and down_s and len(up_s | down_s) > 1:
-                market = next((k for k, st in VENUES.items() if st == strategy), None)
+                market = market_of_strategy(strategy)
                 out.append({"strategy": strategy, "market": market, "ticker": ticker, "window_end": g["window_end"],
                             "sides": {"UP": g["UP"], "DOWN": g["DOWN"]}})
         return out
@@ -1112,10 +1118,9 @@ class AgentSessions:
                 order[s["id"]] = i
         net: dict[str, list] = {s["id"]: [0.0, 0] for s in sessions}
         for b in self.repo.select(BRACKETS, filters=[("session_id", "in", list(net))]) if net else []:
-            if b.get("state") == "closed" and float(b.get("filled") or 0) > 0:
+            if brackets.closed_filled(b):
                 e = net[b["session_id"]]
-                e[0] += (float(b.get("proceeds") or 0.0) - float(b.get("entry_cost") or 0.0)
-                         - float(b.get("tp_fees") or 0.0) - float(b.get("exit_fees") or 0.0))
+                e[0] += brackets.net(b)
                 e[1] += 1
         out = [{"session_id": s["id"], "agent_id": s.get("agent_id"), "name": self.name_of(s),
                 "run": order.get(s["id"]), "state": s["state"], "started_ts": s["started_ts"],

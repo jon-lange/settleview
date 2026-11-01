@@ -30,7 +30,6 @@ import bisect
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from datetime import datetime, timedelta, UTC
 from typing import Any
 
 from btc_signal_engine.adapters import telemetry
@@ -39,6 +38,7 @@ from btc_signal_engine.adapters.coinbase.gaps import GapRecorder
 from btc_signal_engine.adapters.retry import Backoff
 from btc_signal_engine.application.ports import Clock
 from btc_signal_engine.domain.models.events import BookSecond, IndexSecond, Trade
+from btc_signal_engine.domain.timestamps import iso_to_ms
 
 log = logging.getLogger(__name__)
 
@@ -51,14 +51,12 @@ MAX_FRAME_BYTES = 16 * 1024 * 1024  # the largest ws-feed frame read (a level2 s
 Update = Trade | BookMetrics | None  # None = liveness only (heartbeat, subscription ack)
 Transport = Callable[[Callable[[Update], None]], Awaitable[None]]
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
-_MS = timedelta(milliseconds=1)
 
 
 # -- normalization (shared by both transports) ------------------------------------------
 def parse_time_ms(iso: str) -> int:
-    """Coinbase ISO-8601 time ("2026-10-28T12:00:00.123456Z") to integer UTC ms."""
-    return (datetime.fromisoformat(iso.replace("Z", "+00:00")) - _EPOCH) // _MS
+    """Coinbase ISO-8601 time ("2026-10-28T12:00:00.123456Z") to integer UTC ms (domain/timestamps.py)."""
+    return iso_to_ms(iso)
 
 
 def trade_from_match(msg: dict[str, Any], ingest_ts: int) -> Trade:

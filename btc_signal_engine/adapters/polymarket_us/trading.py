@@ -79,7 +79,6 @@ never in repr, logs, errors or return values (errors carry the API's message onl
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 import logging
 import time
 from collections import deque
@@ -93,6 +92,7 @@ from btc_signal_engine.adapters.polymarket_us.markets import (LIVE_SPANS, is_ser
                                                               window_of)
 from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
 from btc_signal_engine.domain.order_resolution import TS_SLACK_MS, definitive_status
+from btc_signal_engine.domain.timestamps import iso_to_ms_or_none
 
 log = logging.getLogger(__name__)
 
@@ -162,12 +162,8 @@ class RateLimiter:
 
 
 def _iso_ms(s: Any) -> int | None:
-    if not s:
-        return None
-    try:
-        return int(dt.datetime.fromisoformat(str(s)[:26].rstrip("Z") + "+00:00").timestamp() * 1000)
-    except ValueError:
-        return None
+    """A Polymarket time (UTC; "Z" may be missing) -> epoch ms, None when absent or unreadable (domain/timestamps.py)."""
+    return iso_to_ms_or_none(s, naive="utc")
 
 
 def _whole(c: float) -> float:

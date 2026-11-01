@@ -70,6 +70,7 @@ from typing import Any
 
 from btc_signal_engine.adapters.polymarket_us.markets import current_slugs, is_series, num, window_of
 from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.domain.timestamps import iso_to_ms_or_none
 from btc_signal_engine.domain.book_freshness import (CONN_LIVE_MS, QUIET_MAX_MS,  # noqa: F401 - TRADE_GRACE_MS: re-exported
                                                     TRADE_GRACE_MS, unservable_reason)
 
@@ -98,12 +99,8 @@ def _px(x: float | None) -> float | None:
 
 
 def _iso_ms(s: Any) -> int | None:
-    if not s:
-        return None
-    try:
-        return int(dt.datetime.fromisoformat(str(s)[:26].rstrip("Z") + "+00:00").timestamp() * 1000)
-    except ValueError:
-        return None
+    """A Polymarket time (UTC; "Z" may be missing) -> epoch ms, None when absent or unreadable (domain/timestamps.py)."""
+    return iso_to_ms_or_none(s, naive="utc")
 
 
 def _levels(rows: Any) -> list[tuple[float, float]]:
@@ -511,7 +508,7 @@ class PolymarketMarketStream:
         self._extra: dict[str, set[str]] = {}
         self._conns: dict[str, _Conn] = {}
         self._tasks: set[asyncio.Task] = set()
-        self._retry: dict[str, tuple[int, float]] = {}  # market -> (not before local ms, next delay s)
+        self._retry: dict[str, tuple[int, Backoff]] = {}  # market -> (not before local ms, its backoff)
         self._closed = False
         self._cid = 0
         self._n = 0
@@ -735,8 +732,9 @@ class PolymarketMarketStream:
         c.unsub.extend(r for r in rids if r != refused_rid)
         c.target.discard(slug)
         self.cache.mark_unsubscribed(slug, c.id)
-        delay = self._retry.get(slug, (0, self._backoff[0]))[1]
-        self._retry[slug] = (self._clock() + int(delay * 1000), min(delay * 2, self._backoff[1]))
+        backoff = self._retry[slug][1] if slug in self._retry else Backoff(*self._backoff)
+        delay = backoff.next()  # full jitter, doubling per refusal (adapters/retry.py)
+        self._retry[slug] = (self._clock() + int(delay * 1000), backoff)
         self.refused += 1
         log.warning("polymarket markets websocket %s: subscription for %s refused (%s); marked unsubscribed (no "
                     "quote), retrying in %.0f s", c.id, slug, why, delay)

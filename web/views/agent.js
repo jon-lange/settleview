@@ -49,11 +49,9 @@
   function load(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } }
   function save(key, v) { try { if (v == null) window.localStorage.removeItem(key); else window.localStorage.setItem(key, String(v)); } catch (e) { /* storage blocked */ } }
   function ok(x) { return typeof x === 'number' && isFinite(x); }
-  function usd(x) { return ok(x) ? (x < 0 ? '−$' : '$') + Math.abs(x).toFixed(2) : '—'; }
+  var usd = fmt.usd, signedUsd = fmt.signedUsd, pct = fmt.pct, cents = fmt.cents;  // app.js: the shared formatters
   // API spend: a wake on a cheap model costs a fraction of a cent, which "$0.00" would hide.
   function spend(x) { return ok(x) && x > 0 && x < 0.01 ? '$' + x.toFixed(4) : usd(x); }
-  function pct(p) { return ok(p) ? Math.round(p * 100) + '%' : '—'; }
-  function cents(p) { return ok(p) ? Math.round(p * 100) + '¢' : '—'; }
   function errText(e) { return (e && e.message) || String(e); }
   function refusal(r) { return (r && (r.reason || r.detail)) || 'The server refused without a reason.'; }
   function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
@@ -738,7 +736,7 @@
       },
       // session net = minus the realized net loss of closed positions (budget_parts.realized: gains negative)
       netNow: function () { var b = this.budget(); return b && b.realized != null ? -b.realized : null; },
-      netWord: function () { var n = this.netNow(); return n == null ? '—' : (n > 0.004 ? '+' : n < -0.004 ? '−' : '') + '$' + Math.abs(n).toFixed(2); },
+      netWord: function () { return signedUsd(this.netNow()); },
       tradesCount: function () { return this.positions().filter(function (p) { return ok(p.filled) && p.filled > 0; }).length; },
       pillCls: function () { var s = this.session(); return this.pill().cls + (s && s.state === 'paused' ? ' ag-pill-paused' : ''); },
       stateWord: function () { var s = this.session(); return s ? String(s.state).toUpperCase() : ''; },
@@ -881,7 +879,6 @@
   // proceeds - entry_cost - take-profit and exit fees (closed and filled only)
   function paidOf(p) { return ok(p.entry_cost) ? p.entry_cost : null; }
   function won(p) { return p.state === 'closed' && ok(p.realized) && p.realized > 0; }
-  function signedUsd(x) { return ok(x) ? (x > 0.004 ? '+' : '') + usd(x) : '—'; }
   function netCls(x) { return !ok(x) || Math.abs(x) < 0.005 ? '' : x > 0 ? 'green' : 'red'; }
   function dur(ms) {
     if (!ok(ms) || ms < 0) return '—';

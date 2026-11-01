@@ -22,8 +22,8 @@ import httpx
 
 from btc_signal_engine.adapters.kalshi.auth import KalshiAuth, load_private_key
 from btc_signal_engine.adapters.kalshi.backend import Backend, HttpxBackend, SdkBackend
-from btc_signal_engine.adapters.kalshi.client import iso_to_ms
-from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
+from btc_signal_engine.domain.timestamps import iso_to_ms
+from btc_signal_engine.adapters.retry import resend_while_busy
 
 log = logging.getLogger(__name__)
 
@@ -50,18 +50,14 @@ class KalshiPortfolio:
         self._last = 0.0
 
     async def _get(self, op: str, **params: Any) -> Any:
-        for attempt in range(self._max_attempts):
+        async def send() -> Any:
             wait = self._last + self._min_interval - time.monotonic()
             if wait > 0:
                 await self._sleep(wait)
             self._last = time.monotonic()
-            resp = await getattr(self._backend, op)(**params)
-            if resp.status_code != 429 and resp.status_code < 500:
-                break
-            delay = retry_delay(attempt, status=resp.status_code, base_s=1.0, cap_s=30.0,  # full jitter
-                                retry_after=retry_after_s(header(getattr(resp, "headers", None))))
-            log.warning("%s -> HTTP %s; retrying in %.1fs", op, resp.status_code, delay)
-            await self._sleep(delay)
+            return await getattr(self._backend, op)(**params)
+
+        resp = await resend_while_busy(send, sleep=self._sleep, what=op, attempts=self._max_attempts, logger=log)
         resp.raise_for_status()
         return resp.json()
 

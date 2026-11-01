@@ -55,9 +55,8 @@
   function load(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } }
   function save(key, v) { try { if (v == null) window.localStorage.removeItem(key); else window.localStorage.setItem(key, String(v)); } catch (e) { /* storage blocked */ } }
   function ok(x) { return typeof x === 'number' && isFinite(x); }
-  function usd(x) { return ok(x) ? (x < 0 ? '−$' : '$') + Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'; }
-  function sUsd(x) { return ok(x) ? (x > 0 ? '+' : x < 0 ? '−' : '') + '$' + Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'; }
-  function usd4(x) { return ok(x) ? (x < 0 ? '−$' : '$') + Math.abs(x).toFixed(4) : '—'; }
+  var usd = fmt.usd, sUsd = fmt.signedUsd;  // app.js: the shared formatters
+  function usd4(x) { return fmt.usd(x, 4); }
   function px(x) { return ok(x) ? '$' + x.toFixed(4) : '—'; }
   function pctf(f, dp) { return ok(f) ? (f * 100).toFixed(dp == null ? 1 : dp) + '%' : '—'; }
   function cnt(n) { return ok(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 4 }) : '—'; }

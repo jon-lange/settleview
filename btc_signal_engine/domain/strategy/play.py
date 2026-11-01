@@ -26,6 +26,7 @@ import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
+from btc_signal_engine.domain.brackets import stop_fields
 from btc_signal_engine.domain.coach.money import position_for_stake
 from btc_signal_engine.domain.settlement.fees import kalshi_fee
 
@@ -202,7 +203,7 @@ def ride_plan(side: str, strike: float | None, ask: float | None, params: RidePa
                                         else min(ask + params.take_profit_gap, 0.99), 2)
     buyable = max_price is not None and stop is not None and max_price < tp - EPS
     return {"side": side, "max_price": max_price, "take_profit": tp, "stop_level": stop,
-            "stop_index_below": stop if side == "UP" else None, "stop_index_above": stop if side == "DOWN" else None,
+            **stop_fields(side, stop),
             "buyable": buyable}
 
 

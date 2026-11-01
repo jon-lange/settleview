@@ -56,7 +56,7 @@ verification pass; each is checked against the code before it is fixed.
 - **UX safety** (B6#11): Assist Approve as press-and-hold/slide.
 - **DRY**: one bracket-net helper (~6 copies, different rounding), shared formatters (money/cents/side, minus signs),
   one Kalshi signer base with host pinning (B3#13), one ISO-time parser, one retry helper with jitter, one settings
-  upsert, the stop-for-side and market lookups.
+  upsert, the stop-for-side and market lookups. *Done 2026-11-01 (docs/solutions/2026-11-01-one-rule-per-figure.md).*
 - **Docs** (B6#13): routes missing from api.md/api-agents.md (copilot, perps, presets, prompts, proposals, telegram),
   stale "only client" text, response fields the UI relies on; `trading.py` docstring still says no unattended entry.
 - **Fee wording**: Polymarket fee rounds to the nearest cent (production fills: 2 @ 22¢ → 2¢), not up; fix the

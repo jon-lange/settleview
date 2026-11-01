@@ -40,6 +40,8 @@ from typing import Any
 
 from btc_signal_engine.application.actor import actor
 from btc_signal_engine.application.ports import Repository
+from btc_signal_engine.application.settings_store import put_setting
+from btc_signal_engine.domain.fmt import usd
 
 LIMITS_CONFIRM = "I understand this raises my limit"
 SETTING = {"strategy": "play", "key": "limits"}
@@ -140,7 +142,7 @@ def _store(v: float | None) -> float | str:
 
 
 def _money(v: float | None) -> str:
-    return "no limit" if v is None else f"${v:,.2f}"
+    return "no limit" if v is None else usd(v)
 
 
 def raises(old: float | None, new: float | None) -> bool:
@@ -216,9 +218,7 @@ class PlayLimits:
         if self.repo is None:
             self._band_mem = {**BAND_SETTING, "value": value, "updated_ts": now}
         else:
-            if not self.repo.update("strategy_settings", BAND_SETTING, {"value": value, "updated_ts": now}):
-                self.repo.insert("strategy_settings", [{**BAND_SETTING, "value": value, "updated_ts": now}],
-                                 ignore_conflicts=False)
+            put_setting(self.repo, BAND_SETTING, value, now)
             was = "unreadable" if isinstance(old, dict) else _band_text(old)
             self.repo.insert("trading_audit", [{
                 "ts": now, "event": "market_band_changed", "env": "all", "strategy": AUDIT_STRATEGY,
@@ -272,9 +272,8 @@ class PlayLimits:
         value = {f: _store(new[f]) for f in FIELDS}
         if self.repo is None:
             self._mem = {**SETTING, "value": value, "updated_ts": now}
-        elif not self.repo.update("strategy_settings", SETTING, {"value": value, "updated_ts": now}):
-            self.repo.insert("strategy_settings", [{**SETTING, "value": value, "updated_ts": now}],
-                             ignore_conflicts=False)
+        else:
+            put_setting(self.repo, SETTING, value, now)
         old_detail = old if old is not None else {"unreadable": unreadable}
         reason = (f"Phone trade limits: per trade {_money(new['per_trade'])}, per day {_money(new['per_day'])}"
                   + (f" (was {_money(old['per_trade'])} / {_money(old['per_day'])})." if old is not None

@@ -155,8 +155,10 @@ from typing import Any, Protocol
 
 from btc_signal_engine.application.actor import actor, agent_session
 from btc_signal_engine.application.ports import Repository, TradingStream
+from btc_signal_engine.application.settings_store import get_setting, put_setting
 from btc_signal_engine.domain.coach.money import position_for_stake
-from btc_signal_engine.domain import days
+from btc_signal_engine.domain import brackets, days
+from btc_signal_engine.domain.fmt import signed_usd, usd
 from btc_signal_engine.domain.coach.rules import EPS
 from btc_signal_engine.domain.markets import market, phone_markets
 from btc_signal_engine.domain.order_resolution import (FIND_GIVE_UP_MS, NOT_FILLED, PROOF_EVERY_MS, UNKNOWN, decide,
@@ -286,8 +288,7 @@ def _cents(x: float) -> str:
     return f"{x * 100:.0f}c" if abs(x * 100 - round(x * 100)) < 1e-6 else f"{x * 100:.1f}c"
 
 
-def _money(x: float) -> str:
-    return f"${x:,.2f}"
+_money = usd  # domain/fmt.py
 
 
 def _r2(x: float) -> float:
@@ -344,15 +345,13 @@ class _Steps:
         log.info("%s %s timing: %s; total %.0f ms", strategy, op, ", ".join(self.parts) or "-", total)
 
 
-def _signed_money(x: float) -> str:
-    return ("+" if x >= 0 else "-") + _money(abs(x))
+_signed_money = signed_usd
 
 
 def closed_sentence(b: dict) -> str:
     """What closed a bracket, from its recorded fills: "Your auto-sell already sold 2.65 @ 85¢ (+$1.26)." The P&L is
     the bracket's (proceeds - exit and take-profit fees - entry cost), as in `trades()`."""
-    pnl = round((b.get("proceeds") or 0.0) - (b.get("tp_fees") or 0.0) - (b.get("exit_fees") or 0.0)
-                - (b.get("entry_cost") or 0.0), 2)
+    pnl = brackets.net_cents_display(b)
     tp_n, ex_n = float(b.get("tp_filled") or 0.0), float(b.get("exit_filled") or 0.0)
     parts = []
     if tp_n > 0:
@@ -629,11 +628,10 @@ class TradingService:
         return f"{self.strategy}.{key}"
 
     def _setting(self, key: str, default: Any) -> Any:
-        rows = self._select(SETTINGS, {"key": self._skey(key)})
-        return rows[0]["value"] if rows else default
+        return get_setting(self.repo, {"key": self._skey(key)}, default, table=SETTINGS)
 
     def _put_setting(self, key: str, value: Any, now: int) -> None:
-        self._insert(SETTINGS, [{"key": self._skey(key), "value": value, "updated_ts": now}], ignore_conflicts=False)
+        put_setting(self.repo, {"key": self._skey(key)}, value, now, table=SETTINGS)
 
     def _fee(self, contracts: float, price: float, rate: float) -> float:
         return self._fee_fn(contracts, price, rate)
@@ -1797,8 +1795,7 @@ class TradingService:
                  proceeds=round(float(b.get("proceeds") or 0.0) + payout, 4),
                  exit_fees=round(float(b.get("exit_fees") or 0.0) + fee, 4))
         self._save(b, now)
-        pnl = round(b["proceeds"] - (b.get("tp_fees") or 0.0) - (b.get("exit_fees") or 0.0)
-                    - (b.get("entry_cost") or 0.0), 4)
+        pnl = brackets.net(b)
         self._audit("settled", now, bracket=b,
                     reason=(f"{b['ticker']} settled {result.upper()}: {held:.2f} {b['side']} contracts "
                             + (f"won ${payout:.2f}" if won else "lost (paid $0)") + f"; P&L {_signed_money(pnl)}."),
@@ -2554,8 +2551,7 @@ class TradingService:
         out = []
         for b in sorted(rows.values(), key=lambda r: r["created_ts"], reverse=True)[:limit]:
             closed = b["state"] == "closed"
-            pnl = (round((b.get("proceeds") or 0.0) - (b.get("tp_fees") or 0.0) - (b.get("exit_fees") or 0.0)
-                         - (b.get("entry_cost") or 0.0), 4) if closed and (b.get("filled") or 0) > 0 else None)
+            pnl = brackets.net(b) if closed and (b.get("filled") or 0) > 0 else None
             out.append({"id": b["id"], "env": b["env"], "ticker": b["ticker"], "side": b["side"], "state": b["state"],
                         "created_ts": b["created_ts"], "window_end": b["window_end"], "filled": b.get("filled") or 0.0,
                         "entry_avg": b.get("entry_avg"), "entry_cost": b.get("entry_cost"),

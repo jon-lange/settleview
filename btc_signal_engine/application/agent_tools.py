@@ -49,9 +49,12 @@ from typing import Any
 
 from btc_signal_engine.application.actor import as_agent
 from btc_signal_engine.application.agent_events import ALARM_KINDS, EVENT_CLASS, AgentEvents
-from btc_signal_engine.application.agent_sessions import BRACKETS, JOURNAL, LIVE, VENUE_LABELS, VENUES, AgentSessions
+from btc_signal_engine.application.agent_sessions import (BRACKETS, JOURNAL, LIVE, VENUE_LABELS, VENUES, AgentSessions,
+                                                          market_of_strategy)
 from btc_signal_engine.application.play import STAKE_CEILING, PlayService
 from btc_signal_engine.application.trading import TradingService
+from btc_signal_engine.domain.brackets import stop_key, stop_of
+from btc_signal_engine.domain.fmt import cents
 from btc_signal_engine.domain.markets import market as market_spec
 from btc_signal_engine.domain.strategy import play as P
 
@@ -228,10 +231,6 @@ def _locked(reason: str) -> dict:
 
 def _not_available(reason: str) -> dict:
     return {"ok": False, "code": "not_available", "reason": reason}
-
-
-def _c(x: float) -> str:
-    return f"{x * 100:.0f}¢"
 
 
 TICKET_KEYS = ("ticker", "side", "price_mode", "stake", "contracts", "sized_at", "limit_price", "cost_at_sized",
@@ -453,12 +452,12 @@ class AgentTools:
             if (side == "UP" and stop >= btc - EPS) or (side == "DOWN" and stop <= btc + EPS):
                 return _invalid(f"btc_stop ${stop:,.2f} is already reached (BTC is ${btc:,.2f}): an UP stop is below "
                                 "BTC, a DOWN stop above. Nothing was done.")
-            p["stop_index_below" if side == "UP" else "stop_index_above"] = float(stop)
+            p[stop_key(side)] = float(stop)
         return {"ok": True, "proposal": p}
 
     def _bracket_market(self, ctx: Ctx, bracket_id: str) -> tuple[str | None, dict | None]:
         rows = self.sessions.repo.select(BRACKETS, {"id": bracket_id}, limit=1)
-        key = next((k for k, s in VENUES.items() if rows and rows[0].get("strategy") == s), None)
+        key = market_of_strategy(rows[0].get("strategy")) if rows else None
         if key is None or self._svc(key) is None:
             return None, {"ok": False, "code": "not_found", "reason": "There is no such position; nothing was done."}
         return key, self._refuse_market(ctx, key)
@@ -564,9 +563,9 @@ class AgentTools:
         ticket = {k: t.get(k) for k in TICKET_KEYS}
         why = []
         if t["limit_price"] > args["max_price"] + EPS:
-            how = (f"a market buy sized at the {_c(t['sized_at'])} ask may pay up to {_c(t['limit_price'])}"
-                   if t["price_mode"] == "market" else f"its limit is {_c(t['limit_price'])}")
-            why.append(f"{how}, above your max_price {_c(args['max_price'])}")
+            how = (f"a market buy sized at the {cents(t['sized_at'])} ask may pay up to {cents(t['limit_price'])}"
+                   if t["price_mode"] == "market" else f"its limit is {cents(t['limit_price'])}")
+            why.append(f"{how}, above your max_price {cents(args['max_price'])}")
         if t["max_cost"] > args["max_worst_case"] + EPS:
             why.append(f"its worst case is ${t['max_cost']:.2f}, above your max_worst_case "
                        f"${args['max_worst_case']:.2f}")
@@ -609,7 +608,7 @@ class AgentTools:
         if self._rule_bracket(ctx, args["bracket_id"]):
             b = self.sessions.repo.select(BRACKETS, {"id": args["bracket_id"]}, limit=1)[0]
             up = b["side"] == "UP"
-            cur = b.get("stop_index_below") if up else b.get("stop_index_above")
+            cur = stop_of(b)
             if level is None:
                 return _locked("This position was opened by a rule: its code BTC stop cannot be removed by the "
                                "agent. Nothing was changed.")

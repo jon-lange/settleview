@@ -114,11 +114,14 @@ from typing import Any, Protocol
 
 from btc_signal_engine.application.actor import current_actor
 from btc_signal_engine.application.agent_fleet_view import FleetView
-from btc_signal_engine.application.agent_sessions import SESSIONS, VENUE_LABELS, VENUES, remote_human
+from btc_signal_engine.application.agent_sessions import SESSIONS, VENUE_LABELS, VENUES, market_of_strategy, remote_human
 from btc_signal_engine.application.ports import Repository
+from btc_signal_engine.application.settings_store import get_setting, put_setting
 from btc_signal_engine.application import record_summary as rec
 from btc_signal_engine.application.recorder_health import RecorderWatch, change_text, coverage_text
 from btc_signal_engine.application.rule_scores import BRACKETS, JOURNAL, OPEN_STATES, SETTLING
+from btc_signal_engine.domain import brackets, fmt
+from btc_signal_engine.domain.fmt import MINUS, side_word, usd
 
 log = logging.getLogger(__name__)
 
@@ -140,7 +143,6 @@ PIN_EDIT_MS = 60_000  # the pinned status is edited at most this often (at once 
 STOP_CONFIRM_MS = 10_000  # the menu's Stop: the Yes, stop button works this long
 MAX_CHARS = 4096  # Telegram's message limit
 REASON_CHARS = 300  # a reason / pause text in a message is cut to this
-MINUS = "−"  # U+2212: negative amounts
 ACTIVITY_GAP_MS = 20_000  # activity lines: at most one message this often (a burst is one message)
 DIGEST_MS = 3_600_000
 HEADS_EVERY_MS = 5_000
@@ -368,35 +370,16 @@ def cut_html(t: str, limit: int) -> str:
     return "".join(out).rstrip() + CUT + "".join(f"</{n}>" for n in reversed(stack))
 
 
-def usd(x: float) -> str:
-    return (MINUS + "$" if x < 0 else "$") + f"{abs(x):,.2f}"
-
-
-def signed(x: float) -> str:
-    r = round(float(x), 2)
-    return ("+" if r >= 0 else MINUS) + f"${abs(r):,.2f}"
+signed = fmt.signed_usd  # domain/fmt.py: the shared money, cents and side formatters
+money = fmt.usd_short
 
 
 def cents(p: float | None) -> str:
-    return "?" if p is None else f"{round(p * 100):.0f}¢"
+    return fmt.cents(p, missing="?")
 
 
-def side_word(side: str | None) -> str:
-    return "Up" if side == "UP" else "Down" if side == "DOWN" else str(side)
-
-
-_net4 = rec.net4  # a bracket's net after every fee (application/record_summary.py, shared with the Record tab)
-
-
-def _net(b: dict) -> float:
-    return round(_net4(b), 2)
-
-
-def money(x: float) -> str:
-    """Dollars, whole ones without cents: "$1", "$0.86", "-$0.40"."""
-    r = round(abs(float(x)), 2)
-    s = f"${r:,.0f}" if abs(r - round(r)) < 1e-9 else f"${r:,.2f}"
-    return (MINUS if x < -0.004 else "") + s
+_net4 = brackets.net  # a bracket's net after every fee (domain/brackets.py, shared with the Record tab)
+_net = brackets.net_cents_display  # that net in whole cents, for a message
 
 
 def btc_usd(x: float) -> str:
@@ -437,7 +420,7 @@ def _plain_reason(reason: str | None) -> str:
 
 
 def _stop_of(b: dict) -> float | None:
-    v = b.get("stop_index_below") if b.get("side") == "UP" else b.get("stop_index_above")
+    v = brackets.stop_of(b)
     return float(v) if v is not None else None
 
 
@@ -450,8 +433,7 @@ def _cost(b: dict) -> float:
     return float(b.get("filled") or 0.0) * float(b.get("entry_avg") or 0.0)
 
 
-def _market_of(strategy: str | None) -> str | None:
-    return next((k for k, s in VENUES.items() if s == strategy), None)
+_market_of = market_of_strategy
 
 
 def _record(n: int, wins: int, net: float) -> str:
@@ -524,13 +506,11 @@ class RemoteControl:
 
     # -- pairing and preferences (the PC's routes) --------------------------------------------------------------------
     def _setting(self, key: dict) -> dict | None:
-        rows = self.repo.select("strategy_settings", key, limit=1)
-        v = rows[0]["value"] if rows else None
+        v = get_setting(self.repo, key)
         return dict(v) if isinstance(v, dict) else None
 
     def _put(self, key: dict, value: dict, now: int) -> None:
-        if not self.repo.update("strategy_settings", key, {"value": value, "updated_ts": now}):
-            self.repo.insert("strategy_settings", [{**key, "value": value, "updated_ts": now}], ignore_conflicts=False)
+        put_setting(self.repo, key, value, now)
 
     def paired(self) -> dict | None:
         p = self._setting(PAIRING)

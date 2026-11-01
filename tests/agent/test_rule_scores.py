@@ -133,7 +133,7 @@ def test_auto_retire_at_once_when_net_reaches_minus_5_dollars(store):
     assert book.enforce(NOW) == []
     seed(store, "LATERESID", P15, 1, cost=0.10, start=NOW - HOUR, prefix="b")  # -$5.00
     (ch,) = book.enforce(NOW)
-    assert ch["rule"] == "LATERESID" and ch["by"] == "auto" and "-$5" in ch["reason"]
+    assert ch["rule"] == "LATERESID" and ch["by"] == "auto" and "−$5" in ch["reason"]  # the minus sign (domain/fmt.py)
 
 
 def test_reactivation_starts_a_fresh_trial(store):

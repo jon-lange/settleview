@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from btc_signal_engine.adapters.sqlite.store import SqliteStore
-from btc_signal_engine.adapters.kalshi.client import iso_to_ms
+from btc_signal_engine.domain.timestamps import iso_to_ms
 from btc_signal_engine.application.ports import KalshiGateway
 from btc_signal_engine.domain.models.numbers import to_float
 

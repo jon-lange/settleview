@@ -92,6 +92,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from btc_signal_engine.adapters.pc_credentials import PC_COOKIE, PC_COOKIE_MS, PcCredentials
 from btc_signal_engine.application.actor import current_actor
+from btc_signal_engine.application.settings_store import get_setting, put_setting
 
 log = logging.getLogger(__name__)
 
@@ -299,15 +300,13 @@ class PinStore:
     def load(self) -> dict | None:
         if self.repo is None:
             return self._mem
-        rows = self.repo.select("strategy_settings", SETTING)
-        return rows[0]["value"] if rows else None
+        return get_setting(self.repo, SETTING)
 
     def save(self, value: dict, now: int) -> None:
         if self.repo is None:
             self._mem = dict(value)
             return
-        self.repo.insert("strategy_settings", [{**SETTING, "value": value, "updated_ts": now}],
-                         ignore_conflicts=False)
+        put_setting(self.repo, SETTING, value, now)
 
 
 class AccessGuard:

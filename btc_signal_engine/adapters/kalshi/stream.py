@@ -56,7 +56,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-from btc_signal_engine.adapters.kalshi.auth import PrivateKey, load_private_key, sign
+from btc_signal_engine.adapters.kalshi.auth import KalshiSigner, PrivateKey, load_private_key, now_ms
 from btc_signal_engine.adapters.kalshi.trading import TradingAuth, TradingViolation, normalize_order
 from btc_signal_engine.adapters.retry import Backoff
 
@@ -125,22 +125,18 @@ def trade_event(msg: dict) -> dict:
             "ts_ms": msg.get("ts_ms")}
 
 
-class WsOnlyAuth:
-    """Signs the WebSocket handshake and nothing else (for the market-data stream: no REST, no orders)."""
+class WsOnlyAuth(KalshiSigner):
+    """Signs the WebSocket handshake and nothing else (for the market-data stream: no REST, no orders; it pins no
+    REST host, so as an httpx auth it refuses every request)."""
 
-    def __init__(self, key_id: str, private_key: PrivateKey,
-                 clock_ms: Callable[[], int] = lambda: int(time.time() * 1000)) -> None:
-        self._key_id, self._key, self._clock_ms = key_id, private_key, clock_ms
+    violation = TradingViolation
+    refuses = "market-data stream refuses"
 
-    def __repr__(self) -> str:
-        return "WsOnlyAuth(<redacted>)"
+    def __init__(self, key_id: str, private_key: PrivateKey, clock_ms: Callable[[], int] = now_ms) -> None:
+        super().__init__(key_id, private_key, hosts=(), clock_ms=clock_ms)
 
-    def headers(self, method: str, path: str) -> dict[str, str]:
-        if (method, path) != ("GET", WS_PATH):
-            raise TradingViolation(f"market-data stream refuses {method} {path}")
-        ts = str(self._clock_ms())
-        return {"KALSHI-ACCESS-KEY": self._key_id, "KALSHI-ACCESS-TIMESTAMP": ts,
-                "KALSHI-ACCESS-SIGNATURE": sign(self._key, ts + method + path)}
+    def allows(self, method: str, path: str) -> bool:
+        return (method, path) == ("GET", WS_PATH)
 
 
 # The largest WebSocket frame accepted (B3#11): an orderbook_snapshot of a busy market is tens of KB; anything near

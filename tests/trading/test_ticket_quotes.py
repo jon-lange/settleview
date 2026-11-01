@@ -219,7 +219,7 @@ def test_a_stop_that_already_fired_is_reported(store):
         svc._save(bk, NOW + 1500)
         r = await svc.prepare_exit(b["id"], NOW + 2000)
         assert not r["ok"] and r["code"] == "already_closed", r
-        assert r["reason"].startswith(f"Your stop already sold {bk['exit_filled']:.2f} @ 60¢ (-$"), r
+        assert r["reason"].startswith(f"Your stop already sold {bk['exit_filled']:.2f} @ 60¢ (−$"), r
     run(go())
 
 

@@ -86,3 +86,66 @@ def test_auth_repr_never_exposes_key_material(tmp_path):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     auth = KalshiAuth("secret-key-id", load_private_key(_write_pem(tmp_path, key)))
     assert "secret-key-id" not in repr(auth) and "PRIVATE" not in repr(auth)
+
+
+# -- one signer base, host pinning (review fix plan P2 "DRY", B3#13) ----------------------------------------------------
+def _signers():
+    from btc_signal_engine.adapters.kalshi.margin import MarginAuth
+    from btc_signal_engine.adapters.kalshi.stream import WsOnlyAuth
+    from btc_signal_engine.adapters.kalshi.trading import TradingAuth
+
+    key = ed25519.Ed25519PrivateKey.generate()
+    return {"link": KalshiAuth("k", key), "trading": TradingAuth("k", key), "margin": MarginAuth("k", key, env="perp_demo"),
+            "ws": WsOnlyAuth("k", key)}
+
+
+def test_every_kalshi_credential_signs_through_the_one_base():
+    from btc_signal_engine.adapters.kalshi.auth import KalshiSigner
+
+    for s in _signers().values():
+        assert isinstance(s, KalshiSigner) and "<redacted>" in repr(s)
+
+
+@pytest.mark.parametrize(("name", "url"), [
+    ("link", "https://evil.example/trade-api/v2/portfolio/balance"),
+    ("link", "http://api.elections.kalshi.com/trade-api/v2/portfolio/balance"),  # not https
+    ("link", "https://api.elections.kalshi.com:8443/trade-api/v2/portfolio/balance"),  # not the default port
+    ("trading", "https://api.elections.kalshi.com/trade-api/v2/portfolio/balance"),  # not a trading host
+    ("trading", "https://external-api.kalshi.com.evil.example/trade-api/v2/portfolio/balance"),
+    ("margin", "https://external-api.kalshi.com/trade-api/v2/margin/positions"),  # perp_demo signs demo only
+    ("ws", "https://external-api.kalshi.com/trade-api/ws/v2"),  # the handshake signer pins no REST host
+])
+def test_a_signer_refuses_a_host_it_is_not_pinned_to_before_signing(name, url):
+    s = _signers()[name]
+    with pytest.raises(s.violation, match="host"):
+        s.url_headers("GET", url)
+    seen: list[httpx.Request] = []
+    with httpx.Client(transport=httpx.MockTransport(lambda r: seen.append(r) or httpx.Response(200)), auth=s) as c:
+        with pytest.raises(s.violation, match="host"):
+            c.get(url)
+    assert seen == []
+
+
+@pytest.mark.parametrize(("name", "url"), [
+    ("link", "https://api.elections.kalshi.com/trade-api/v2/portfolio/balance"),
+    ("link", "https://external-api.demo.kalshi.co/trade-api/v2/portfolio/balance"),
+    ("trading", "https://external-api.kalshi.com/trade-api/v2/portfolio/balance"),
+    ("trading", "https://external-api.demo.kalshi.co/trade-api/v2/portfolio/balance?limit=5"),
+    ("margin", "https://external-api.demo.kalshi.co/trade-api/v2/margin/positions"),
+])
+def test_a_pinned_host_signs_the_path_without_the_query(name, url):
+    h = _signers()[name].url_headers("GET", url)
+    assert set(h) == {"KALSHI-ACCESS-KEY", "KALSHI-ACCESS-TIMESTAMP", "KALSHI-ACCESS-SIGNATURE"}
+
+
+def test_margin_auth_keeps_its_allow_list_exclusions():
+    """AGENTS.md: MarginAuth never signs cancel-all, subaccount create or transfer, or any /margin/isolated/* path,
+    whatever the host."""
+    m = _signers()["margin"]
+    base = "https://external-api.demo.kalshi.co/trade-api/v2"
+    for method, path in [("DELETE", "/margin/orders"), ("POST", "/portfolio/subaccounts"),
+                         ("POST", "/portfolio/subaccounts/transfer"), ("GET", "/margin/isolated/positions"),
+                         ("POST", "/margin/isolated/orders"), ("GET", "/margin/isolated")]:
+        with pytest.raises(m.violation, match="refuses"):
+            m.url_headers(method, base + path)
+    assert m.url_headers("DELETE", base + "/margin/orders/abc-123")  # cancel ONE order stays allowed

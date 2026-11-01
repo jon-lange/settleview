@@ -122,6 +122,11 @@ the user's OK. Dependencies install from the hashed `uv.lock`: after changing a 
   client with the same rules: our retry loop is the only one (same `client_order_id`), the transport resends nothing,
   redirects are not followed, idle sockets drop at 30 s. Its signer (`MarginAuth`) has its own allow-list, signs for
   its env's host only, and never signs cancel-all, subaccount create or transfer, or any `/margin/isolated/*` path.
+- **Signing:** every Kalshi credential is a `KalshiSigner` (`adapters/kalshi/auth.py`): its own allow-list plus pinned
+  hosts (https, default port), checked in httpx's `auth_flow` and the SDK's auth hook alike. Never sign by hand.
+- **One rule per figure:** a bracket's net and stop (`domain/brackets.py`), money/cents/side text (`domain/fmt.py`;
+  the browser's `fmt.*` in `web/app.js`), venue date-times (`domain/timestamps.py`), a stored setting
+  (`application/settings_store.py`) and retry waits (`adapters/retry.py`) each have one function; use it.
 
 ## Running experiments
 

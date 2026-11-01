@@ -97,9 +97,11 @@ from typing import Any, Protocol
 
 from btc_signal_engine.application.actor import actor
 from btc_signal_engine.application.ports import Repository
+from btc_signal_engine.application.settings_store import get_setting, put_setting
 from btc_signal_engine.application.trading import (BALANCE_MAX_AGE_MS, OK, PROD_CONFIRM, SHARED_SETTINGS, GateResult,
                                                    _money, _Steps)
 from btc_signal_engine.domain import days
+from btc_signal_engine.domain.fmt import signed_usd, usd
 from btc_signal_engine.domain import perps as pm
 from btc_signal_engine.domain.markets import PERP_ENVS, PerpSpec, perp
 from btc_signal_engine.domain.order_resolution import (FIND_GIVE_UP_MS, PROOF_EVERY_MS, UNKNOWN, candidate_orders,
@@ -222,11 +224,11 @@ def _f(x: Any) -> float | None:
 
 
 def _usd4(x: float) -> str:
-    return f"${abs(x):,.4f}"
+    return usd(abs(x), dp=4)
 
 
 def _signed4(x: float) -> str:
-    return ("+" if x >= 0 else "-") + _usd4(x)
+    return signed_usd(x, dp=4)
 
 
 def _px(p: float) -> str:
@@ -415,12 +417,10 @@ class PerpTradingService:
         return key if key in SHARED_SETTINGS else f"{STRATEGY}.{key}"
 
     def _setting(self, key: str, default: Any) -> Any:
-        rows = self.repo.select(SETTINGS, {"key": self._skey(key)})
-        return rows[0]["value"] if rows else default
+        return get_setting(self.repo, {"key": self._skey(key)}, default, table=SETTINGS)
 
     def _put_setting(self, key: str, value: Any, now: int) -> None:
-        self.repo.insert(SETTINGS, [{"key": self._skey(key), "value": value, "updated_ts": now}],
-                         ignore_conflicts=False)
+        put_setting(self.repo, {"key": self._skey(key)}, value, now, table=SETTINGS)
         self._view_memo.clear()
 
     def _for_view(self, key: str, now: int, read: Callable[[], Any]) -> Any:

@@ -99,16 +99,13 @@
   }
   function load(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } }
   function save(key, v) { try { window.localStorage.setItem(key, String(v)); } catch (e) { /* storage blocked */ } }
-  function usd(x) { return x == null || isNaN(x) ? '—' : (x < 0 ? '−$' : '$') + Math.abs(x).toFixed(2); }
-  function sUsd(x) { return x == null || isNaN(x) ? '—' : (x > 0 ? '+' : x < 0 ? '−' : '') + '$' + Math.abs(x).toFixed(2); }
-  function c(x) { return x == null ? '—' : Math.round(x * 100) + '¢'; }
-  function pct(x) { return x == null || isNaN(x) ? '—' : Math.round(x * 100) + '%'; }
+  var usd = fmt.usd, sUsd = fmt.signedUsd, c = fmt.cents, pct = fmt.pct;  // app.js: the shared formatters
   function errText(e) { return (e && e.message) || String(e); }
   // The P&L the server wrote into an already_closed reason ("... (+$1,234.50).", trading.closed_sentence), or null
   // when the sentence carries none (e.g. settled): the banner is then neutral, never a guessed colour.
   function closedPnl(reason) {
-    var m = /\(([+-])\$([\d,]+(?:\.\d+)?)\)\.?\s*$/.exec(reason || '');
-    return m ? (m[1] === '-' ? -1 : 1) * Number(m[2].replace(/,/g, '')) : null;
+    var m = /\(([+−-])\$([\d,]+(?:\.\d+)?)\)\.?\s*$/.exec(reason || '');
+    return m ? (m[1] === '+' ? 1 : -1) * Number(m[2].replace(/,/g, '')) : null;
   }
   function usd0(x) { return usd(x).replace(/\.00$/, ''); }
   // The one day every "today" uses (the server's day zone, domain/days.py), said by name; when this device is in
@@ -1981,7 +1978,7 @@
         });
       },
       // ----- formatting: colour is never the only cue (every coloured number has its sign) -----
-      signed: function (x) { return x == null || isNaN(x) ? '—' : (x > 0.004 ? '+' : x < -0.004 ? '−' : '') + '$' + Math.abs(x).toFixed(2); },
+      signed: function (x) { return sUsd(x); },
       money: function (x) { return x == null || isNaN(x) ? '—' : (x > 0 && x < 0.01 ? '$' + x.toFixed(4) : usd(x)); },
       tone: function (x) { return x == null || Math.abs(x) < 0.005 ? '' : x > 0 ? 'pl-up' : 'pl-down'; },
       plural: function (n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); },

@@ -31,6 +31,9 @@ from collections.abc import Iterable
 
 from btc_signal_engine.application.agent_rules import RULES
 from btc_signal_engine.application.ports import Repository
+from btc_signal_engine.application.settings_store import get_setting, put_setting
+from btc_signal_engine.domain import brackets
+from btc_signal_engine.domain.fmt import usd, usd_short
 from btc_signal_engine.domain.markets import market as market_spec
 
 BRACKETS = "trading_brackets"
@@ -74,10 +77,7 @@ def trade_of(link: dict, b: dict) -> dict:
     st = b.get("state")
     state = "open" if st in OPEN_STATES else "settling" if st == SETTLING else "closed"
     cost = float(b.get("entry_cost") or 0.0)
-    net = None
-    if state == "closed" and filled > 0:
-        net = round(float(b.get("proceeds") or 0.0) - cost - float(b.get("tp_fees") or 0.0)
-                    - float(b.get("exit_fees") or 0.0), 4)
+    net = brackets.net(b) if state == "closed" and filled > 0 else None
     return {"rule": link["rule"], "market": link["market"], "bracket_id": b.get("id"), "state": state,
             "filled": filled, "cost": cost, "net": net, "created_ts": b.get("created_ts"),
             "closed_ts": b.get("closed_ts") or b.get("exit_ts") or b.get("updated_ts")}
@@ -114,14 +114,10 @@ def tally(trades: Iterable[dict], since: int | None = None) -> dict:
             "max_drawdown_usd": round(dd, 4), "last_trade_ts": last, "pending": pending, "open": opened}
 
 
-def usd(x: float) -> str:
-    return ("-$" if x < 0 else "$") + f"{abs(x):.2f}"
-
-
 def auto_reason(t: dict) -> str | None:
     """Why this trial tally retires its rule, or None."""
     if t["net_usd"] <= AUTO_LOSS + 1e-9:
-        return (f"Retired automatically: net {usd(t['net_usd'])} reached the -${abs(AUTO_LOSS):.0f} limit "
+        return (f"Retired automatically: net {usd(t['net_usd'])} reached the {usd_short(AUTO_LOSS)} limit "
                 f"({t['trades']} closed trades).")
     if t["trades"] >= AUTO_TRADES and t["net_usd"] <= AUTO_NET + 1e-9:
         return (f"Retired automatically: {t['trades']} closed trades (the {AUTO_TRADES}-trade bar) with net "
@@ -161,8 +157,7 @@ class RuleBook:
 
     def _stored(self) -> dict:
         if self._value is None:
-            rows = self.repo.select("strategy_settings", SETTING, limit=1)
-            v = rows[0]["value"] if rows else {}
+            v = get_setting(self.repo, SETTING, {})
             self._value = dict(v) if isinstance(v, dict) else {}
         return self._value
 
@@ -204,9 +199,7 @@ class RuleBook:
         return self.status(rule_id)
 
     def _write(self, value: dict, now: int) -> None:
-        if not self.repo.update("strategy_settings", SETTING, {"value": value, "updated_ts": now}):
-            self.repo.insert("strategy_settings", [{**SETTING, "value": value, "updated_ts": now}],
-                             ignore_conflicts=False)
+        put_setting(self.repo, SETTING, value, now)
         self._value = value
 
     def enforce(self, now: int, *, closed: bool = False, every_ms: int | None = None) -> list[dict] | None:

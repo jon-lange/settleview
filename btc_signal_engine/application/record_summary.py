@@ -26,7 +26,7 @@ from datetime import datetime, tzinfo
 from btc_signal_engine.application.agent_sessions import AGENTS, SESSIONS, VENUE_LABELS, VENUES, AgentSessions
 from btc_signal_engine.application.ports import Repository
 from btc_signal_engine.application.rule_scores import BRACKETS, JOURNAL
-from btc_signal_engine.domain import days
+from btc_signal_engine.domain import brackets, days
 
 DAY_MS = 86_400_000
 RANGES = ("today", "week", "all")
@@ -35,10 +35,7 @@ UTC_ZONE = days.zone(None)  # the stated default zone; the app passes the one it
 PLAY_STRATEGIES = tuple(dict.fromkeys(VENUES.values()))  # every Play strategy an agent or you trade (you, you_poly...)
 
 
-def net4(b: dict) -> float:
-    """A bracket's net after every fee, to the $0.0001."""
-    return round(float(b.get("proceeds") or 0.0) - float(b.get("entry_cost") or 0.0)
-                 - float(b.get("tp_fees") or 0.0) - float(b.get("exit_fees") or 0.0), 4)
+net4 = brackets.net  # a bracket's net after every fee, to the $0.0001 (domain/brackets.py: the one rule)
 
 
 def closed_at(b: dict) -> int:

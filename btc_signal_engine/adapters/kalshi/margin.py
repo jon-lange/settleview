@@ -68,18 +68,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
-from collections.abc import Awaitable, Callable, Generator
-from datetime import date, datetime, timedelta, UTC
+from collections.abc import Awaitable, Callable
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
 
-from btc_signal_engine.adapters.kalshi.auth import PrivateKey, sign
+from btc_signal_engine.adapters.kalshi.auth import KalshiSigner, PrivateKey, now_ms
 from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
 from btc_signal_engine.domain.markets import PERP_ENVS, PERPS, PerpSpec, allowed_perp_tickers
 from btc_signal_engine.domain.order_resolution import definitive_status
+from btc_signal_engine.domain.timestamps import iso_to_ms
 
 log = logging.getLogger(__name__)
 
@@ -156,41 +156,28 @@ class MarginUnknown(MarginError):
 
 
 # -- signing -----------------------------------------------------------------------------------------------------------
-class MarginAuth(httpx.Auth):
-    """Signs only allow-listed margin requests, and only to its own environment's REST host."""
+class MarginAuth(KalshiSigner):
+    """Signs only allow-listed margin requests (ALLOWED: never cancel-all, subaccount create or transfer, or any
+    /margin/isolated/* path), and only to its own environment's REST host. The margin stream calls `headers` for its
+    handshake."""
 
-    def __init__(self, key_id: str, private_key: PrivateKey, *, env: str,
-                 clock_ms: Callable[[], int] = lambda: int(time.time() * 1000)) -> None:
+    violation = MarginViolation
+    refuses = "margin client refuses"
+
+    def __init__(self, key_id: str, private_key: PrivateKey, *, env: str, clock_ms: Callable[[], int] = now_ms) -> None:
         if env not in PERP_ENVS:
             raise ValueError(f"margin env must be one of {PERP_ENVS}")
         self.env = env
-        self._host = httpx.URL(BASE_URLS[env]).host
-        self._key_id = key_id
-        self._key = private_key
-        self._clock_ms = clock_ms
+        super().__init__(key_id, private_key, hosts=(httpx.URL(BASE_URLS[env]).host,), clock_ms=clock_ms)
 
     def __repr__(self) -> str:
         return f"MarginAuth(env={self.env!r}, <redacted>)"
 
-    def headers(self, method: str, path: str) -> dict[str, str]:
-        """Signed KALSHI-ACCESS-* headers for one allow-listed (method, path) (path with /trade-api/..., no query);
-        the margin stream calls this for its handshake. Anything else raises."""
-        if not any(method == m and rx.match(path) for m, rx in ALLOWED):
-            raise MarginViolation(f"margin client refuses {method} {path}")
-        ts = str(self._clock_ms())
-        return {"KALSHI-ACCESS-KEY": self._key_id, "KALSHI-ACCESS-TIMESTAMP": ts,
-                "KALSHI-ACCESS-SIGNATURE": sign(self._key, ts + method + path)}
-
-    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
-        url = request.url
-        if url.scheme != "https" or url.host != self._host or url.port not in (None, 443):
-            raise MarginViolation(f"{self.env} margin client refuses host {url.host!r} (only {self._host})")
-        request.headers.update(self.headers(request.method, url.path))
-        yield request
+    def allows(self, method: str, path: str) -> bool:
+        return any(method == m and rx.match(path) for m, rx in ALLOWED)
 
 
 # -- values ------------------------------------------------------------------------------------------------------------
-_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def to_epoch_ms(value: Any, *, unit: str) -> int:
@@ -198,15 +185,7 @@ def to_epoch_ms(value: Any, *, unit: str) -> int:
     seconds beyond microseconds are truncated); "ms": integer milliseconds (WebSocket); "s": integer seconds (market
     schedule, funding-rate queries). Anything else raises: no guessing a unit from the magnitude."""
     if unit == "rfc3339":
-        if not isinstance(value, str) or "T" not in value:
-            raise ValueError(f"not an RFC3339 date-time: {value!r}")
-        try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
-        except ValueError:
-            raise ValueError(f"not an RFC3339 date-time: {value!r}") from None
-        if dt.tzinfo is None:
-            raise ValueError(f"RFC3339 date-time without an offset: {value!r}")
-        return (dt - _EPOCH) // timedelta(milliseconds=1)
+        return iso_to_ms(value)  # domain/timestamps.py: the one date-time parser
     if unit in ("ms", "s"):
         if not isinstance(value, int) or isinstance(value, bool):
             raise ValueError(f"not an integer timestamp: {value!r}")

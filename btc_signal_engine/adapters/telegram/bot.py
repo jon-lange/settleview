@@ -35,6 +35,7 @@ from telegram.error import BadRequest, InvalidToken, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from telegram.request import BaseRequest
 
+from btc_signal_engine.adapters.retry import Backoff
 from btc_signal_engine.application.notifier import BOT_COMMANDS, Inbound, Keyboard, RemoteControl, Tap
 
 log = logging.getLogger(__name__)
@@ -259,11 +260,11 @@ class TelegramBot:
 
     async def run(self) -> None:
         """The supervised loop: start (retrying with backoff), pump, and stop when cancelled. Never returns."""
-        backoff = self.backoff_s
+        backoff = Backoff(self.backoff_s, self.backoff_max_s)  # full jitter (adapters/retry.py)
         while True:
             try:
                 await self.start()
-                backoff = self.backoff_s
+                backoff.reset()
                 while self.app is not None and self.app.updater.running:
                     try:
                         await self.control.pump()
@@ -280,7 +281,7 @@ class TelegramBot:
                 await self.stop()
                 await asyncio.Event().wait()  # off for good (cancellation still ends it)
             except Exception as e:
-                log.warning("telegram: unreachable or failed (%s); retrying in %.0f s", type(e).__name__, backoff)
+                log.warning("telegram: unreachable or failed (%s); retrying within %.0f s", type(e).__name__,
+                            backoff.ceiling)
             await self.stop()
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, self.backoff_max_s)
+            await asyncio.sleep(backoff.next())

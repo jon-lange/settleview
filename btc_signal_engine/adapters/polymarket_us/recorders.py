@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import asyncio
 import collections
-import datetime as dt
 import json
 import logging
 import time
@@ -58,6 +57,7 @@ from sqlalchemy import Engine, insert
 from sqlalchemy.dialects import postgresql, sqlite
 
 from btc_signal_engine.adapters import telemetry
+from btc_signal_engine.domain.timestamps import iso_to_ms_or_none
 from btc_signal_engine.adapters.polymarket_us.markets import num, slug_for as _slug_for_ms, span_of
 from btc_signal_engine.adapters.sqlite.research import create_research_tables, research_write_engine
 from btc_signal_engine.adapters.sqlite.research_tables import (
@@ -188,11 +188,7 @@ class QuoteRecorder:
         slug = t.get("marketSlug")
         if not slug:
             return
-        tm = t.get("tradeTime")
-        try:
-            trade_ms = int(dt.datetime.fromisoformat(tm[:26].rstrip("Z") + "+00:00").timestamp() * 1000) if tm else None
-        except ValueError:
-            trade_ms = None
+        trade_ms = iso_to_ms_or_none(t.get("tradeTime"), naive="utc")  # domain/timestamps.py
         self._add(self.t, (self.now_ms(), trade_ms, span_of(slug), slug, num(t.get("price")), num(t.get("quantity")),
                            (t.get("maker") or {}).get("side"), json.dumps(t)[:2000]))
 

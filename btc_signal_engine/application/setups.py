@@ -24,6 +24,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from btc_signal_engine.application.agent_rules import RULES, _base, _edges, _fee, _inputs, entry_cap, evaluate
+from btc_signal_engine.domain.brackets import stop_of
+from btc_signal_engine.domain.fmt import cents, side_word
 
 GREY, AMBER, GREEN = "grey", "amber", "green"
 STATES = (GREY, AMBER, GREEN)
@@ -65,14 +67,6 @@ def ready(rule_id: str, market: str, view: dict) -> dict | None:
 def clock(s: float) -> str:
     s = max(0, int(math.ceil(s - EPS)))
     return f"{s // 60}:{s % 60:02d}"
-
-
-def cents(p: float | None) -> str:
-    return "—" if p is None else f"{round(p * 100):.0f}¢"
-
-
-def side_word(side: str) -> str:
-    return "Up" if side == "UP" else "Down"
 
 
 def money(x: float) -> str:
@@ -248,7 +242,7 @@ def light(rule_id: str, market: str, view: dict, record: dict | None = None, bac
             "record_text": record_words(record), "backtest_text": backtest_words(backtest)}
     m = ready(rule_id, market, view)
     if m is not None:
-        stop = m["stop_index_below"] if m["side"] == "UP" else m["stop_index_above"]
+        stop = stop_of(m)
         be = break_even(view, market, m["ask"])
         details = [f"BTC {money(abs(m['gap']))} past the strike with {clock(m['left_s'])} left, "
                    f"{side_word(m['side'])} at {cents(m['ask'])}.",

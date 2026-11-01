@@ -212,7 +212,7 @@ def test_close_says_flat_only_after_the_exchange_confirms(store):
         v = svc.view(NOW + 50)
         assert v["position"] is None and v["outcome"]["kind"] == "closed"
         # realized (7.7969 - 7.7971) x 3 = -0.0006; fees 0.0281 + 0.0281
-        assert v["outcome"]["text"] == ("Flat. You closed 3 long @ $7.7969 avg. Realized P&L -$0.0568 (fees "
+        assert v["outcome"]["text"] == ("Flat. You closed 3 long @ $7.7969 avg. Realized P&L −$0.0568 (fees "
                                         "$0.0562, funding +$0.0000).")
         row = store.select("perp_positions", {"env": fx.env})[0]
         assert (row["state"], row["close_reason"], row["realized_pnl"]) == ("closed", "user_close", -0.0568)

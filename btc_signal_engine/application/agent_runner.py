@@ -98,11 +98,13 @@ from btc_signal_engine.application.agent_rules import note as rule_note
 from btc_signal_engine.application.agent_proposals import AgentProposals
 from btc_signal_engine.application.agent_events import (DECISION_POINTS, POSITION_EVENTS, AgentEvents, EventsConfig,
                                                         SignalBoard, Snapshot)
-from btc_signal_engine.application.agent_sessions import BRACKETS, OPEN_STATES, SETTLING, VENUES, AgentSessions
+from btc_signal_engine.application.agent_sessions import (BRACKETS, OPEN_STATES, SETTLING, VENUES, AgentSessions,
+                                                          market_of_strategy)
 from btc_signal_engine.application.agent_tools import DECISION_KEYS, AgentTools, unrecorded_decision
 from btc_signal_engine.application.play import PlayService
 from btc_signal_engine.application.ports import (AgentHarness, Clock, LlmBadRequest, LlmInvalidKey,
                                                  LlmMisconfigured, LlmUnavailable, TurnUsage, WakeResult)
+from btc_signal_engine.domain import brackets
 from btc_signal_engine.domain.markets import market as market_spec
 
 log = logging.getLogger(__name__)
@@ -504,14 +506,13 @@ class AgentRunner:
                 mine.add(bid)
             if not push or prev == state or bid in quiet:
                 continue
-            key = next((k for k, strat in VENUES.items() if strat == b.get("strategy")), None)
+            key = market_of_strategy(b.get("strategy"))
             where = {"venue": market_spec(key).venue, "span": market_spec(key).span} if key else {}
             info = {"id": bid, "side": b.get("side"), "filled": filled, "state": b["state"],
                     "exit_reason": b.get("exit_reason")}
             if b["state"] not in OPEN_STATES and b["state"] != SETTLING and filled > 0:  # closed: its result
                 info.update(held=b.get("held"), proceeds=b.get("proceeds"),
-                            pnl=round((b.get("proceeds") or 0.0) - (b.get("entry_cost") or 0.0)
-                                      - (b.get("tp_fees") or 0.0) - (b.get("exit_fees") or 0.0), 4))
+                            pnl=brackets.net(b))
             if filled > (prev[1] if prev else 0.0):
                 self.events.push(now, "fill", **where, value={"brackets": [info]})
             if b["state"] == SETTLING:  # window closed, result pending: the "settled" event comes with the result
@@ -640,7 +641,7 @@ class AgentRunner:
     async def _rule_entry_run(self, now: int, s: dict, rid: str, market: str, m: dict) -> dict:
         sid, rule = self.session_id, RULES[rid]
         per_trade = float(s["limits"]["per_trade"])
-        stop = m["stop_index_below"] if m["side"] == "UP" else m["stop_index_above"]
+        stop = brackets.stop_of(m)
         text = rule_note(m)
         # the one cap rule (agent_rules.entry_cap): the matched ask + 2c, never above the rule's cap, as Assist
         cap = entry_cap(rule, m.get("ask"))
@@ -681,7 +682,7 @@ class AgentRunner:
         # the rule's own fill is told by rule_entry, not as a fill; every other position's news still is
         self._scan(self.now(), push=True, quiet={bracket_id} if bracket_id else frozenset())
 
-        stop = m.get("stop_index_below") if m["side"] == "UP" else m.get("stop_index_above")
+        stop = brackets.stop_of(m)
         spec = market_spec(market)
         if stop is None:
             invalidation = "None: the rule has no stop (no stop); it rides to settlement."
@@ -1075,8 +1076,7 @@ class AgentRunner:
         shown = [{k: b.get(k) for k in self.TRADE_KEYS} for b in rows
                  if b["state"] in OPEN_STATES or b["state"] == SETTLING or id(b) in keep]
         filled = [b for b in closed if float(b.get("filled") or 0) > 0]
-        nets = [(b.get("proceeds") or 0.0) - (b.get("entry_cost") or 0.0) - (b.get("tp_fees") or 0.0)
-                - (b.get("exit_fees") or 0.0) for b in filled]
+        nets = [brackets.net(b) for b in filled]
         return shown, {"closed": len(closed), "closed_shown": len(keep), "filled": len(filled),
                        "won": sum(1 for x in nets if x > 0), "lost": sum(1 for x in nets if x <= 0),
                        "net": round(sum(nets), 4)}

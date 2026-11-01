@@ -26,6 +26,7 @@ import logging
 from collections.abc import Callable, Iterable
 
 from btc_signal_engine.application.ports import MarketStore, Repository
+from btc_signal_engine.application.settings_store import put_setting
 from btc_signal_engine.domain.coach.fair_value import HISTORY_MS, fair_from_index
 from btc_signal_engine.domain.settlement.settlement import window_average
 
@@ -149,8 +150,7 @@ class CoachService:
         """Persisted, so it survives restarts."""
         self._paused = bool(paused)
         self._paused_since = now
-        self._repo.insert(SETTINGS, [{"key": "paused", "value": {"paused": self._paused}, "updated_ts": now}],
-                          ignore_conflicts=False)
+        put_setting(self._repo, {"key": "paused"}, {"paused": self._paused}, now, table=SETTINGS)
         return self.pause_state()
 
     # -- per-window chart series ------------------------------------------------------------------------

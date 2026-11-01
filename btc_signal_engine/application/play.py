@@ -33,6 +33,7 @@ from datetime import tzinfo
 
 from btc_signal_engine.application.trading import TradingService
 from btc_signal_engine.domain import days
+from btc_signal_engine.domain.brackets import stop_of
 from btc_signal_engine.domain.markets import phone_markets, venue as venue_spec
 from btc_signal_engine.domain.strategy import play as P
 
@@ -170,7 +171,7 @@ class PlayService:
         bid = view.get("bid")
         if bid is None and quote and quote.get("ticker") == view["ticker"] and view["env"] != "demo":
             bid = quote.get("yes_bid" if side == "UP" else "no_bid")  # same real book (shadow / production)
-        stop = view.get("stop_index_below") if side == "UP" else view.get("stop_index_above")
+        stop = stop_of(view, side)
         held, filled = float(view.get("held") or 0.0), float(view.get("filled") or 0.0)
         cost = (round(float(view["entry_cost"]) * held / filled, 4)
                 if view.get("entry_cost") is not None and filled > 0 and held > 0 else None)

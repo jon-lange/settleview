@@ -82,7 +82,7 @@ def test_a_liquidation_closes_with_kalshis_realized_figures(store):
         v = svc.view(NOW + 5_000)
         # realized (3.1509 - 7.7971) x 3 = -13.9386; fees 0.0281 + 3.1509 x 3 x 0.12% = 0.01134 -> 0.0114
         assert v["outcome"]["kind"] == "liquidated"
-        assert v["outcome"]["text"] == ("Flat. Kalshi liquidated 3 long @ $3.1509 avg. Realized P&L -$13.9781 (fees "
+        assert v["outcome"]["text"] == ("Flat. Kalshi liquidated 3 long @ $3.1509 avg. Realized P&L −$13.9781 (fees "
                                         "$0.0395, funding +$0.0000).")
         assert store.select("perp_positions", {"env": fx.env})[0]["close_reason"] == "liquidated"
     run(go())
@@ -100,7 +100,7 @@ def test_a_partial_liquidation_keeps_it_open_at_the_new_size(store):
         assert v["outcome"]["kind"] == "liquidated_partial"
         # its realized (3.1509 - 7.7971) = -4.6462, fee 3.1509 x 0.12% = 0.00378 -> 0.0038
         assert v["outcome"]["text"] == ("Kalshi liquidated 1 of your 3 long @ $3.1509; 2 remain open. Realized on it "
-                                        "-$4.6500 incl. its fee.")
+                                        "−$4.6500 incl. its fee.")
         await svc.tick(NOW + 10_000)  # REST agrees: nothing diverged
         assert svc.view(NOW + 10_000)["position"]["state"] == "open"
     run(go())
@@ -130,5 +130,5 @@ def test_funding_ledger_one_row_per_funding_time_and_pnl_matches(store):
         # Kalshi's figures: realized (7.7969 - 7.7971) x 3 = -0.0006, fees 0.0281 x 2, funding -0.0023 + 0.0011
         assert abs(row["realized_pnl"] - (-0.0006 - 0.0562 - 0.0012)) <= 0.01
         assert row["realized_pnl"] == -0.058 and row["funding_total"] == -0.0012
-        assert "funding -$0.0012" in svc.view(later)["outcome"]["text"]
+        assert "funding −$0.0012" in svc.view(later)["outcome"]["text"]
     run(go())

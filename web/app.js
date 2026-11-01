@@ -46,6 +46,28 @@
     }
   };
 
+  // ---------- money, cents, percent: the browser's copy of domain/fmt.py (one style on every screen) ----------
+  // Dollars "$1,234.50" / "−$0.40" (U+2212 before the $, separators, rounded as Python's f"{x:,.2f}" rounds: toFixed);
+  // signed "+$0.56" / "−$0.40" / "$0.00" (the sign follows the amount shown, so a tiny loss never reads "−$0.00");
+  // cents "43¢"; percent "55%". A missing or non-numeric figure is "—".
+  var MINUS = '−', DASH = '—';
+  function isNum(x) { return typeof x === 'number' ? isFinite(x) : typeof x === 'string' && x.trim() !== '' && isFinite(x); }
+  function grouped(s) {
+    var i = s.indexOf('.'), whole = i < 0 ? s : s.slice(0, i);
+    return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (i < 0 ? '' : s.slice(i));
+  }
+  function dollars(x, dp) { return '$' + grouped(Math.abs(x).toFixed(dp == null ? 2 : dp)); }
+  fmt.num = isNum;
+  fmt.usd = function (x, dp) { if (!isNum(x)) return DASH; x = Number(x); return (x < 0 ? MINUS : '') + dollars(x, dp); };
+  fmt.signedUsd = function (x, dp) {
+    if (!isNum(x)) return DASH;
+    x = Number(x);
+    var zero = Number(Math.abs(x).toFixed(dp == null ? 2 : dp)) === 0;
+    return (zero ? '' : x > 0 ? '+' : MINUS) + dollars(x, dp);
+  };
+  fmt.cents = function (p) { return isNum(p) ? Math.round(Number(p) * 100) + '¢' : DASH; };
+  fmt.pct = function (p) { return isNum(p) ? Math.round(Number(p) * 100) + '%' : DASH; };
+
   // ---------- API client ----------
   function ApiError(status, body, message) {
     this.name = 'ApiError'; this.status = status; this.body = body; this.message = message;

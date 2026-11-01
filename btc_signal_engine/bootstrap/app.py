@@ -73,6 +73,7 @@ from btc_signal_engine.adapters.kalshi.portfolio import portfolio_from_settings
 from btc_signal_engine.adapters.kalshi.shadow import ShadowExchange, ShadowStream, shadow_trading
 from btc_signal_engine.adapters.kalshi.stream import market_stream_from_settings, stream_from_settings
 from btc_signal_engine.adapters.kalshi.trading import trading_from_settings
+from btc_signal_engine.adapters.retry import full_jitter
 from btc_signal_engine.adapters.polymarket_us.client import sdk_client
 from btc_signal_engine.adapters.polymarket_us.market_data import PolymarketMarketData, PolymarketMarketStream
 from btc_signal_engine.adapters.polymarket_us.markets import SERIES as PM_SERIES, MarketTerms, slug_for
@@ -315,8 +316,9 @@ def _feed_trimmed(n: int) -> dict:
 
 async def startup_read(what: str, read: Callable[[], Any], *, attempts: int = STARTUP_READ_ATTEMPTS,
                        backoff_s: float = STARTUP_READ_BACKOFF_S) -> Any:
-    """`read()`, a read-only store call (safe to repeat), retried with doubling waits on a transient database error.
-    A non-transient error, or the last failure, is raised after an error line naming the read: never a silent default."""
+    """`read()`, a read-only store call (safe to repeat), retried on a transient database error with doubling, fully
+    jittered waits (adapters/retry.py). A non-transient error, or the last failure, is raised after an error line
+    naming the read: never a silent default."""
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
     for attempt in range(1, attempts + 1):
@@ -328,7 +330,7 @@ async def startup_read(what: str, read: Callable[[], Any], *, attempts: int = ST
                 log.error("startup: %s failed (%s: %s) after %d attempt(s); the start stops here", what,
                           type(exc).__name__, first, attempt)
                 raise
-            wait = backoff_s * 2 ** (attempt - 1)
+            wait = full_jitter(attempt - 1, backoff_s, backoff_s * 2 ** (attempts - 1))  # adapters/retry.py
             log.warning("startup: %s failed (%s: %s), attempt %d of %d; retrying in %.0f s", what,
                         type(exc).__name__, first, attempt, attempts, wait)
             await asyncio.sleep(wait)

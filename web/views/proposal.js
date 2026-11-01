@@ -29,7 +29,7 @@
   var HOLD_LABEL = 'Hold to approve', CONFIRM_LABEL = 'Confirm approve';
 
   function ok(x) { return typeof x === 'number' && isFinite(x); }
-  function usd(x) { return ok(x) ? (x < 0 ? '−$' : '$') + Math.abs(x).toFixed(2) : '—'; }
+  var usd = window.BTC.fmt.usd;  // app.js: the shared money formatter (domain/fmt.py's style)
   function h(tag, cls, text) {
     var el = document.createElement(tag);
     if (cls) el.className = cls;

@@ -44,6 +44,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from btc_signal_engine.domain.brackets import stop_fields, stop_of
 from btc_signal_engine.domain.markets import market as market_spec
 from btc_signal_engine.domain.settlement.fees import kalshi_fee, polymarket_fee
 
@@ -139,9 +140,7 @@ def _cutoff_ms(market: str) -> int:
 
 
 def _stop(side: str, level: float) -> dict:
-    level = round(level, 2)
-    return {"stop_index_below": level, "stop_index_above": None} if side == "UP" else {
-        "stop_index_below": None, "stop_index_above": level}
+    return stop_fields(side, round(level, 2))
 
 
 NO_STOP = {"stop_index_below": None, "stop_index_above": None}
@@ -239,7 +238,7 @@ def evaluate(rule_id: str, market: str, view: dict) -> dict | None:
 
 def note(m: dict) -> str:
     """The audit note of a rule entry: the tag and every input used."""
-    stop = m["stop_index_below"] if m["side"] == "UP" else m["stop_index_above"]
+    stop = stop_of(m)
     extra = "".join(f"; {k} {m[k]:.4f}" for k in ("fair_up", "fee", "residual", "edge") if m.get(k) is not None)
     stop_txt = "no stop" if stop is None else f"BTC stop {stop:.2f}"
     return (f"[rule:{m['rule']}] {m['side']} at ask {m['ask']:.2f} (cap {m['ask_cap']:.2f}) on {m['market']}; BTC "

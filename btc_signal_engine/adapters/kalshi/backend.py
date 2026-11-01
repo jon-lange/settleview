@@ -22,8 +22,8 @@ a backend for one named operation (`create_order`, `get_orders`, ...) and read b
   while the OS resolver answered in 2-24 ms. Redirects are not followed
   (`allow_redirects=False`): a 3xx comes back to us as a non-definitive error, so KALSHI-ACCESS-* headers never go
   to another host. Every SDK request model is checked to carry exactly the fields we gave it (pydantic would drop an
-  unknown one silently); a mismatch is refused before sending. Requests are signed by our auth object (its
-  allow-list and its clock, `time.time()` unless injected), never by the SDK's own `KalshiAuth`.
+  unknown one silently); a mismatch is refused before sending. Requests are signed by our auth object (its pinned
+  hosts, its allow-list and its clock, `time.time()` unless injected), never by the SDK's own `KalshiAuth`.
 * `HttpxBackend`: the original httpx requests, kept for the shadow exchange (an in-memory httpx transport that fakes
   Kalshi's HTTP; the SDK speaks aiohttp and cannot be pointed at it) and for tests built on it.
 
@@ -62,7 +62,9 @@ def take_request_counts() -> dict[str, int]:
 
 
 class Signer(Protocol):
-    def headers(self, method: str, path: str) -> dict[str, str]: ...
+    """A `KalshiSigner` (adapters/kalshi/auth.py): signs a full URL only for its pinned hosts and allow-list."""
+
+    def url_headers(self, method: str, url: str) -> dict[str, str]: ...
 
 
 class TransportFailure(RuntimeError):
@@ -172,7 +174,7 @@ class _RestClient(rest.RESTClientObject):
 
 class _SdkAuth:
     """The SDK's auth hook (`ApiClient.kalshi_auth.create_auth_headers(method, url)`), answered by our signer: its
-    allow-list and its clock. The signed path is the URL's path (with /trade-api/v2, without the query)."""
+    host pinning, allow-list and clock. The signed path is the URL's path (with /trade-api/v2, without the query)."""
 
     def __init__(self, signer: Signer) -> None:
         self._signer = signer
@@ -181,7 +183,7 @@ class _SdkAuth:
         return "_SdkAuth(<redacted>)"
 
     def create_auth_headers(self, method: str, url: str) -> dict[str, str]:
-        return self._signer.headers(method.upper(), urlsplit(url).path)
+        return self._signer.url_headers(method.upper(), url)
 
 
 class Backend(Protocol):

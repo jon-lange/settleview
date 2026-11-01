@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from btc_signal_engine.domain import fmt
+
 
 def cents(x: float) -> str:
-    return f"{round(x * 100):.0f}¢"
+    return fmt.cents(x)
 
 
 def pct(p: float) -> str:

@@ -34,6 +34,7 @@ from collections.abc import Callable, Iterable
 
 from btc_signal_engine.application.agent_rules import MIN_LEFT_MS
 from btc_signal_engine.application.ports import Repository
+from btc_signal_engine.domain import brackets
 from btc_signal_engine.domain.markets import by_phone_strategy, phone_markets
 
 BRACKETS, AUDIT, INDEX, KMARKETS = "trading_brackets", "trading_audit", "index_1s", "kalshi_markets"
@@ -145,8 +146,7 @@ class YourRecord:
     # -- one closed bracket -------------------------------------------------------------------------------------------
     def _features(self, b: dict) -> dict:
         filled, cost = float(b.get("filled") or 0.0), float(b.get("entry_cost") or 0.0)
-        net = round(float(b.get("proceeds") or 0.0) - cost - float(b.get("tp_fees") or 0.0)
-                    - float(b.get("exit_fees") or 0.0), 4)
+        net = brackets.net(b)
         gap = self._shown_gap(b["id"])
         fifteen = by_phone_strategy(b["strategy"]).span == "15m"
         k = self._kalshi(int(b["window_end"])) if fifteen else None

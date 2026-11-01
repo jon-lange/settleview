@@ -40,18 +40,20 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable, Generator, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from btc_signal_engine.adapters.kalshi.auth import PrivateKey, load_private_key, sign
+from btc_signal_engine.adapters.kalshi.auth import (DEMO_HOST, PROD_HOST, KalshiSigner, PrivateKey, load_private_key,
+                                                    now_ms)
 from btc_signal_engine.adapters.kalshi.backend import Backend, HttpxBackend, SdkBackend, TransportFailure
-from btc_signal_engine.adapters.kalshi.client import book_top, iso_to_ms
+from btc_signal_engine.adapters.kalshi.client import book_top
 from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
 from btc_signal_engine.domain.markets import allowed_series
+from btc_signal_engine.domain.timestamps import iso_to_ms
 from btc_signal_engine.domain.order_resolution import TS_SLACK_MS, candidate_orders, definitive_status
 
 log = logging.getLogger(__name__)
@@ -120,27 +122,18 @@ class OrderUnknown(RuntimeError):
         self.body = body
 
 
-class TradingAuth(httpx.Auth):
-    def __init__(self, key_id: str, private_key: PrivateKey,
-                 clock_ms: Callable[[], int] = lambda: int(time.time() * 1000)) -> None:
-        self._key_id = key_id
-        self._key = private_key
-        self._clock_ms = clock_ms
+class TradingAuth(KalshiSigner):
+    """Signs only the ALLOWED (method, path) pairs, and only to the production or demo external API host (the
+    shadow exchange's in-memory transport is addressed as production)."""
 
-    def __repr__(self) -> str:
-        return "TradingAuth(<redacted>)"
+    violation = TradingViolation
+    refuses = "trading client refuses"
 
-    def headers(self, method: str, path: str) -> dict[str, str]:
-        """Signed KALSHI-ACCESS-* headers for one allow-listed (method, path); anything else raises."""
-        if not any(method == m and rx.match(path) for m, rx in ALLOWED):
-            raise TradingViolation(f"trading client refuses {method} {path}")
-        ts = str(self._clock_ms())
-        return {"KALSHI-ACCESS-KEY": self._key_id, "KALSHI-ACCESS-TIMESTAMP": ts,
-                "KALSHI-ACCESS-SIGNATURE": sign(self._key, ts + method + path)}
+    def __init__(self, key_id: str, private_key: PrivateKey, clock_ms: Callable[[], int] = now_ms) -> None:
+        super().__init__(key_id, private_key, hosts=(PROD_HOST, DEMO_HOST), clock_ms=clock_ms)
 
-    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
-        request.headers.update(self.headers(request.method, request.url.path))
-        yield request
+    def allows(self, method: str, path: str) -> bool:
+        return any(method == m and rx.match(path) for m, rx in ALLOWED)
 
 
 def _count(c: float) -> str:

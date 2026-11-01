@@ -51,6 +51,8 @@ from btc_signal_engine.application.agent_sessions import VENUES, AgentSessions, 
 from btc_signal_engine.application.agent_tools import AgentTools
 from btc_signal_engine.application.play import PlayService
 from btc_signal_engine.application.rule_scores import JOURNAL, PROPOSAL_KIND, tally
+from btc_signal_engine.domain.brackets import stop_key, stop_of
+from btc_signal_engine.domain.fmt import cents, usd
 from btc_signal_engine.domain.markets import market as market_spec
 
 log = logging.getLogger(__name__)
@@ -69,14 +71,6 @@ VIEW_KEYS = ("id", "session_id", "agent_name", "request_id", "rule", "rule_label
              "stake", "max_price", "btc_stop", "ride_to_settlement", "contracts", "max_cost", "ask", "cost_at_ask",
              "could_make", "could_lose", "sentence", "line", "reason", "inputs", "note", "record", "ttl_s",
              "created_ts", "expires_ts", "window_start", "window_end", "state", "outcome", "would")
-
-
-def _c(x: float) -> str:
-    return f"{round(x * 100):.0f}¢"
-
-
-def _usd(x: float) -> str:
-    return ("-$" if x < 0 else "$") + f"{abs(x):,.2f}"
 
 
 def _refused(code: str, reason: str) -> dict:
@@ -163,7 +157,7 @@ class AgentProposals:
         if expires <= now:
             return _refused("too_late", "Too little time is left in this window to ask you; nothing was proposed.")
         per_trade = float(lim["per_trade"])
-        stop = m["stop_index_below"] if m["side"] == "UP" else m["stop_index_above"]
+        stop = stop_of(m)
         spec = market_spec(market)
         svc = self._svc(market)
         if svc is None:
@@ -188,7 +182,7 @@ class AgentProposals:
             return {"ok": False, "code": g.get("code") or "refused", "reason": g.get("reason"), "ticket": t}
         if t["max_cost"] > per_trade + EPS or t["limit_price"] > cap + EPS:
             return _refused("outside_bounds", f"Re-priced now, its worst case is ${t['max_cost']:.2f} at up to "
-                                              f"{_c(t['limit_price'])}, outside the {_c(cap)} cap or "
+                                              f"{cents(t['limit_price'])}, outside the {cents(cap)} cap or "
                                               f"the ${per_trade:.2f} per-trade cap; nothing was proposed.")
         ask = float(m["ask"])
         n = float(t["contracts"])
@@ -202,7 +196,7 @@ class AgentProposals:
              "max_price": cap, "btc_stop": stop, "ride_to_settlement": True, "contracts": n,
              "max_cost": t["max_cost"], "ask": ask, "cost_at_ask": cost, "could_make": round(n - cost, 4),
              "could_lose": cost, "sentence": t.get("sentence"),
-             "line": f"Buy {side_word} {_usd(per_trade)} · max {_c(cap)}",
+             "line": f"Buy {side_word} {usd(per_trade)} · max {cents(cap)}",
              "reason": f"{rule_id} is ready on {spec.label}. {stop_txt[0].upper() + stop_txt[1:]}.",
              "inputs": {k: m[k] for k in INPUT_KEYS if k in m}, "note": rule_note(m),
              "record": self._record(rule_id, market), "ttl_s": lim["proposal_ttl_s"], "created_ts": now,
@@ -291,17 +285,17 @@ class AgentProposals:
                     "window_end": p["window_end"], "fair_up": p["inputs"].get("fair_up"), "price_mode": "limit",
                     "max_price": p["max_price"]}
         if p["btc_stop"] is not None:
-            proposal["stop_index_below" if p["side"] == "UP" else "stop_index_above"] = p["btc_stop"]
+            proposal[stop_key(p["side"])] = p["btc_stop"]
         per_trade = float(s["limits"]["per_trade"])
         with assist_step(p["session_id"], "approve"):
             prep = await svc.prepare(proposal, now)
             if not prep.get("ok"):
                 return prep
             t = prep["ticket"]
-            stop = t.get("stop_index_below") if p["side"] == "UP" else t.get("stop_index_above")
+            stop = stop_of(t, p["side"])
             drift = []
             if t["limit_price"] > p["max_price"] + EPS:
-                drift.append(f"its limit is {_c(t['limit_price'])}, above the proposal's max {_c(p['max_price'])}")
+                drift.append(f"its limit is {cents(t['limit_price'])}, above the proposal's max {cents(p['max_price'])}")
             if t["max_cost"] > per_trade + EPS:
                 drift.append(f"its worst case is ${t['max_cost']:.2f}, above the ${per_trade:.2f} per-trade cap")
             if t["ticker"] != p["ticker"] or t["side"] != p["side"] or stop != p["btc_stop"]:

@@ -27,6 +27,7 @@ from typing import Any
 
 from btc_signal_engine.application.agent_sessions import LaunchError, market_of
 from btc_signal_engine.application.ports import Repository
+from btc_signal_engine.application.settings_store import get_setting, put_setting
 from btc_signal_engine.domain.markets import market as market_spec
 
 SETTING = {"strategy": "agent", "key": "presets"}
@@ -54,14 +55,11 @@ class AgentPresets:
 
     # -- store ----------------------------------------------------------------------------------------------------
     def _stored(self) -> dict[str, dict]:
-        rows = self.repo.select("strategy_settings", SETTING, limit=1)
-        v = rows[0]["value"] if rows else {}
+        v = get_setting(self.repo, SETTING, {})
         return dict(v) if isinstance(v, dict) else {}
 
     def _write(self, value: dict, now: int) -> None:
-        if not self.repo.update("strategy_settings", SETTING, {"value": value, "updated_ts": now}):
-            self.repo.insert("strategy_settings", [{**SETTING, "value": value, "updated_ts": now}],
-                             ignore_conflicts=False)
+        put_setting(self.repo, SETTING, value, now)
 
     # -- reads --------------------------------------------------------------------------------------------------------
     def all(self) -> list[dict]:

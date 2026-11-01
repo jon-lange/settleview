@@ -13,8 +13,11 @@ network blip every Polymarket pool socket and both Kalshi streams reconnected in
   answer is still the floor up to that cap) plus a jittered share of the 429 backoff; without the header a 429 backs
   off from RATE_LIMIT_BASE_S (1 s), longer than a transport error or a 5xx (REQUEST_BASE_S, 0.2 s).
 * `Backoff`: a reconnect loop's state (`next()` the jittered wait, `reset()` after a connection that lasted).
+* `resend_while_busy(send, ...)`: the one loop for a SAFE read (market data, history, the read-only account link)
+  that the venue answered 429 or 5xx: re-sent up to `attempts` times with `retry_delay`'s waits; the caller raises on
+  the last response's status. Order paths keep their own loops (the order's identity rules differ per venue).
 
-This module only decides HOW LONG to wait. Whether a request may be re-sent at all stays with each client: the Kalshi
+This module decides HOW LONG to wait. Whether a request may be re-sent at all stays with each client: the Kalshi
 rule (AGENTS.md, "Venue APIs") is that our own retry loop is the only one and a re-send carries the SAME body (same
 client_order_id); a Polymarket create is never re-sent. `rng` is injectable so tests are exact.
 """
@@ -22,11 +25,14 @@ client_order_id); a Polymarket create is never re-sent. `rng` is injectable so t
 from __future__ import annotations
 
 import email.utils
+import logging
 import math
 import random
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 REQUEST_BASE_S = 0.2  # a transport error or a 5xx: 0.2 s, 0.4 s, 0.8 s ... (before jitter)
 REQUEST_CAP_S = 5.0
@@ -123,3 +129,21 @@ class Backoff:
 
     def reset(self) -> None:
         self.attempt = 0
+
+
+async def resend_while_busy(send: Callable[[], Awaitable[Any]], *, sleep: Callable[[float], Awaitable[Any]],
+                            what: str, attempts: int = 8, base_s: float = 1.0, cap_s: float = 30.0,
+                            logger: logging.Logger | None = None) -> Any:
+    """Call `send()` (one safe, read-only request; any pacing goes inside it) until its response is neither a 429 nor
+    a 5xx, at most `attempts` times, waiting `retry_delay` (full jitter over base_s doubling to cap_s, and at least a
+    429's Retry-After) after each busy answer. Returns the last response; the caller raises on its status."""
+    resp = None
+    for attempt in range(attempts):
+        resp = await send()
+        if resp.status_code != 429 and resp.status_code < 500:
+            break
+        delay = retry_delay(attempt, status=resp.status_code, base_s=base_s, cap_s=cap_s,
+                            retry_after=retry_after_s(header(getattr(resp, "headers", None))))
+        (logger or log).warning("%s -> HTTP %s; retrying in %.1fs", what, resp.status_code, delay)
+        await sleep(delay)
+    return resp

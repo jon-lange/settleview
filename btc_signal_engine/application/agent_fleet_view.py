@@ -30,19 +30,15 @@ from typing import Any
 from btc_signal_engine.application.agent_sessions import (LIVE, SESSIONS, VENUE_LABELS, VENUES, AgentSessions,
                                                           _parts)
 from btc_signal_engine.application.rule_scores import BRACKETS, JOURNAL, OPEN_STATES, SETTLING
+from btc_signal_engine.domain import brackets, fmt
 
 NEAR = 0.9
 SPARK_POINTS = 30
 CHIPS = ("Proposal", "Paused", "Holding", "Watching", "Ended")
 
 
-def _net(b: dict) -> float:
-    return round(float(b.get("proceeds") or 0.0) - float(b.get("entry_cost") or 0.0) - float(b.get("tp_fees") or 0.0)
-                 - float(b.get("exit_fees") or 0.0), 4)
-
-
-def _closed(b: dict) -> bool:
-    return b.get("state") == "closed" and float(b.get("filled") or 0) > 0
+_net = brackets.net  # domain/brackets.py: the one net rule
+_closed = brackets.closed_filled
 
 
 def _held(b: dict) -> bool:
@@ -55,8 +51,7 @@ def _left(seconds: int) -> str:
     return f"{mins // 60}h left" if mins >= 60 else f"{mins}m left"
 
 
-def _money(x: float) -> str:
-    return f"${x:,.2f}"
+_money = fmt.usd
 
 
 def _pct(used: float, total: float | None) -> float | None:

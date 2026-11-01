@@ -15,17 +15,13 @@ from typing import Any
 
 import httpx
 
-from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
+from btc_signal_engine.adapters.retry import resend_while_busy
 from btc_signal_engine.domain.models.events import Trade
+from btc_signal_engine.domain.timestamps import iso_to_ms
 
 log = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
-
-
-def iso_to_ms(s: str) -> int:
-    """ISO-8601 UTC timestamp to integer milliseconds (sub-millisecond digits truncated)."""
-    return (datetime.fromisoformat(s.replace("Z", "+00:00")) - _EPOCH) // timedelta(milliseconds=1)
 
 
 def ms_to_iso(ms: int) -> str:
@@ -52,14 +48,8 @@ async def get_with_retry(
 ) -> httpx.Response:
     """GET, retrying the same request on 429/5xx: full jitter over 1s, 2s, 4s ... (max 30s), and at least a 429's
     Retry-After (adapters/retry.py)."""
-    for attempt in range(max_attempts):
-        resp = await client.get(path, params=params)
-        if resp.status_code != 429 and resp.status_code < 500:
-            break
-        delay = retry_delay(attempt, status=resp.status_code, base_s=1.0, cap_s=30.0,
-                            retry_after=retry_after_s(header(resp.headers)))
-        log.warning("GET %s -> HTTP %s; retrying in %.1fs", path, resp.status_code, delay)
-        await sleep(delay)
+    resp = await resend_while_busy(lambda: client.get(path, params=params), sleep=sleep, what=f"GET {path}",
+                                   attempts=max_attempts, logger=log)
     resp.raise_for_status()
     return resp
 

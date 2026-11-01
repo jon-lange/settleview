@@ -112,7 +112,12 @@ our own loop is the only one and re-sends the SAME body, same `client_order_id`)
 or a 5xx; a 429 waits at least its `Retry-After` (capped at 10 s so an order path never stalls) plus up to 1 s of
 jitter, or backs off from 1 s without one. Backfill readers (Kalshi markets and portfolio, Coinbase REST): 1 s
 doubling to 30 s, at least a 429's `Retry-After`. Polymarket's shared rate limiter pauses every caller for a 429's
-`Retry-After` (1 s without one) plus jitter; a Polymarket create is still never re-sent.
+`Retry-After` (1 s without one) plus jitter; a Polymarket create is still never re-sent. The same backoff (full
+jitter) paces the Telegram bot's reconnect (2 s doubling to 5 min), the database writer while the database is not
+taking writes (its flush interval doubling to 5 s), the startup reads (2 s doubling) and a refused Polymarket market
+subscription (1 s doubling to 30 s, per market). Not jittered on purpose: order-visibility polls after a create (0.5 s
+steps), the quotes recorder's book-silence wait (5 s doubling to 120 s), the migration lock wait and the supervisor's
+restart delay (single process, minutes apart).
 
 Bounds: the Kalshi and perps WebSockets accept frames up to 8 MB, the Coinbase ws-feed up to 16 MB (a level2 snapshot
 is a few MB); the Polymarket SDK keeps its websockets default (1 MB). The Coinbase transport-to-consumer queue holds at
