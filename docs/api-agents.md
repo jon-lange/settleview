@@ -142,10 +142,13 @@ No persistent learning memory yet (plan L0's memory part comes later): just the 
 | `POST .../resume` (PC; phone types `{"confirm": "RESUME"}`) | `{confirm?}` | `{ok, session}`; `not_paused`, `cannot_resume` (kill switch, mode change, global limit), `confirm_required` |
 | `POST .../note` (PC and phone) | `{text}` (1-1000) | `{ok, note: {id, session_id, ts, text, by, state: "queued", delivered_ts}}` |
 | `POST .../rename` (PC and phone) | `{name}` | `{ok, session, agent}`: renames the session's agent; `invalid_name`, `name_taken`, `no_session` |
-| `GET .../journal?after_id=0&limit=200` | | `{ok, session_id, rows: [{id, session_id, ts, kind, data}]}` |
+| `GET .../journal?after_id=0&limit=200` (limit 1-500) | | `{ok, session_id, rows: [{id, session_id, ts, kind, data}]}`: the newest `limit` rows after `after_id`, oldest first |
 | `GET .../decisions?after_id=0` | | `{ok, session_id, rows}` |
-| `GET .../proposals` | | `{ok, session_id, pending, recent, server_ms}` (a proposal's view now carries `agent_name`) |
-| `GET .../stream` | | SSE, AG-UI events of this session only (STATE_SNAPSHOT of `{session, positions, prompts, wakes}`, then deltas and events) |
+| `GET .../proposals` | | `{ok, session_id, pending, recent, server_ms}` (see "Assist proposals"); `assist_unavailable` without assist |
+| `GET .../stream` | | SSE, AG-UI events of this session only (STATE_SNAPSHOT of `{session, positions, prompts, wakes}`, then deltas and events); `not_available` when this app has no per-session streams |
+
+Session ids in these paths are at most 40 characters (longer is 422). Every route here is open to the PC and a phone
+except where a row says otherwise.
 
 Journal kinds now include `overlap` (the KD2 warning, with `text`). The feeds carry CUSTOM `overlap_warning` (value:
 the overlap with `text` and `session_id`).
@@ -166,6 +169,100 @@ the PC or a person, whatever their address or headers. On the PC and phone liste
 Before this change the tool routes were on the PC's own port and reads needed no token; move the agent's base URL to
 the agent port. The agent can never answer a proposal, resume, change limits or a mode, or post the presence
 heartbeat: those routes need the paired PC browser or a phone's PIN session (`person_required`).
+
+## Status, scorecard and rules
+
+| route | body | answer |
+|---|---|---|
+| `GET /api/agent/status` (PC and phone) | | `{ok, in_app: {available, reason}, external: {available}, key: {present, valid, checked_ts, reason}, models: [{id, usd_per_mtok: {input, output, cache_read, cache_write}}], venues: {market key: {label, strategy, mode, rules, also_traded_by, next_agent}}, rules: [{id, markets, market_labels, label, description, status: {status, reason, at, by, since}}], allow_production, live_count, prompts: {system, user} (current versions), daily, global_limits: {limits, used}, wake_cap, settle_warnings, server_ms}` |
+| `GET /api/agent/scorecard` (PC and phone) | | `{ok, rules, rows, auto, agents, server_ms}` (below) |
+| `POST /api/agent/rules/status` (PC only) | `{rule (≤32), status: "retired" \| "active" (≤16), reason? (≤300), confirm? (≤50)}` | `{ok, changed, rule: {status, reason, at, by, since}}` |
+
+- `status`: `in_app.reason` says why an in-app session cannot launch (no key, or the key was invalid at the last
+  check); the Agent tab reads `key`, `models`, `venues`, `rules`, `allow_production`, `prompts`, `daily`,
+  `global_limits`, `settle_warnings` and `server_ms` (its clock skew). `venues.{key}.mode` is that market's trading
+  mode now (null: not in this app); `next_agent` `{agent_id, name}` is what a launch on that market with neither
+  `agent_id` nor `name` runs. `daily` is the per-day limit shared with you `{per_day, used: {pool: dollars}}`, or
+  `{error}` when it cannot be read (shown, never as zero); null when not wired. `settle_warnings`: positions on an
+  agent market still settling well after the close, `[{id, ticker, side, held, minutes, last_read, message, venue,
+  venue_label}]`, shown and never closed. `wake_cap`: the in-app wake queue's concurrency (null without a key).
+- `scorecard`: `rules` per rule `{rule, label, status, live, trial (since the last reactivation), bar: {trades, of},
+  backtest, proposals}`, `rows` per (rule, market) `{rule, market, market_label, status, live, backtest, proposals}`,
+  `auto` `{trades, net_at_or_below, loss}` (the automatic retirement bar). A tally (`live`, `trial`) is `{trades,
+  wins, win_pct, contracts, avg_price, break_even_pct, net_usd, net_c, max_drawdown_usd, last_trade_ts, pending,
+  open}`; `backtest` `{row, n, won_pct, break_even_pct, net_c, note}` or null. `agents`: see "Changed shapes".
+- `rules/status`: retiring needs no phrase; reactivating needs `confirm` exactly `REACTIVATE <rule>` (else
+  `confirm_required`) and starts a fresh 30-trade trial. An unknown rule or status is `invalid`. Setting the status
+  it already has answers `changed: false`. A change is journaled (`rule_status`) into every live session that arms the
+  rule and sent on the feeds as CUSTOM `rule_status`.
+
+## Prompts (the in-app agent's system and user prompts)
+
+Two layers, `system` and `user`, each a list of numbered versions; saving, restoring and resetting each add a new
+version (history is never rewritten). A session pins the versions it launched with (its view's `prompt_versions`), so
+an edit applies to the next run. Reads are open to the PC and a phone; writes are PC only.
+
+| route | body | answer |
+|---|---|---|
+| `GET /api/agent/prompts` | | `{ok, system: Prompt, user: Prompt, history: {system: [Hist], user: [Hist]}}` |
+| `GET /api/agent/prompts/version?layer=system\|user&version=N` | | `{ok, layer, version, text}`; `unknown_version` |
+| `POST /api/agent/prompts/save` (PC only) | `{layer, text}` | `{ok, changed, prompt: Prompt, system, user, history}` |
+| `POST /api/agent/prompts/restore` (PC only) | `{layer, version (≥0)}` | the same: that version's text saved as a new version |
+| `POST /api/agent/prompts/reset` (PC only) | `{layer}` | the same: the default saved as a new version |
+
+`Prompt` = `{layer, version, text, created_ts, is_default}`; the user layer's version 0 is the empty default (no row).
+`Hist` = `{version, created_ts, chars, preview (first 160 characters), is_default}`, newest first, at most 50 (the user
+layer ends with version 0). Refusals: `too_long` (over 60,000 characters), `empty` (a blank system prompt),
+`unknown_version`, `invalid`, `not_seeded` (no system prompt stored yet). Text identical to the current version adds
+nothing (`changed: false`). A layer other than `system` or `user` is 422.
+
+## Assist proposals
+
+An assist session never places an armed rule's match itself: it proposes it, and only the user's Approve sends it,
+through the slide's prepare -> OrderGate -> approve path (re-priced now; refused `outside_bounds` if the fresh ticket's
+limit, worst case, side, market or BTC stop moved past the proposal's). Without assist in this app every route below
+answers `assist_unavailable`.
+
+| route | body | answer |
+|---|---|---|
+| `GET /api/agent/proposals?session_id=` (PC and phone) | | `{ok, session_id, pending: [Proposal], recent: [Proposal] (that session's last 20), server_ms}`; without `session_id`: every live session's pending, `session_id` null, `recent` [] |
+| `POST /api/agent/proposals/approve` (people only) | `{id (1-64)}` | the trading approve's answer (`{ok: true, bracket, ...}`) plus `proposal`; or a refusal (with `proposal` when it names one) |
+| `POST /api/agent/proposals/skip` (people only) | `{id}` | `{ok, proposal}`; nothing is sent (past its time it is resolved `expired`) |
+
+Approve and skip need the paired PC or a phone's PIN session (403 `person_required`); a request carrying an
+`X-Agent-Token` header is refused 403 `agent_cannot_approve`. Refusals: `not_found`, `already_answered` (with
+`proposal`), `in_progress`, `expired`, `session_not_running`, `too_late`, `unavailable`, `outside_bounds`, `error`,
+or the order gate's own code; a proposal is answered once and never retried.
+
+`Proposal` = `{id, session_id, agent_name, request_id, rule, rule_label, market, market_label, ticker, side, stake,
+max_price, btc_stop, ride_to_settlement, contracts, max_cost, ask, cost_at_ask, could_make, could_lose, sentence,
+line, reason, inputs, note, record, ttl_s, created_ts, expires_ts, window_start, window_end, state (pending /
+approving / approved / skipped / expired / refused), outcome: {state, code, reason, ts, by, bracket_id} | null, would:
+{state, result, won, pnl} | null}` (`would`: how a skipped or expired proposal would have done, scored once the
+window's result is known). The proposal card (`web/views/proposal.js`) reads `id`, `line`, `reason`, `btc_stop`,
+`could_make`, `could_lose`, `max_cost`, `created_ts` and `expires_ts`. A session's stream carries CUSTOM
+`proposal_new` and `proposal_resolved`.
+
+## Presets (saved launch settings)
+
+Registered with agent mode on (`adapters/http/telegram_routes.py`, logic in `application/agent_presets.py`). A preset
+is a launch body saved under a name, so a session can start from Telegram's `/launch` without typing limits on the
+phone. It fixes everything: level, limits, rules, its one market and that market's trading mode when saved (a preset
+whose market has changed mode since is refused at `/launch`, `mode_changed`).
+
+| route | body | answer |
+|---|---|---|
+| `GET /api/agent/presets` (PC and phone) | | `{ok, presets: [{name, launch, modes: {market: mode}, created_ts}]}`, oldest first |
+| `POST /api/agent/presets` (PC only) | `{name, launch}` | `{ok, preset, replaced}` |
+| `DELETE /api/agent/presets/{name}` (PC only) | | `{ok}`; `not_found` |
+
+`launch` is the launch body without `confirm` (refused `invalid` if it has one), with `minutes` not `ends_ts`
+(`invalid`), `kind: "in_app"` only (`in_app_only`: an external session's token would have to travel over Telegram),
+and ONE market (`one_market`). It is checked with launch's own checks as a dry run, so any launch refusal code can come
+back (`unknown_model`, `not_available`, `assist_unavailable`, ...). `name`: 1-40 characters after collapsing spaces
+(`invalid_name`); saving an existing name replaces it. At most 10 presets (`too_many`). `launch.name`, when present,
+is the agent name template: the idle agent of that name runs again, else a new agent with that name (or "<name> 2"
+...).
 
 ## Changed shapes
 

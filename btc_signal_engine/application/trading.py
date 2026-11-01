@@ -5,7 +5,13 @@ immediate-or-cancel LIMIT buy at the approved max price), the take profit (a res
 approved price, placed after the entry fills, sized to what filled) and the optional stop (watched by `tick`; on
 trigger the take profit is cancelled first, then the held contracts are sold with a reduce-only marketable limit at
 the bid minus the slippage cap). Whichever exit fills first ends the other. Nothing else is ever sent without a
-fresh Yes, and new entries need a present human. There is no auto-approve and no unattended entry of any kind.
+fresh Yes, and a person's new entries need a present human.
+
+The one exception is agent mode (2026-10-30): an AI agent may enter without a Yes, but only inside a bounded agent
+session the user launched (budget, per-trade cap, end time, market, API cap). Its orders take this same path
+(prepare -> OrderGate -> approve, with a token bound to the ticket); in the gate the session's own check
+(`agent_check`) replaces the presence check, and every other check still applies. An assist session only proposes:
+the user's Approve sends it, through the same path.
 
 Modes (persisted; any credential problem falls back to the safe mode):
   sandbox  Kalshi DEMO exchange (fake money). Gated on: demo trading key configured, human present, kill switch off.
