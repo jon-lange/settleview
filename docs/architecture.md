@@ -52,6 +52,7 @@ flowchart LR
       research[(schema research<br/>pm_ws_quotes · pm_trades · pm_windows)]
     end
     backup[backup<br/>nightly pg_dump -Fc]
+    migrate[migrate · one-off job<br/>ops migrate, then exits]
     pgvol[(settleview-pg)]
     dumps[(settleview-backups<br/>7 daily + 4 weekly)]
     data[(settleview-data<br/>logs · pid · stop files)]
@@ -65,8 +66,9 @@ flowchart LR
   app <-- settleview_app --> appschema
   app -. newest rows, read-only .-> research
   app --- data
-  rq -- settleview_app --> research
-  rs -- settleview_app --> research
+  migrate -- settleview_app, before the app starts --> appschema
+  rq -- settleview_recorder --> research
+  rs -- settleview_recorder --> research
   pg --- pgvol
   backup -- settleview_backup, read-only --> pg
   backup --> dumps
@@ -99,9 +101,11 @@ processes on a SQLite file (`btcflow.db`) and the recorders' file (`polymarket_u
   ADOT, any OTLP backend).
 - **Every service has a memory and CPU limit** (docs/operations.md, "Resource limits and Postgres settings"); Postgres's
   memory settings are sized to its limit.
-- **One database server, three roles** (docs/operations.md, "Postgres"): `settleview_app` writes (the app, the
-  recorders, migrations), `settleview_research` reads only (research scripts: "research is read-only" is a database
-  permission), `settleview_backup` reads everything for `pg_dump`. Passwords are secret files.
+- **One database server, four roles** (docs/operations.md, "Postgres"): `settleview_app` writes the schema `app` (the
+  app, the migrate job) and only reads `research`; `settleview_recorder` writes `research` (the recorders) and cannot
+  reach `app` at all; `settleview_research` reads only (research scripts: "research is read-only" is a database
+  permission); `settleview_backup` reads everything for `pg_dump`. Passwords are secret files.
+- **Migrations are a one-off job** (`migrate`), finished before the app starts; the app only checks the revision.
 - **One code path, two databases.** The store's SQL is dialect-neutral SQLAlchemy (per-dialect `ON CONFLICT`,
   `RETURNING`); each engine sets its schema on the connection, so the same statements run on SQLite and Postgres.
   CI runs the whole suite on both and checks that every migration gives the same tables, columns and indexes.

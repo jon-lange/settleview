@@ -61,7 +61,7 @@ Every action should leave the project smarter (user, 2026-10-31). After any buil
 ## Runtime (default for local development and production)
 
 Docker Compose is the default way to run Settleview, locally and in production (user, 2026-10-31): one image, the
-same `compose.yaml` (app, Postgres 17, `rec-pm-quotes`, `rec-pm-settle`, `backup`; `openobserve` with the opt-in
+same `compose.yaml` (app, Postgres 17, the one-off `migrate` job, `rec-pm-quotes`, `rec-pm-settle`, `backup`; `openobserve` with the opt-in
 `observability` profile), Linux containers on any host
 (Docker Desktop on Windows/macOS, a Linux server or Swarm; Azure Container Apps / AWS with managed Postgres). Don't
 add host-specific behaviour (Windows-only scripts, `C:\` paths, arch-specific defaults); the live host is just one host.
