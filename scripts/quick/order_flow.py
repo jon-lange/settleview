@@ -4,7 +4,7 @@ Pre-registered in docs/research/order-flow.md (section 2) before any outcome was
 database (SQLite mode=ro). Appends the 20 tradable configs to data/research/experiments_results.csv
 (family "order_flow"; res "minute" is the harness's counting label, the actual resolution is print/second).
 
-  .venv/Scripts/python.exe scripts/quick/order_flow.py            # everything, prints markdown tables
+  python scripts/dev.py script scripts/quick/order_flow.py            # everything, prints markdown tables
 
 Sample: the 435 full-tape windows in data/research/kalshi_trades.db (last 820 s of each window), split
 chronologically 60% train / 40% test. Bid/ask proxy from the tape: UP ask = latest taker-YES print, UP bid =

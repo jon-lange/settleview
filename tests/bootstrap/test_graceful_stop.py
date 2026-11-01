@@ -136,7 +136,7 @@ def test_main_exits_with_code_0_after_a_clean_stop_and_logs_the_exit(tmp_path):
 
 
 def test_run_records_its_pid_for_the_deploy_script_and_removes_it_on_exit(rt, tmp_path, monkeypatch):
-    # scripts/deploy_stop.ps1 finds the app only through <data>/app.pid (the watchdog runs this checkout's .venv
+    # scripts/deploy_stop.ps1 finds the app only through <data>/app.pid (the watchdog ran a venv
     # python from another folder, so matching by executable path finds nothing).
     seen = {}
 

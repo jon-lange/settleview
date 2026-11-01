@@ -3,8 +3,9 @@ macOS: is a pid alive, the process table (pid, parent pid, command line), a forc
 the supervisor on Windows (a job object that kills them if the supervisor dies).
 
 Windows notes: `os.kill(pid, 0)` would TERMINATE the process there (any signal but the console ones is
-TerminateProcess), so liveness uses OpenProcess + GetExitCodeProcess. A `.venv` python.exe is a launcher that starts
-the real interpreter as its child, so a command line match and the parent pid matter (`ops stop` kills both).
+TerminateProcess), so liveness uses OpenProcess + GetExitCodeProcess. A virtual environment's python.exe (venv, uv) is
+a launcher that starts the real interpreter as its child, so a command line match and the parent pid matter (`ops
+stop` kills both).
 The command lines come from PowerShell's Get-CimInstance (the same source scripts/deploy_stop.ps1 used).
 """
 

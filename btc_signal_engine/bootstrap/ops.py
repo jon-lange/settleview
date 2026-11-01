@@ -5,10 +5,11 @@
       app writes its pid to <D>/app.pid at start; only that file is trusted to find it: the process must be alive and
       really run `-m btc_signal_engine` (not backfill, not a submodule). Then <D>/stop.request is created and the app
       gets --timeout seconds to exit (it flushes its writer, stops its tasks, deletes both files, logs "clean shutdown
-      (deploy)" and exits 0). If it has not exited, the FALLBACK is a forced kill of that process (and of the .venv
-      launcher that started it on Windows), said loudly; the stop file is removed so the next start does not stop at
-      once. It never kills any other process and never calls the app over HTTP. With no valid pid file but some
-      `python -m btc_signal_engine` running, it cannot tell which is the app: nothing is done (exit 3).
+      (deploy)" and exits 0). If it has not exited, the FALLBACK is a forced kill of that process (and of a virtual
+      environment's python.exe launcher that started it on Windows), said loudly; the stop file is removed so the
+      next start does not stop at once. It never kills any other process and never calls the app over HTTP. With no
+      valid pid file but some `python -m btc_signal_engine` running, it cannot tell which is the app: nothing is done
+      (exit 3).
       --hold also writes <D>/app.hold first, so the supervisor does not start the app again until `release`.
       Exit codes: 0 stopped cleanly (or no app running), 1 still running, 2 stopped by the fallback kill, 3 cannot tell.
   release [--data-dir D] [--name app]
@@ -134,7 +135,8 @@ def stop_app(data_dir: Path, timeout_s: float = 60.0, *, hold: bool = False, pol
         pid_file.unlink(missing_ok=True)  # stale: its process is gone
         return 0
     kill = [app.pid]
-    # A Windows .venv python.exe is a launcher that runs the real interpreter (the pid file's process) as a child.
+    # A Windows virtual environment's python.exe is a launcher that runs the real interpreter (the pid file's process)
+    # as a child.
     launcher = processes.process(app.ppid) if app.ppid else None
     if launcher is not None and processes.is_app(launcher.cmdline):
         kill.append(launcher.pid)

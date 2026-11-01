@@ -25,10 +25,10 @@ Databases are opened with mode=ro. Writes only under data/research/:
   experiments_report.md     tables for docs/research/2026-10-28-experiments.md (written by `report`)
 
 CLI (repo root):
-  .venv/Scripts/python.exe scripts/experiments.py run --entry forced:model:8 --exit sl10_tp15
-  .venv/Scripts/python.exe scripts/experiments.py run --entry taker:edge=3,blend=0.25,floor=0 --exit hold
-  .venv/Scripts/python.exe scripts/experiments.py grid            # families 1-3, every combination
-  .venv/Scripts/python.exe scripts/experiments.py report          # tables + multiple-testing correction
+  python scripts/dev.py experiments run --entry forced:model:8 --exit sl10_tp15
+  python scripts/dev.py experiments run --entry taker:edge=3,blend=0.25,floor=0 --exit hold
+  python scripts/dev.py experiments grid            # families 1-3, every combination
+  python scripts/dev.py experiments report          # tables + multiple-testing correction
 
 Adding a strategy: write `def my_rule(D, **params) -> (k, side)` returning, for every window, the decision
 minute k (minutes since the open, 2..12; -1 = no trade) and side (+1 UP, -1 DOWN), register it in ENTRIES,

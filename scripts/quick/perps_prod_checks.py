@@ -22,7 +22,7 @@ Guards in this script (before anything is signed): host external-api.kalshi.com 
 KXBTCPERP only; subaccounts 0 and N only; transfers total <= $4.50; position never above 2 contracts; prices within 2%
 of the mark; every order immediate-or-cancel; no cancel-all, no isolated paths. Credentials come from the app's .env
 through Settings and are never printed. User ids are redacted from saved WebSocket captures.
-Run: .venv/Scripts/python.exe scripts/quick/perps_prod_checks.py [reads | orders --users-go-ahead --subaccount N]
+Run: python scripts/dev.py script scripts/quick/perps_prod_checks.py [reads | orders --users-go-ahead --subaccount N]
 """
 
 from __future__ import annotations

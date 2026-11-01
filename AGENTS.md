@@ -81,22 +81,30 @@ add host-specific behaviour (Windows-only scripts, `C:\` paths, arch-specific de
 
 ## Environment
 
-Production runs in Linux containers, so tests and the quality gates do too: the dev container (`deploy/dev/`, compose
-project `settleview-dev`, never the live `settleview` stack) is the default on every host. It needs Docker and any
-Python 3 (standard library only) to start it; the checkout is bind-mounted, so edits need no rebuild:
+Containers for everything: development, tests, quality gates, research scripts, experiments, evals and the README
+screenshots run in Linux containers, as production does. There is no host virtualenv. The host needs Docker and any
+Python 3 (or just uv: `uv run --no-project python scripts/dev.py ...`, which uses uv's interpreter and creates no
+environment); `scripts/dev.py` (standard library only) drives the dev container (`deploy/dev/`, compose project
+`settleview-dev`, never the live `settleview` stack). The checkout is bind-mounted, so edits need no rebuild:
 
 - Tests: `python scripts/dev.py test` (the whole suite, e2e in Playwright's Chromium; any pytest arguments after it;
   check pytest's own exit code). Import contracts are part of it (`tests/architecture`); alone:
-  `python scripts/dev.py run lint-imports` (re-run once if the first run fails).
+  `python scripts/dev.py quality --only imports`.
 - Postgres: `python scripts/dev.py postgres-tests` (the `postgres`-marked tests on a throwaway Postgres 17; none may
   skip; `--full` then runs the whole suite on it).
-- Quality gates: `python scripts/dev.py quality` (Ruff in the dev container; Hadolint, ShellCheck and Trivy in their own
-  pinned containers, as CI).
+- Quality gates: `python scripts/dev.py quality` (Ruff and lint-imports in the dev container; Hadolint, ShellCheck and
+  Trivy in their own pinned containers, as CI).
+- Research: `python scripts/dev.py experiments <run|grid|report|selftest> ...` and `python scripts/dev.py script
+  <path> [args]` run a script with the checkout read-only, `data/` read-only, `data/research/` writable for new outputs
+  (and the `experiments_results.csv` append) with every database in it read-only, and `docs/research/` writable.
+  `--data DIR` points at another checkout's `data/` (a worktree has none).
+- Evals: `python scripts/dev.py evals test` (what CI runs), `evals run pipelines/pr.toml`, `evals graders`,
+  `evals export|review ...` (`data/` mounted read-only).
+- Anything else: `python scripts/dev.py run <cmd>` or `shell`. A second checkout (a worktree) running alongside sets
+  `SETTLEVIEW_DEV_PROJECT=settleview-dev-<name>` so the two never share a test Postgres.
 
-A native venv (`uv venv --python 3.13 .venv && uv pip install --python .venv -e ".[dev]"`) is optional, on any OS, for
-editor tooling and quick runs; the dev container's result is the one that counts. The host's CPU or OS never shapes a
-dependency: one pin per package, no platform markers. Do not add packages without the user's OK. The research data
-exists only on the machine that recorded it (`data/` is git-ignored).
+The host's CPU or OS never shapes a dependency: one pin per package, no platform markers. Do not add packages without
+the user's OK. The research data exists only on the machine that recorded it (`data/` is git-ignored).
 
 ## Venue APIs
 

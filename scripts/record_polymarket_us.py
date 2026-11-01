@@ -1,7 +1,7 @@
 """Compatibility shim: the Polymarket US settlement recorder now lives in the package.
 
-    python -m btc_signal_engine.recorders pm-settle [--every 5]     # preferred (any OS, any working directory)
-    .venv/Scripts/python.exe scripts/record_polymarket_us.py [--every 5]
+    docker compose up -d rec-pm-settle                              # how it runs: the compose stack's recorder service
+    python -m btc_signal_engine.recorders pm-settle [--every 5]     # the same entry point, wherever it is installed
 
 Same table and behaviour as before (pm_windows in <research dir>/polymarket_us.db; public client, no keys; see
 btc_signal_engine/adapters/polymarket_us/recorders.py). The folder is BTCFLOW_RESEARCH_DIR (default

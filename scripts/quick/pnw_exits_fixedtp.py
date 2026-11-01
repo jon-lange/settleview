@@ -1,8 +1,8 @@
 """PNW exit study 2: fixed-price maker TP (85/90/95c/none) x patient stops (pre-registered in
 docs/research/pnw-tuning.md, "Exit study 2"). Read-only on the databases.
 
-  .venv/Scripts/python.exe scripts/quick/pnw_exits_fixedtp.py train    # 20 exits x 3 slips -> experiments_results.csv
-  .venv/Scripts/python.exe scripts/quick/pnw_exits_fixedtp.py holdout  # frozen picks + ftp85_bstop-10 + live, once
+  python scripts/dev.py script scripts/quick/pnw_exits_fixedtp.py train    # 20 exits x 3 slips -> experiments_results.csv
+  python scripts/dev.py script scripts/quick/pnw_exits_fixedtp.py holdout  # frozen picks + ftp85_bstop-10 + live, once
 """
 from __future__ import annotations
 

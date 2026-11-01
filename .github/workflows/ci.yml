@@ -17,6 +17,8 @@ concurrency:
 
 jobs:
   # Quality gates (scripts/quality.py runs the same checks locally, with the same pinned tools and flags).
+  # The `.venv` in these jobs is the runner's own throwaway environment (uv, Python 3.13 on Linux); locally nothing
+  # makes one: `python scripts/dev.py test | postgres-tests | quality` run the same commands in the dev container.
   lint:
     name: Lint (Ruff, Hadolint, ShellCheck)
     runs-on: ubuntu-latest
@@ -133,7 +135,7 @@ jobs:
           fi
 
       - name: Import contracts (lint-imports)
-        run: .venv/bin/lint-imports
+        run: .venv/bin/python scripts/quality.py --only imports
 
       # The scrubbing tests fail if a token, key, cookie, signature or query secret reaches an exporter; none may be
       # skipped (the GenAI one runs the bundled Claude Code CLI against a local fake API).

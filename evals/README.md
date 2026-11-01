@@ -12,10 +12,10 @@ API.
 ## Run it
 
 ```bash
-.venv/Scripts/python.exe -m evals run pipelines/pr.toml          # the PR gate: fake model, free, a few seconds
-.venv/Scripts/python.exe -m evals run pipelines/pr.toml --trials 3 # k trials per item (seeds recorded per trial)
-.venv/Scripts/python.exe -m evals graders                        # every grader and its mutation check
-.venv/Scripts/python.exe -m pytest tests/evals -q                # what CI runs (the PR pipeline included)
+python scripts/dev.py evals run pipelines/pr.toml          # the PR gate: fake model, free, a few seconds
+python scripts/dev.py evals run pipelines/pr.toml --trials 3 # k trials per item (seeds recorded per trial)
+python scripts/dev.py evals graders                        # every grader and its mutation check
+python scripts/dev.py evals test -q                          # what CI runs (the PR pipeline included)
 ```
 
 A run writes `evals/results/<pipeline>-<UTC time>.jsonl` (one header line, one line per trial with every grader's
@@ -28,7 +28,7 @@ broken subjects caught, and the graders' mutation checks.
 Live runs are manual and cost money. The budget is enforced:
 
 ```bash
-.venv/Scripts/python.exe -m evals run pipelines/nightly.toml --live --budget-usd 5 [--api-key-file <file>]
+python scripts/dev.py evals run pipelines/nightly.toml --live --budget-usd 5 [--api-key-file <file>]
 ```
 
 The key comes from `--api-key-file` or `ANTHROPIC_API_KEY`, never from a `.env` file. The run refuses to start if
@@ -143,7 +143,7 @@ reproduce them, which makes real failures negative fixtures. A live run must pas
 
 1. **Real**: export the wake, then write a TOML that points at it.
    ```bash
-   .venv/Scripts/python.exe -m evals.export --source <db or postgres url> --ids <journal id> --split \
+   python scripts/dev.py evals export --source <db or postgres url> --ids <journal id> --split \
        --out evals/datasets/golden/frames
    ```
    The TOML needs `id`, `title`, `category`, `safety`, `source = "real"`, `mode = "frozen"`,
@@ -153,7 +153,7 @@ reproduce them, which makes real failures negative fixtures. A live run must pas
    `[[reference]]` solution (one table a turn; TOML has no null, so write `"<null>"`; `"${bracket}"` is the
    scenario's rule position), and at least one `[[mutants]]` entry (`name`, `breaks`, `turns`): a broken subject
    that must make each grader in `breaks` FAIL.
-3. Run `python -m evals run pipelines/pr.toml`. The item must pass and its mutants must be caught.
+3. Run `python scripts/dev.py evals run pipelines/pr.toml`. The item must pass and its mutants must be caught.
 
 The format is documented in `harness/items.py`. An unknown grader, a missing reference or a malformed file is an
 error, never skipped.
@@ -183,7 +183,7 @@ clean. Getting it clean took three rule fixes that the scan forced, so it was wo
 ## The error analysis (do this first)
 
 ```bash
-.venv/Scripts/python.exe -m evals.review --source <db or postgres url> --n 100
+python scripts/dev.py evals review --source <db or postgres url> --n 100
 ```
 
 This writes `evals/review/review-<name>.md` (one section a wake), `labels-<name>.csv` (your sheet) and

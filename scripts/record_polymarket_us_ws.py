@@ -1,7 +1,7 @@
 """Compatibility shim: the Polymarket US quote recorder now lives in the package.
 
-    python -m btc_signal_engine.recorders pm-quotes        # preferred (any OS, any working directory)
-    .venv/Scripts/python.exe scripts/record_polymarket_us_ws.py
+    docker compose up -d rec-pm-quotes                 # how it runs: the compose stack's recorder service
+    python -m btc_signal_engine.recorders pm-quotes    # the same entry point, wherever Settleview is installed
 
 Same tables and behaviour as before (pm_ws_quotes, pm_trades in <research dir>/polymarket_us.db; see
 btc_signal_engine/adapters/polymarket_us/recorders.py). Settings come from the environment or `.env` in the working

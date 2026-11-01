@@ -61,7 +61,8 @@ Push only that branch to the new public repository. Keep the full history in you
 
 ## 4. Check what will be published
 
-- `git status --ignored`: `.env`, `*.pem`, `data/`, `*.log`, `.venv*/` and `*.egg-info/` must show as ignored.
+- `git status --ignored`: `.env`, `*.pem`, `data/`, `*.log`, `*.egg-info/` and any `.venv*/` left from before the dev
+  container must show as ignored.
 - `git ls-files`: nothing unexpected (no databases, logs, key files, screenshots with account data).
 - The `Dockerfile` uses Python 3.12, but the project needs 3.13. Fix or remove it and `compose.yaml` before
   publishing.

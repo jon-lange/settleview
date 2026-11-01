@@ -1,8 +1,8 @@
 """PNW band study 5: entry price band under a fixed 85c TP (pre-registered in docs/research/pnw-tuning.md,
 "Band study 5"). Read-only on the databases.
 
-  .venv/Scripts/python.exe scripts/quick/pnw_band_tp85.py train    # 8 bands x 2 exits x 3 slips -> CSV; train only
-  .venv/Scripts/python.exe scripts/quick/pnw_band_tp85.py holdout  # frozen picks + live [65,80], once
+  python scripts/dev.py script scripts/quick/pnw_band_tp85.py train    # 8 bands x 2 exits x 3 slips -> CSV; train only
+  python scripts/dev.py script scripts/quick/pnw_band_tp85.py holdout  # frozen picks + live [65,80], once
 """
 from __future__ import annotations
 

@@ -10,6 +10,9 @@
 #             the checkout bind-mounted at /app (edits need no rebuild)
 #   postgres  profile `postgres`: a throwaway Postgres 17 (the version compose.yaml runs) on tmpfs; gone at `down`
 #   dev-pg    profile `postgres`: `dev` with BTCFLOW_TEST_DATABASE_URL pointing at it
+#   research  profile `research`: `dev` with the checkout READ-ONLY and docs/research/ writable, for research scripts
+#             and experiments (`dev.py script`, `dev.py experiments`); dev.py adds the data/ mounts per run (data/ is
+#             git-ignored and host-specific): data/ read-only, data/research/ writable, its SQLite files read-only
 
 name: settleview-dev
 
@@ -54,6 +57,18 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       BTCFLOW_TEST_DATABASE_URL: postgresql://postgres:dev-only-not-a-secret@postgres:5432/postgres
+
+  research:
+    <<: *dev
+    profiles: [research]
+    volumes:
+      - type: bind
+        source: ../..
+        target: /app
+        read_only: true
+      - type: bind
+        source: ../../docs/research
+        target: /app/docs/research
 
 volumes:
   uv-cache:

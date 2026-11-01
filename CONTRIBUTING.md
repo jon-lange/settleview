@@ -8,19 +8,15 @@ research honesty rules.
 
 ## Development setup
 
-Production runs in Linux containers, and so do the tests and the quality gates, on any host (Windows, macOS, Linux;
-any CPU). You need [Docker](https://docs.docker.com/get-docker/) and any Python 3 to start the dev container
-(`scripts/dev.py` uses the standard library only):
+Production runs in Linux containers, and so does all development (tests, quality gates, research scripts, evals),
+on any host (Windows, macOS, Linux; any CPU). There is no virtualenv to create. You need
+[Docker](https://docs.docker.com/get-docker/) and any Python 3 to start the dev container (`scripts/dev.py` uses the
+standard library only), or just [uv](https://docs.astral.sh/uv/):
 
 ```bash
-python scripts/dev.py test          # builds the dev container the first time, then runs the suite
-```
-
-A native venv is optional, for your editor and quick runs (Python 3.13 and [uv](https://docs.astral.sh/uv/)):
-
-```bash
-uv venv --python 3.13 .venv
-uv pip install --python .venv -e ".[dev]"
+python scripts/dev.py test                          # builds the dev container the first time, then runs the suite
+uv run --no-project python scripts/dev.py test      # the same with uv's Python (no project environment is created)
+python scripts/dev.py shell                         # a shell in the container, for anything else
 ```
 
 ## Before you open a pull request
@@ -30,7 +26,7 @@ All of these must pass (each runs in Linux containers, as CI does):
 ```bash
 python scripts/dev.py test             # the test suite (e2e and the import contracts in .importlinter included)
 python scripts/dev.py postgres-tests   # the Postgres tests, on a throwaway Postgres 17
-python scripts/dev.py quality          # Ruff, Hadolint, ShellCheck and Trivy, as CI runs them
+python scripts/dev.py quality          # Ruff, import contracts, Hadolint, ShellCheck and Trivy, as CI runs them
 ```
 
 - Keep the layers: `domain/` is pure (no I/O), `application/` talks to the outside only through ports,

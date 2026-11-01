@@ -1,12 +1,14 @@
 """Quality gates: the same checks CI runs (.github/workflows/ci.yml, jobs `lint` and `trivy`), on any OS.
 
-    python scripts/quality.py                       # everything: ruff, hadolint, shellcheck, trivy (builds the image)
+    python scripts/quality.py                       # everything: ruff, imports, hadolint, shellcheck, trivy (builds the image)
     python scripts/quality.py --only ruff           # one tool, or several: --only ruff,shellcheck
     python scripts/quality.py --only trivy --image settleview:local   # scan an image you already built (no build)
 
 Tools (exit code non-zero when any of them fails; each one's own output is shown as is):
-  ruff          `ruff check .` (pyproject.toml [tool.ruff]); from this Python's environment (`pip install -e ".[dev]"`),
-                else .venv's, else PATH
+  ruff          `ruff check .` (pyproject.toml [tool.ruff]); from this Python's environment (the dev container's, or
+                CI's), else PATH. Locally: `python scripts/dev.py quality` runs it in the dev container
+  imports       `lint-imports` (.importlinter: the layer contracts); from this Python's environment (the project
+                installed: the dev container), else PATH
   hadolint      the Dockerfiles (the app image's and deploy/dev/'s), in the official hadolint container
   shellcheck    deploy/**/*.sh at severity warning, in the official ShellCheck container
   trivy-image   the app image: vulnerabilities with a fix (HIGH, CRITICAL) and secrets
@@ -45,7 +47,7 @@ SKIP_DIRS = ["secrets", "keys", "data", ".venv", ".venv*", "venv", ".git", "node
 SKIP_FILES = [".env", ".env.*", "**/.env", "**/.env.*", "**/*.pem", "**/*.key", "compose.override.yaml"]
 CONFIG_TARGETS = ["Dockerfile", "compose.yaml", "deploy"]
 
-TOOLS = ["ruff", "hadolint", "shellcheck", "trivy-image", "trivy-config", "trivy-fs"]
+TOOLS = ["ruff", "imports", "hadolint", "shellcheck", "trivy-image", "trivy-config", "trivy-fs"]
 GROUPS = {"trivy": ["trivy-image", "trivy-config", "trivy-fs"], "all": TOOLS}
 
 
@@ -75,9 +77,6 @@ def ruff_cmd() -> list[str] | None:
         return [sys.executable, "-m", "ruff"]
     except ImportError:
         pass
-    for p in (ROOT / ".venv" / "bin" / "ruff", ROOT / ".venv" / "Scripts" / "ruff.exe"):
-        if p.is_file():
-            return [str(p)]
     exe = shutil.which("ruff")
     return [exe] if exe else None
 
@@ -85,10 +84,22 @@ def ruff_cmd() -> list[str] | None:
 def check_ruff(_a) -> int:
     cmd = ruff_cmd()
     if cmd is None:
-        say('ruff is not installed: pip install -e ".[dev]" (the pinned version is in pyproject.toml)')
+        say("ruff is not installed here: run `python scripts/dev.py quality` (the dev container has the pinned one)")
         return 1
     os.chdir(ROOT)
     return run([*cmd, "check", "."])
+
+
+def check_imports(_a) -> int:
+    # The console script next to this interpreter (the environment the project is installed in), else PATH.
+    here = Path(sys.executable).parent
+    found = [p for p in (here / "lint-imports", here / "lint-imports.exe") if p.is_file()]
+    exe = str(found[0]) if found else shutil.which("lint-imports")
+    if exe is None:
+        say("lint-imports is not installed here: run `python scripts/dev.py quality --only imports` (the dev container)")
+        return 1
+    os.chdir(ROOT)
+    return run([exe, "--no-cache"])
 
 
 DOCKERFILES = ["Dockerfile", "deploy/dev/Dockerfile"]  # the app image; the dev container (scripts/dev.py)
@@ -166,7 +177,7 @@ def _skips(dirs: list[str], files: list[str]) -> list[str]:
     return [x for d in dirs for x in ("--skip-dirs", d)] + [x for f in files for x in ("--skip-files", f)]
 
 
-CHECKS = {"ruff": check_ruff, "hadolint": check_hadolint, "shellcheck": check_shellcheck,
+CHECKS = {"ruff": check_ruff, "imports": check_imports, "hadolint": check_hadolint, "shellcheck": check_shellcheck,
           "trivy-image": check_trivy_image, "trivy-config": check_trivy_config, "trivy-fs": check_trivy_fs}
 
 

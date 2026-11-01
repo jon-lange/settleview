@@ -118,7 +118,7 @@ endpoint is configured, and nothing at all when not (the default): no endpoint, 
 Plan and decisions: [docs/plans/2026-10-31-1400-infra-observability-evaluation.md](plans/2026-10-31-1400-infra-observability-evaluation.md).
 The code: `bootstrap/telemetry.py` (set-up, sampling, the app's gauges), `bootstrap/scrub.py` (what never leaves),
 `adapters/telemetry.py` (the agent wake's GenAI spans, the writer's batch metrics). The SDK is the `otel` extra
-(`pip install -e ".[otel]"`, in the Docker image).
+(in the Docker image and the dev container).
 
 **Settings** (the standard OpenTelemetry variables; names and purpose only):
 
@@ -541,8 +541,11 @@ texts are normalized (`$1` for each value).
 
 ## Development and tests (the dev container)
 
-Production runs in Linux containers, so tests and the quality gates do too, on every host: `scripts/dev.py` (standard
-library only; any Python 3 and Docker) drives `deploy/dev/compose.yaml`. The image (`deploy/dev/Dockerfile`) is the
+Production runs in Linux containers, and so does everything a developer runs: the tests, the quality gates, research
+scripts and experiments, the evals and the README screenshots, on every host. There is no host virtualenv.
+`scripts/dev.py` (standard library only) drives `deploy/dev/compose.yaml`; the host needs Docker and any Python 3
+(`python3 scripts/dev.py ...`), or only uv (`uv run --no-project python scripts/dev.py ...`: uv's own interpreter, no
+project environment created). The image (`deploy/dev/Dockerfile`) is the
 production base (`python:3.13.18-slim-trixie`, the same digest as the root Dockerfile), uv, every extra of
 `pyproject.toml` (`dev`, `postgres`, `otel`) at its pins, and Playwright's Chromium with its system libraries; the
 checkout is bind-mounted at `/app`, so an edit needs no rebuild. Every command first runs `docker compose build`
@@ -552,7 +555,11 @@ checkout is bind-mounted at `/app`, so an edit needs no rebuild. Every command f
 python scripts/dev.py test [pytest args]     # the suite; e2e in Chromium (SETTLEVIEW_E2E_BROWSER_CHANNEL=chromium)
 python scripts/dev.py postgres-tests         # `-m postgres` on a throwaway Postgres 17, none may skip (CI's rule)
 python scripts/dev.py postgres-tests --full  # ... then the whole suite with the store on that Postgres
-python scripts/dev.py quality [args]         # scripts/quality.py: ruff in the container, the rest from the host
+python scripts/dev.py quality [args]         # scripts/quality.py: ruff + lint-imports in the container, the rest
+                                             # (hadolint, shellcheck, trivy) in their own containers from the host
+python scripts/dev.py experiments ARGS...    # scripts/experiments.py (run, grid, report, selftest), data read-only
+python scripts/dev.py script PATH [ARGS...]  # any research script (scripts/*.py, scripts/quick/*.py), the same way
+python scripts/dev.py evals test | run PIPELINE | graders | export ... | review ...   # the agent evals (evals/)
 python scripts/dev.py shell | run CMD...     # a shell, or any command, in the container
 python scripts/dev.py down                   # remove the dev project's containers, network and uv cache volume
 ```
@@ -564,29 +571,63 @@ is removed after the run. On Linux and macOS the container runs as the host user
 checkout (e2e screenshots under `tests/e2e/.artifacts/`) is yours. The image has the docker CLI and compose plugin
 for `tests/deploy/test_compose.py` (`docker compose config` only); no Docker socket is mounted.
 
-A native venv (`uv venv --python 3.13 .venv`, `uv pip install --python .venv -e ".[dev]"`) remains optional on any OS
-for an editor or a quick run; the dev container's result is the one that counts. No dependency carries a platform
-marker: a pin that a dev host cannot install is that host's problem, not a reason for a second version.
+A second checkout (a git worktree) used at the same time sets `SETTLEVIEW_DEV_PROJECT=settleview-dev-<name>`: its
+own compose project, so two `postgres-tests` runs never share, or remove, each other's Postgres (any other name is
+refused; never `settleview`). The checkout's `data/` (git-ignored, recorded data) is mounted read-only in every dev
+container, so no test, shell or command run there can change it. No dependency carries a platform marker: the
+container is the one environment.
+
+**Research scripts and experiments** (`dev.py experiments`, `dev.py script`) run in the `research` service: `dev`
+with different mounts, so a script can write only its outputs. `data/` is git-ignored and exists only on the
+machine that recorded it; `--data DIR` (before the command) or `SETTLEVIEW_DEV_DATA` names it, default
+`<checkout>/data` (from a worktree: `python scripts/dev.py --data ../btc-flow-engine/data experiments report`).
+
+| In the container | Mode | Why |
+|---|---|---|
+| `/app` (the checkout) | read-only | a research run cannot change code, tests or settings |
+| `/app/docs/research/` | read-write | write-ups and tables |
+| `/app/data/` (`btcflow.db`, backups, logs) | read-only | the app's data is only ever read |
+| `/app/data/research/` | read-write | new output files (CSV, JSON, Markdown, caches) and the `experiments_results.csv` append |
+| every `*.db` in `data/research/` (with its `-wal`, `-shm`, `-journal`) | read-only | the research databases are only ever read |
+
+The scripts still open every database with SQLite `mode=ro` (the rule); the mounts are a second, independent guard. A
+script that tries to write an existing database fails with "Read-only file system"; a script that creates a new
+database file under `data/research/` (a fetch or backfill into a new file) can. Each file is mounted by name at the
+start of the run, so a database created during a run stays writable until the next one. The live stack keeps its data
+in Postgres and its own volumes, never in a checkout's `data/`.
+
+**Evals** (`dev.py evals`): `evals test` runs `pytest tests/evals` (what CI runs); `evals run|graders|grade ...` is
+`python -m evals ...`; `evals export ...` and `evals review ...` are `python -m evals.export|review ...`. The checkout
+is read-write (results go to `evals/results/`, packs to `evals/review/`, both git-ignored) and `data/` is mounted
+read-only, so `--source data/btcflow.db` works. A live run's key: `ANTHROPIC_API_KEY` in the host's environment is
+passed through by name, and `--api-key-file F` is mounted read-only into the container for that run.
+
+**README screenshots** (`docs/images/`) come from the dev container only: `tests/e2e/test_design_pass.py` and
+`tests/e2e/test_fleet_ui.py` write them on every full run, so a screen change is re-captured with
+`python scripts/dev.py test tests/e2e/test_design_pass.py tests/e2e/test_fleet_ui.py` and the images committed with it.
+Images from another browser or OS (fonts and anti-aliasing differ) are not committed.
 
 ## Quality gates (Ruff, Trivy, Hadolint, ShellCheck)
 
 One command runs every gate, locally on any OS and in CI (`.github/workflows/ci.yml`, jobs `lint` and `trivy`, which
-call the same script). Locally the default is the dev container (`scripts/dev.py`, "Development and tests" below),
-which runs Ruff inside it and the container tools from the host's Docker:
+call the same script). Locally the default is the dev container (`scripts/dev.py`, "Development and tests" above),
+which runs Ruff and lint-imports inside it and the container tools from the host's Docker:
 
 ```bash
 python scripts/dev.py quality              # everything, as below; any scripts/quality.py arguments after it
-python scripts/quality.py                    # everything; builds the image as settleview:quality first
-python scripts/quality.py --only ruff        # or hadolint, shellcheck, trivy-image, trivy-config, trivy-fs, trivy
-python scripts/quality.py --only trivy --image settleview:local    # scan an image you already built
+python scripts/dev.py quality --only ruff  # or imports, hadolint, shellcheck, trivy-image, trivy-config, trivy-fs, trivy
+python scripts/dev.py quality --only trivy --image settleview:local    # scan an image you already built
 ```
 
-It exits non-zero when any gate fails. Ruff runs from the project's environment (`pip install -e ".[dev]"`); the other
-tools run from their official images with Docker, pinned by version and digest in `scripts/quality.py` (no install):
+It exits non-zero when any gate fails. Ruff and lint-imports run from the project's environment (the dev container;
+CI's runner installs its own); the other tools run from their official images with Docker, pinned by version and
+digest in `scripts/quality.py` (no install), so `python scripts/quality.py --only hadolint,shellcheck,trivy` also runs
+from any host Python:
 
 | Gate | Tool | What fails it |
 |---|---|---|
 | `ruff` | Ruff 0.17.1 (the `dev` extra) | any finding of the rules in `pyproject.toml` `[tool.ruff]`: pyflakes, pycodestyle errors, bugbear, pyupgrade, bandit (`S`), async, simplify |
+| `imports` | import-linter (the `dev` extra) | a broken contract in `.importlinter` (the layers; no I/O in domain and application; the Kalshi SDK only in the adapters; the supervisor never loads the app) |
 | `hadolint` | `hadolint/hadolint:v2.12.0` | a warning or error in `Dockerfile` or `deploy/dev/Dockerfile` |
 | `shellcheck` | `koalaman/shellcheck:v0.10.0` | a warning or error in `deploy/**/*.sh` |
 | `trivy-image` | `aquasec/trivy:0.76.0` | a HIGH / CRITICAL vulnerability **with a fixed version** in the image (OS and Python packages), or a secret in it |
@@ -639,7 +680,7 @@ python -m btc_signal_engine.ops release --data-dir /path/to/data       # the sup
 after the clean exit, as the old watchdog did). On Windows, `scripts\deploy_stop.ps1 -DataDir <dir> [-Hold]` is a thin
 wrapper around the same command, kept for one release.
 
-At start the app writes its process id to `<data dir>/app.pid` and deletes the file when it exits; `ops stop` finds the app only through that file (checking that the process really runs `python -m btc_signal_engine`). It creates `<data dir>/stop.request` and waits up to 60 s (`--timeout`, the same as compose's `stop_grace_period`). The app notices the file within a second, flushes its database writer, stops its tasks, deletes both files, logs `clean shutdown (deploy)` and exits with code 0. If the app hasn't exited by then, the command falls back to a forced kill of that process (and the `.venv` launcher that started it on Windows) and prints `FELL BACK TO A FORCED KILL` (rows still in the writer's buffer may be lost). It never touches other processes and never calls the app over HTTP.
+At start the app writes its process id to `<data dir>/app.pid` and deletes the file when it exits; `ops stop` finds the app only through that file (checking that the process really runs `python -m btc_signal_engine`). It creates `<data dir>/stop.request` and waits up to 60 s (`--timeout`, the same as compose's `stop_grace_period`). The app notices the file within a second, flushes its database writer, stops its tasks, deletes both files, logs `clean shutdown (deploy)` and exits with code 0. If the app hasn't exited by then, the command falls back to a forced kill of that process (and, on Windows, the virtual environment's `python.exe` launcher that started it, if any) and prints `FELL BACK TO A FORCED KILL` (rows still in the writer's buffer may be lost). It never touches other processes and never calls the app over HTTP.
 
 Exit codes: 0 stopped cleanly (or no app is running), 1 still running, 2 stopped by the fallback, 3 **cannot tell**: there is no valid pid file but some `python -m btc_signal_engine` is running (an app started before pid files existed, or with another data folder). Nothing was done; do not check out new code until the app is stopped by hand.
 
@@ -691,7 +732,7 @@ newest quote ([docs/solutions/2026-10-31-pm-quiet-book-vs-dead-book-feed.md](sol
 | `BTCFLOW_<NAME>_FILE` | Read any setting from a file instead (Docker / Swarm secrets under `/run/secrets`), e.g. `BTCFLOW_POLYMARKET_SECRET_KEY_FILE`, `BTCFLOW_TELEGRAM_BOT_TOKEN_FILE`, `BTCFLOW_ANTHROPIC_API_KEY_FILE`. One trailing newline is dropped. Setting both forms, an unknown name or an unreadable file stops the start with an error that names the variable, never the value. |
 | `BTCFLOW_TELEGRAM_BOT_USERNAME` | The Telegram bot's @username (a leading `@` is optional), shown in the pairing instruction "Send /start CODE to @name". Optional: unset, the app learns it from Telegram's `getMe` when the bot starts, and until then the Agent tab says "your bot". A value that is not a bot username (5–32 letters, digits or `_`, ending in `bot`) stops the start. |
 | `BTCFLOW_HTTP_CLIENT_LOG_LEVEL` | The `httpx` / `httpcore` loggers' level: `WARNING` (default), `INFO` (one line per request), `DEBUG`, `ERROR`. Anything else stops the start. |
-| `BTCFLOW_PYTHON` | `scripts/deploy_stop.ps1` only: the Python to run (default: the checkout's `.venv`). |
+| `BTCFLOW_PYTHON` | `scripts/deploy_stop.ps1` only (a Windows host install): the Python that has Settleview installed. Required; the script stops with an error when it is unset. |
 
 ### Docker (Windows, macOS, Linux)
 
@@ -813,8 +854,8 @@ ACA and ECS task definitions take `readonlyRootFilesystem`, dropped capabilities
 ### Portable supervisor (Linux, macOS, Windows; no Docker)
 
 ```bash
-.venv/bin/python -m btc_signal_engine.supervise              # Windows: .venv\Scripts\python -m btc_signal_engine.supervise
-.venv/bin/python -m btc_signal_engine.supervise --only app   # or --without pm-quotes (an unknown name is an error)
+python -m btc_signal_engine.supervise              # the Python that has Settleview installed (`pip install .`)
+python -m btc_signal_engine.supervise --only app   # or --without pm-quotes (an unknown name is an error)
 ```
 
 Run it from the folder that holds `.env`. It runs the app and both recorders as child processes and:

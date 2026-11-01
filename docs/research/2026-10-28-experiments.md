@@ -242,8 +242,8 @@ def h5_lag_momentum(D, move=0.15, max_ask=90):
 Run it, with any exits and parameters, from the repo root:
 
 ```
-.venv/Scripts/python.exe scripts/experiments.py run --entry h5_lag_momentum:move=0.2,max_ask=85 --exit hold,sl10,sl10_tp15,trail10,time1m
-.venv/Scripts/python.exe scripts/experiments.py report     # re-tabulates; the multiple-testing count includes every config ever run
+python scripts/dev.py experiments run --entry h5_lag_momentum:move=0.2,max_ask=85 --exit hold,sl10,sl10_tp15,trail10,time1m
+python scripts/dev.py experiments report     # re-tabulates; the multiple-testing count includes every config ever run
 ```
 
 One `run` takes about 10–15 s, mostly loading the data. The full grid, all 1,966 configurations at both resolutions, takes about 2 minutes.

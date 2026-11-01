@@ -1,8 +1,11 @@
 # Starting Settleview at boot
 
-Thin examples only: each starts the portable supervisor (`python -m btc_signal_engine.supervise`), which runs the
-app and the research recorders and restarts them. Nothing else lives in these files; the runbook is in
-[docs/operations.md](../docs/operations.md). With Docker, use `compose.yaml` instead (restart policies do this).
+The supported way to run Settleview is Docker: `compose.yaml` (restart policies start it at boot). These are thin
+examples for a host without Docker only: each starts the portable supervisor (`python -m
+btc_signal_engine.supervise`), which runs the app and the research recorders and restarts them, from a Python
+environment that has Settleview installed (`pip install .`; the paths in the files are examples). Nothing else lives
+in these files; the runbook is in [docs/operations.md](../docs/operations.md). Development never needs any of this:
+it runs in the dev container (`scripts/dev.py`).
 
 | Host | File | Install |
 |---|---|---|
@@ -10,10 +13,12 @@ app and the research recorders and restarts them. Nothing else lives in these fi
 | macOS (launchd) | [launchd/com.settleview.supervisor.plist](launchd/com.settleview.supervisor.plist) | copy to `~/Library/LaunchAgents/`, `launchctl bootstrap gui/$(id -u) <file>` |
 | Windows | Task Scheduler, one line (below) | run once in PowerShell |
 
-Windows (at logon of the current user, from the checkout folder, which holds `.env`):
+Windows (at logon of the current user, from the checkout folder, which holds `.env`; `$py` is the `pythonw.exe` of
+the environment Settleview is installed in):
 
 ```powershell
-schtasks /Create /TN Settleview /SC ONLOGON /RL LIMITED /F /TR "cmd /c cd /d \"$PWD\" && \"$PWD\.venv\Scripts\pythonw.exe\" -m btc_signal_engine.supervise"
+$py = "C:\path\to\settleview-env\Scripts\pythonw.exe"
+schtasks /Create /TN Settleview /SC ONLOGON /RL LIMITED /F /TR "cmd /c cd /d \"$PWD\" && \"$py\" -m btc_signal_engine.supervise"
 ```
 
 `pythonw.exe` runs it without a console window. Stop it with `python -m btc_signal_engine.ops stop-supervisor`

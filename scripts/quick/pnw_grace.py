@@ -1,9 +1,9 @@
 """PNW exit study 3: whipsaw grace period G(g,h) / re-check R(d) on the live `bstop-10` stop (pre-registered in
 docs/research/pnw-tuning.md, "Exit study 3"). Read-only on the databases.
 
-  .venv/Scripts/python.exe scripts/quick/pnw_grace.py train     # both views, append to experiments_results.csv,
+  python scripts/dev.py script scripts/quick/pnw_grace.py train     # both views, append to experiments_results.csv,
                                                                 # TRAIN tables + whipsaw ledger, freeze <= 2 picks
-  .venv/Scripts/python.exe scripts/quick/pnw_grace.py holdout   # frozen picks + bstop-10 + hold, holdout once
+  python scripts/dev.py script scripts/quick/pnw_grace.py holdout   # frozen picks + bstop-10 + hold, holdout once
 
 View A (minute marks, all windows) approximates grace by floor(g/60) minute marks; view B (435 full tapes) checks
 the per-second index and sells at the tape-proxy bid like experiments.PrintSim.

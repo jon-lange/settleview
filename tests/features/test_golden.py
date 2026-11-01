@@ -1,7 +1,7 @@
 """Golden features: a fixed synthetic fixture's snapshot must equal the stored JSON (KTD10).
 
 If this fails because feature output changed on purpose, bump FEATURE_LIB_VERSION and regenerate with
-`.venv/Scripts/python.exe -m tests.features.test_golden`.
+`python scripts/dev.py run python -m tests.features.test_golden` (in the dev container, as the tests run).
 """
 
 from __future__ import annotations

@@ -1,8 +1,8 @@
 """PNW exit study: "let trades ride" (pre-registered in docs/research/pnw-tuning.md). Read-only on the databases.
 
-  .venv/Scripts/python.exe scripts/quick/pnw_exits.py train     # 28 exits x 3 slips -> experiments_results.csv;
+  python scripts/dev.py script scripts/quick/pnw_exits.py train     # 28 exits x 3 slips -> experiments_results.csv;
                                                                 # prints TRAIN-only tables; freezes <= 3 picks
-  .venv/Scripts/python.exe scripts/quick/pnw_exits.py holdout   # frozen picks + hold + current, holdout once
+  python scripts/dev.py script scripts/quick/pnw_exits.py holdout   # frozen picks + hold + current, holdout once
 
 Entry is fixed (live PNW). Exits are simulated by `sim`, a generic copy of experiments.sim_minute's maker-TP / stop
 branch with an arbitrary stop mask (checked against sim_minute before anything is scored).

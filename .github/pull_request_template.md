@@ -8,8 +8,8 @@
 
 ## Checklist
 
-- [ ] `python -m pytest` passes.
-- [ ] `lint-imports` passes (layer contracts in `.importlinter`).
+- [ ] `python scripts/dev.py test` passes (the suite in the dev container).
+- [ ] `python scripts/dev.py quality` passes (Ruff, the layer contracts in `.importlinter`, Hadolint, ShellCheck, Trivy).
 - [ ] Tests added or updated for changed behaviour, and they need no network, keys or local database.
 - [ ] No secrets: no `.env`, key files, key ids, key paths, balances, order ids, personal paths or IP addresses.
 - [ ] No fake, demo or sample data in `web/` or `btc_signal_engine/`.

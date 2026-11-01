@@ -21,8 +21,11 @@ Resumable: windows already in pmh_windows (any http_status) are skipped; --retry
 for windows stored before their settlement price was published.
 Rate: a shared limiter keeps the whole process at or below --rps (default 4.5) requests/second; 429s back off.
 
-    .venv/Scripts/python.exe scripts/backfill_polymarket_us.py                     # 15m, 5m, 1h, 30 days
-    .venv/Scripts/python.exe scripts/backfill_polymarket_us.py --spans 15m --days 3
+    python scripts/dev.py script scripts/backfill_polymarket_us.py                     # 15m, 5m, 1h, 30 days
+    python scripts/dev.py script scripts/backfill_polymarket_us.py --spans 15m --days 3
+
+dev.py mounts every existing database under data/research/ read-only, so it writes only a new file: resuming into an
+existing polymarket_us_history.db (or --retry-missing) needs that file made writable on purpose, outside dev.py.
 """
 
 from __future__ import annotations

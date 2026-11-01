@@ -6,7 +6,7 @@ we imagine.
 
 1. Make the pack (read-only on the database; the same redaction and scan as the eval export):
    ```bash
-   .venv/Scripts/python.exe -m evals.review --source <sqlite file or postgres url> --n 100
+   python scripts/dev.py evals review --source <sqlite file or postgres url> --n 100
    ```
    The first pack was made from the final SQLite snapshot: `review-btcflow-final-n100-seed7.md` (100 wakes from
    2026-10-30/31). Wakes from 2026-11-01 on also carry their exact input (memory and observe); earlier ones show a
@@ -24,7 +24,7 @@ we imagine.
    Markdown's blank lines are there if you prefer to annotate inline.
 3. Tally:
    ```bash
-   .venv/Scripts/python.exe -m evals.review --tally evals/review/labels-<name>.csv
+   python scripts/dev.py evals review --tally evals/review/labels-<name>.csv
    ```
    Merge similar categories, count them, and pick the top few: each becomes a code grader (with its mutation check)
    or, where code cannot decide, one binary judge validated against these labels (TPR/TNR >= 0.90 on a held-out
