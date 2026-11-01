@@ -1,0 +1,35 @@
+{
+  "name": "settleview_feed_perps",
+  "stream_type": "metrics",
+  "stream_name": "settleview_perps_book_live",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT env, max(value) AS v FROM \"settleview_perps_book_live\" GROUP BY env HAVING max(value) < 1"
+  },
+  "trigger_condition": {
+    "period": 5,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 1,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "perps {env}",
+  "row_template_type": "String",
+  "description": "Kalshi perps book not live for 5 min.",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "Perps book live 99% of minutes while perps are on; fires after 5 min.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-feed-perps"
+  },
+  "enabled": true
+}

@@ -254,10 +254,28 @@ def migrate_db() -> int:
     except ValueError as exc:
         warn(f"configuration error: {exc}")
         return 78
-    say(f"migrating {describe(s.database)} to the latest schema")
-    migrate(s.database)
-    say("done")
-    return 0
+    # With an OTLP endpoint (compose passes it to the job) the failure's ERROR record reaches OpenObserve as
+    # service settleview-migrate, where the migration_failed alert reads it (docs/operations.md, "Alerting").
+    import logging
+
+    from btc_signal_engine.bootstrap import telemetry
+    from btc_signal_engine.bootstrap.logs import log_to_stderr
+    log_to_stderr()
+    try:
+        tel = telemetry.setup("settleview-migrate", secrets=telemetry.secret_values(s), instrument=False)
+    except ValueError as exc:
+        warn(f"configuration error: {exc}")
+        return 78
+    try:
+        say(f"migrating {describe(s.database)} to the latest schema")
+        migrate(s.database)
+        say("done")
+        return 0
+    except Exception:
+        logging.getLogger("btc_signal_engine.migrate").exception("migration failed")
+        return 1
+    finally:
+        tel.shutdown()  # flushes the last records (bounded)
 
 
 def migrate_sqlite_to_pg(a: argparse.Namespace) -> int:

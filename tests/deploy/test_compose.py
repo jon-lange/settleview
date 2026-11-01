@@ -72,7 +72,8 @@ def test_no_secret_is_an_environment_value_or_interpolated(tmp_path):
     assert {s["source"] for s in q["secrets"]} == {"pg_recorder_password", "otlp_headers", "polymarket_key_id",
                                                    "polymarket_secret_key"}
     assert {s["source"] for s in services["rec-pm-settle"]["secrets"]} == {"pg_recorder_password", "otlp_headers"}
-    assert {s["source"] for s in services["migrate"]["secrets"]} == {"pg_app_password"}
+    assert {s["source"] for s in services["migrate"]["secrets"]} == {"pg_app_password", "otlp_headers"}
+    assert services["migrate"]["environment"]["OTEL_SERVICE_NAME"] == "settleview-migrate"  # migration_failed alert
     assert "${BTCFLOW_POLYMARKET" not in COMPOSE  # nothing from `.env` interpolated into a service
 
 

@@ -1,0 +1,35 @@
+{
+  "name": "settleview_recorder_coverage",
+  "stream_type": "metrics",
+  "stream_name": "settleview_recorder_coverage",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT recorder, min(value) AS v FROM \"settleview_recorder_coverage\" GROUP BY recorder HAVING min(value) < 0.98"
+  },
+  "trigger_condition": {
+    "period": 30,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 15,
+    "frequency_type": "minutes",
+    "silence": 30,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_warning"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{recorder}: {v} of windows",
+  "row_template_type": "String",
+  "description": "Research recording incomplete (under 98% of the last 24 h's 5m windows).",
+  "context_attributes": {
+    "severity": "warning",
+    "slo": "98% of 288 five-minute windows recorded per 24 h.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-recorder-coverage"
+  },
+  "enabled": true
+}

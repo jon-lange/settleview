@@ -297,7 +297,31 @@ class Gate:
         return self.results.pop(0)
 
 
+class _Coverage:
+    def __init__(self) -> None:
+        self.reads: list[int] = []
+
+    def rolling_coverage(self, now):
+        self.reads.append(now)
+        return {"windows": 288, "recorded": 270, "settled": 280, "longest_gap_min": 45, "day_start": 0}
+
+
+class _Sessions:
+    def live(self):
+        return [{"id": "s1", "name": "Scout", "limits": {"spend_cap": 2.0}, "usage": {"api_usd": 1.7}},
+                {"id": "s2", "name": "NoCap", "limits": {}, "usage": {"api_usd": 9.0}}]
+
+    def global_limits(self):
+        return {"api_day": 10.0, "max_loss_day": None}
+
+    def global_usage(self, now):
+        return {"api_day": 4.0, "loss_day": 0.0}
+
+
 def test_runtime_gauges_and_hooks(pipe, tmp_path):
+    """The app's gauges and hooks, with the SLIs deploy/openobserve/alerts/ read (P3 item 2): the Coinbase feed, the
+    perps book, agent spend vs budget, the recorders' 24 h coverage (read once per COVERAGE_TTL_S) and uptime. One
+    test: the instruments live in the session's one meter provider, so a second bind_runtime would not rebind them."""
     from btc_signal_engine.adapters.sqlite.db import read_engine, write_engine
     from btc_signal_engine.bootstrap.stall import StallWatch
     db = tmp_path / "g.db"
@@ -310,7 +334,10 @@ def test_runtime_gauges_and_hooks(pipe, tmp_path):
         stall_watch=watch, writer=SimpleNamespace(pending=3, failed_batches=1),
         store=SimpleNamespace(_write=we, _read=re_ or we), trading_services={"you_poly": svc},
         agent_fleet=SimpleNamespace(scheduler=sched, now=lambda: 10_000),
+        feed=SimpleNamespace(snapshot=lambda: {"status": "stale", "lag_ms": 950}),
+        recorder_watch=(cov := _Coverage()), agent_sessions=_Sessions(),
         health_parts=lambda: {
+            "perps": {"enabled": True, "stream": {"env": "prod", "connected": True, "book_live": False}},
             "stalls_last_hour": 2, "loops": {"writer": {"last_beat_age_s": 0.3, "restarts": 1, "critical": True}},
             "streams": {"trading_pm_prod": {"venue": "polymarket", "env": "prod", "connected": True, "stale": True,
                                             "last_msg_age_ms": 4200}},
@@ -345,6 +372,17 @@ def test_runtime_gauges_and_hooks(pipe, tmp_path):
     assert sum(p.count for p in by["settleview.agent.wake_queue.wait"]) == 2
     assert by["settleview.event_loop.lag"][0].count >= 1
     assert {p.attributes["pool"] for p in by["settleview.db.pool.checked_out"]} >= {"write"}
+    assert by["settleview.feed.stale"][0].value == 1 and by["settleview.feed.stale"][0].attributes["feed"] == "coinbase"
+    assert by["settleview.feed.lag"][0].value == 950
+    assert by["settleview.perps.book_live"][0].value == 0 and by["settleview.perps.connected"][0].value == 1
+    assert round(by["settleview.recorder.coverage"][0].value, 4) == round(270 / 288, 4)
+    assert by["settleview.recorder.longest_gap"][0].value == 45
+    spend = {(p.attributes["budget"], p.attributes["session"]): round(p.value, 3)
+             for p in by["settleview.agent.spend_ratio"]}
+    assert spend == {("session", "Scout"): 0.85, ("day", "all"): 0.4}
+    assert by["process.uptime"][0].value >= 0
+    pipe.collect()
+    assert len(cov.reads) == 1  # the 24 h coverage is cached between exports
     loop.close()
     we.dispose()
 
@@ -382,3 +420,4 @@ def test_setup_never_imports_sqlalchemy_asyncio(otel):
     import sys
     # it needs greenlet, which the image does not have (the app would not start)
     assert "sqlalchemy.ext.asyncio" not in sys.modules
+

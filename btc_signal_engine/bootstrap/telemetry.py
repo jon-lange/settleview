@@ -56,6 +56,7 @@ BACKGROUND_POSTS = frozenset({"/api/trading/heartbeat"})
 CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 HTTP_CLIENT_KEYS = ("url.full", "http.url", "http.request.method", "http.method")
 HEALTH_TTL_S = 5.0  # one /api/health snapshot serves every gauge of one collection
+COVERAGE_TTL_S = 600.0  # the 24 h recorder coverage (288 indexed lookups) is read at most this often
 SHUTDOWN_S = 5.0  # a stop never waits longer than this for the last export (the backend may be down)
 LAG_BUCKETS_MS = (1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000)
 WAIT_BUCKETS_MS = (10, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 120000)
@@ -410,6 +411,37 @@ class Telemetry:
               lambda: [(int(r["state"] != "ok"), {"recorder": n})
                        for n, r in health()["recorders"].get("recorders", {}).items()])
 
+        # The SLIs the OpenObserve alerts read (deploy/openobserve/alerts/, docs/operations.md "Alerting").
+        def feed():
+            return rt.feed.snapshot()
+        gauge("settleview.feed.stale", "1", "1 while the Coinbase trade feed (the BTC index) is not live.",
+              lambda: [(int(feed()["status"] != "live"), {"feed": "coinbase"})])
+        gauge("settleview.feed.lag", "ms", "The Coinbase feed's trade-to-receipt delay.",
+              lambda: [(feed()["lag_ms"], {"feed": "coinbase"})])
+
+        def perps(key: str):
+            p = health()["perps"]
+            st = p.get("stream") if p.get("enabled") else None
+            return [] if st is None else [(int(bool(st[key])), {"env": st["env"]})]
+        gauge("settleview.perps.book_live", "1", "1 while the Kalshi perps order book is live (perps on only).",
+              lambda: perps("book_live"))
+        gauge("settleview.perps.connected", "1", "1 while the Kalshi perps stream is connected (perps on only).",
+              lambda: perps("connected"))
+
+        coverage_ttl = {"at": 0.0, "v": None}
+
+        def coverage():
+            if time.monotonic() - coverage_ttl["at"] > COVERAGE_TTL_S:
+                coverage_ttl["v"] = rt.recorder_watch.rolling_coverage(int(time.time() * 1000))
+                coverage_ttl["at"] = time.monotonic()
+            return coverage_ttl["v"]
+        gauge("settleview.recorder.coverage", "1", "Share of the last 24 h's 5-minute Polymarket windows with a "
+              "recorded quote.", lambda: [] if coverage() is None
+              else [(coverage()["recorded"] / max(1, coverage()["windows"]), {"recorder": "pm-quotes"})])
+        gauge("settleview.recorder.longest_gap", "min", "The longest run of unrecorded 5-minute windows in the last "
+              "24 h.", lambda: [] if coverage() is None
+              else [(coverage()["longest_gap_min"], {"recorder": "pm-quotes"})])
+
         flaps = m.create_counter("settleview.stream.flaps", unit="{transition}",
                                  description="Trading-stream up/down transitions (each writes an audit row; "
                                              "Polymarket's only after its hysteresis).")
@@ -434,6 +466,24 @@ class Telemetry:
                   lambda: [(queue()["running"], {})])
             gauge("settleview.agent.wake_queue.oldest_wait", "ms", "The oldest queued wake's wait so far.",
                   lambda: [(queue()["oldest_wait_ms"], {})])
+
+        sessions = getattr(rt, "agent_sessions", None)
+        if sessions is not None:
+            def spend():
+                out = []
+                for sess in sessions.live():
+                    cap = (sess.get("limits") or {}).get("spend_cap")
+                    if cap:
+                        used = float((sess.get("usage") or {}).get("api_usd") or 0.0)
+                        out.append((used / float(cap), {"budget": "session",
+                                                        "session": str(sess.get("name") or sess["id"])[:40]}))
+                day = sessions.global_limits().get("api_day")
+                if day:
+                    used = sessions.global_usage(int(time.time() * 1000))["api_day"]
+                    out.append((used / float(day), {"budget": "day", "session": "all"}))
+                return out
+            gauge("settleview.agent.spend_ratio", "1", "Estimated agent API spend as a share of its budget (each "
+                  "live session's cap; the global daily cap).", spend)
 
     def shutdown(self) -> None:
         """Flush and stop every provider (bounded: SHUTDOWN_S), then undo the instrumentation."""
@@ -606,6 +656,9 @@ def _process_gauges(meter) -> None:
     meter.create_observable_gauge("process.memory.usage", [memory], unit="By",
                                   description="The process's current resident memory.")
     meter.create_observable_counter("process.cpu.time", [cpu], unit="s", description="CPU time used by the process.")
+    started = time.monotonic()
+    meter.create_observable_gauge("process.uptime", [lambda _o: [Observation(time.monotonic() - started)]], unit="s",
+                                  description="The time the process has been running.")
 
 
 def current_rss() -> int | None:

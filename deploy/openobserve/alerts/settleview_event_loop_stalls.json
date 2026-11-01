@@ -1,0 +1,35 @@
+{
+  "name": "settleview_event_loop_stalls",
+  "stream_type": "metrics",
+  "stream_name": "settleview_event_loop_stalls",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT max(value) AS n FROM \"settleview_event_loop_stalls\" HAVING max(value) >= 3"
+  },
+  "trigger_condition": {
+    "period": 5,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 5,
+    "frequency_type": "minutes",
+    "silence": 30,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_warning"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{n} stalls over 500 ms in the last hour",
+  "row_template_type": "String",
+  "description": "App event loop stalling: screens and orders lag.",
+  "context_attributes": {
+    "severity": "warning",
+    "slo": "Fewer than 3 event-loop stalls (over 500 ms) an hour.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-event-loop"
+  },
+  "enabled": true
+}

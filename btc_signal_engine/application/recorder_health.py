@@ -136,7 +136,15 @@ class RecorderWatch:
         """Yesterday's (UTC) 5-minute coverage: {windows, recorded, settled, longest_gap_min, day}; None without a
         readable database."""
         end = now - now % DAY_MS
-        start = end - DAY_MS
+        return self._coverage(end - DAY_MS, end)
+
+    def rolling_coverage(self, now: int) -> dict | None:
+        """The same over the last 24 h of complete 5-minute windows (the settleview.recorder.coverage and
+        .longest_gap gauges the OpenObserve alerts read); None without a readable database."""
+        end = now - now % SPAN_5M_MS
+        return self._coverage(end - DAY_MS, end)
+
+    def _coverage(self, start: int, end: int) -> dict | None:
         try:
             c = self.data.coverage(start, end, SPAN_5M_MS)
         except FileNotFoundError:

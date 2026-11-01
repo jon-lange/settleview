@@ -1,0 +1,35 @@
+{
+  "name": "settleview_agent_spend",
+  "stream_type": "metrics",
+  "stream_name": "settleview_agent_spend_ratio",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT budget, session, max(value) AS v FROM \"settleview_agent_spend_ratio\" GROUP BY budget, session HAVING max(value) >= 0.8"
+  },
+  "trigger_condition": {
+    "period": 5,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 5,
+    "frequency_type": "minutes",
+    "silence": 30,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_warning"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{budget} {session}: {v}",
+  "row_template_type": "String",
+  "description": "Agent API spend at 80% of its budget (the runner stops it at 100%).",
+  "context_attributes": {
+    "severity": "warning",
+    "slo": "Agent API spend under 80% of each budget.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-agent-spend"
+  },
+  "enabled": true
+}

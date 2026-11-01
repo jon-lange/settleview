@@ -1,0 +1,6 @@
+{
+  "name": "settleview_telegram_resolved",
+  "type": "http",
+  "title": "",
+  "body": "{\"text\": \"🟢 Resolved: {alert_description}\\n{alert_trigger_time_str} UTC\", \"disable_notification\": true, \"link_preview_options\": {\"is_disabled\": true}}"
+}

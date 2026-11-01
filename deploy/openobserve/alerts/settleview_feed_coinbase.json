@@ -1,0 +1,35 @@
+{
+  "name": "settleview_feed_coinbase",
+  "stream_type": "metrics",
+  "stream_name": "settleview_feed_stale",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT feed, min(value) AS v FROM \"settleview_feed_stale\" GROUP BY feed HAVING min(value) >= 1"
+  },
+  "trigger_condition": {
+    "period": 3,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 1,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{feed} stale",
+  "row_template_type": "String",
+  "description": "Coinbase BTC feed down: every price and model reads it.",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "Coinbase feed live 99.5% of minutes (7 days); fires after 3 min stale.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-feed-coinbase"
+  },
+  "enabled": true
+}

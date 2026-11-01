@@ -1,0 +1,35 @@
+{
+  "name": "settleview_migration_failed",
+  "stream_type": "logs",
+  "stream_name": "default",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT count(*) AS n FROM \"default\" WHERE service_name = 'settleview-migrate' AND severity_number >= 17 HAVING count(*) >= 1"
+  },
+  "trigger_condition": {
+    "period": 30,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 5,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{n} error records",
+  "row_template_type": "String",
+  "description": "Database migration failed: the app will not start on the new image.",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "Every migration succeeds.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-migration"
+  },
+  "enabled": true
+}

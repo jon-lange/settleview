@@ -1,0 +1,35 @@
+{
+  "name": "settleview_service_restart",
+  "stream_type": "metrics",
+  "stream_name": "process_uptime",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT service_name, min(value) AS v FROM \"process_uptime\" GROUP BY service_name HAVING min(value) < 300"
+  },
+  "trigger_condition": {
+    "period": 5,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 5,
+    "frequency_type": "minutes",
+    "silence": 30,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_warning"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{service_name}",
+  "row_template_type": "String",
+  "description": "Service restarted (a deploy does this once).",
+  "context_attributes": {
+    "severity": "warning",
+    "slo": "No unplanned restart.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-restarts"
+  },
+  "enabled": true
+}

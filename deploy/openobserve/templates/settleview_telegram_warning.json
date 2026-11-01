@@ -1,0 +1,6 @@
+{
+  "name": "settleview_telegram_warning",
+  "type": "http",
+  "title": "",
+  "body": "{\"text\": \"🟠 {alert_description}\\n{rows}\\nWindow from {alert_start_time} UTC · SLO: {slo}\\nRunbook: {runbook}\", \"disable_notification\": true, \"link_preview_options\": {\"is_disabled\": true}}"
+}

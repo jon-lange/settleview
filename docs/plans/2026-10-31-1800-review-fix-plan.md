@@ -113,7 +113,10 @@ In order:
    uvicorn's proxy headers from its fixed address only (`BTCFLOW_FORWARDED_ALLOW_IPS`), `Secure` cookies and HSTS on
    HTTPS (docs/operations.md, "Phones over HTTPS (Tailscale)").
 2. **Alerting on telemetry** — SLIs/SLOs (feed freshness, event-loop lag, order-gate errors, writer queue, agent spend,
-   recorder coverage) as OpenObserve alerts → Telegram.
+   recorder coverage) as OpenObserve alerts → Telegram. **Done 2026-11-01:** 17 alerts as code in OpenObserve's own
+   export format (`deploy/openobserve/alerts/`), applied by `deploy/openobserve/alerts.py` through its HTTP API, delivered
+   by its HTTP destination to a separate Telegram alerts bot; OpenObserve does the dedup, repeats and recovery, the app
+   only exports the SLIs (docs/operations.md, "Alerting").
 3. **Staging** — a `staging` compose profile on Kalshi demo + the shadow exchange; automated smoke tests gate every deploy.
 4. **Release engineering** — images built in CI, pushed to GHCR, semver tags, SBOM (Trivy), cosign signatures; deploy
    by digest; one-command rollback.

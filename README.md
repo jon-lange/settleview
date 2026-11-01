@@ -101,6 +101,10 @@ Observability: OpenTelemetry traces, metrics and logs from every service once yo
 default), with each agent wake as a GenAI trace (model, tokens, cost, tool calls; never prompts or output) and tokens,
 keys and headers scrubbed before anything leaves the process. An opt-in OpenObserve container is the local backend;
 Azure Monitor, CloudWatch or any OTLP backend in the cloud ([docs/operations.md](docs/operations.md#observability-opentelemetry)).
+SLO alerts as code: 17 OpenObserve alerts (feeds per venue, the database writer, dead letters, dropped venue data,
+event-loop stalls, refused approvals, agent spend vs budget, recorder coverage, restarts, a silent service, a failed
+migration) reach your phone through a separate Telegram alerts bot, each with a runbook link, once per incident and
+once when resolved ([Alerting](docs/operations.md#alerting)).
 
 The research-phase screens (Coach, strategy lab, rulesets, replay and others), their API routes and the unbounded
 bots behind them have been removed from the app; their history stays in the database, and the offline research

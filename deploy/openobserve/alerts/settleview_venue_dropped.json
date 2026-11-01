@@ -1,0 +1,35 @@
+{
+  "name": "settleview_venue_dropped",
+  "stream_type": "metrics",
+  "stream_name": "settleview_venue_dropped",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT settleview_component, sum(inc) AS n FROM (SELECT settleview_component, max(value) - CASE WHEN min(CAST(start_time AS BIGINT)) >= min(_timestamp) * 1000 - 90000000000 THEN 0 ELSE min(value) END AS inc FROM \"settleview_venue_dropped\" WHERE 1 = 1 GROUP BY settleview_component, __hash__, start_time) GROUP BY settleview_component HAVING sum(inc) >= 1"
+  },
+  "trigger_condition": {
+    "period": 10,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 5,
+    "frequency_type": "minutes",
+    "silence": 30,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_warning"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{settleview_component}: {n}",
+  "row_template_type": "String",
+  "description": "Venue data dropped by a full buffer.",
+  "context_attributes": {
+    "severity": "warning",
+    "slo": "Zero venue messages or rows dropped.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-venue-dropped"
+  },
+  "enabled": true
+}

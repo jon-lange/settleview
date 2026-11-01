@@ -29,6 +29,7 @@
 #   docker compose --profile observability up -d          # then http://localhost:5080 (admin@settleview.local)
 #   python deploy/openobserve/ingest_token.py               # once it runs: secrets/otlp_headers, ingest-only
 #   docker compose up -d --force-recreate app rec-pm-quotes rec-pm-settle
+#   python deploy/openobserve/alerts.py apply                # the SLO alerts -> Telegram (docs/operations.md, "Alerting")
 # The services' credential (and any other backend's) is the secret file secrets/otlp_headers, never an environment
 # value: OpenObserve's organization ingestion token, which can send telemetry and nothing else (no reading, no
 # administration); the root password stays in secrets/openobserve.env, mounted into OpenObserve only.
@@ -318,8 +319,10 @@ services:
     command: ["python", "-m", "btc_signal_engine.ops", "migrate"]
     restart: "no"
     environment:
-      <<: *database
-    secrets: [pg_app_password]
+      <<: [*database, *otel]
+      # A failed run's ERROR record reaches OpenObserve as this service (the migration_failed alert).
+      OTEL_SERVICE_NAME: settleview-migrate
+    secrets: [pg_app_password, otlp_headers]
     depends_on: *needs-postgres
     deploy:
       <<: *deploy

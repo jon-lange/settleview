@@ -1,0 +1,35 @@
+{
+  "name": "settleview_feed_polymarket",
+  "stream_type": "metrics",
+  "stream_name": "settleview_stream_stale",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT stream, min(value) AS v FROM \"settleview_stream_stale\" WHERE venue = 'polymarket' GROUP BY stream HAVING min(value) >= 1"
+  },
+  "trigger_condition": {
+    "period": 5,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 1,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{stream}",
+  "row_template_type": "String",
+  "description": "Polymarket feed stale: a Polymarket book has not been servable for 5 min.",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "Each Polymarket stream servable 99% of minutes (7 days); fires after 5 min.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-feed-polymarket"
+  },
+  "enabled": true
+}

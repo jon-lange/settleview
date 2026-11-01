@@ -1,0 +1,35 @@
+{
+  "name": "settleview_service_silent",
+  "stream_type": "metrics",
+  "stream_name": "process_memory_usage",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT coalesce(sum(CASE WHEN service_name = 'settleview-app' THEN 1 ELSE 0 END), 0) AS app, coalesce(sum(CASE WHEN service_name = 'settleview-rec-pm-quotes' THEN 1 ELSE 0 END), 0) AS quotes, coalesce(sum(CASE WHEN service_name = 'settleview-rec-pm-settle' THEN 1 ELSE 0 END), 0) AS settle FROM \"process_memory_usage\" HAVING coalesce(sum(CASE WHEN service_name = 'settleview-app' THEN 1 ELSE 0 END), 0) = 0 OR coalesce(sum(CASE WHEN service_name = 'settleview-rec-pm-quotes' THEN 1 ELSE 0 END), 0) = 0 OR coalesce(sum(CASE WHEN service_name = 'settleview-rec-pm-settle' THEN 1 ELSE 0 END), 0) = 0"
+  },
+  "trigger_condition": {
+    "period": 5,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 5,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "samples: app {app} · quotes {quotes} · settle {settle}",
+  "row_template_type": "String",
+  "description": "A service stopped reporting (down, or its telemetry is).",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "Every service reports at least every 5 min.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-service-silent"
+  },
+  "enabled": true
+}

@@ -237,8 +237,12 @@ script once (see "Deploying: the 2026-11-01 least-privilege steps").
   `settleview.agent.wakes` (by status), `gen_ai.client.token.usage`, `gen_ai.client.operation.duration`,
   `settleview.agent.cost`, `settleview.agent.tool_calls`, `settleview.order_gate.decisions` (by strategy, stage
   prepare / approve, result and code), `process.memory.usage` (current RSS, unlike `/api/health`'s `memory_mb`, which
-  is the peak on Linux), `process.cpu.time` and `settleview.venue.dropped` (rows or messages a bounded venue buffer
-  dropped, by component and buffer: "Venue retries, reconnects and bounds").
+  is the peak on Linux), `process.cpu.time`, `process.uptime` and `settleview.venue.dropped` (rows or messages a bounded
+  venue buffer dropped, by component and buffer: "Venue retries, reconnects and bounds"). For the SLO alerts
+  ("Alerting"): `settleview.feed.stale` and `.lag` (the Coinbase feed), `settleview.perps.book_live` and `.connected`
+  (perps on only), `settleview.agent.spend_ratio` (API spend over each live session's cap and the global daily cap,
+  by `budget` and `session`), `settleview.recorder.coverage` and `.longest_gap` (the last 24 h of 5-minute windows,
+  read at most every 10 minutes). The one-off migrate job exports its logs as `settleview-migrate`.
 - Logs: every record the root logger handles, with the trace and span id when it was written inside a span.
 
 **What is never exported**: prompts, model output, thinking, tool arguments or results, order tickets, request or
@@ -271,6 +275,183 @@ logs arrived per service; the wake's spans nested with tokens, cost and tool res
 no planted token, query secret, password or prompt marker appeared in any stream. See
 [docs/solutions/2026-10-31-otel-instrumentation-gotchas.md](solutions/2026-10-31-otel-instrumentation-gotchas.md) for
 what that run caught.
+
+<a id="alerting"></a>
+## Alerting (SLOs on OpenObserve)
+
+The service-level objectives are OpenObserve alerts, kept as code in `deploy/openobserve/alerts/` (one file per
+alert, in OpenObserve's own export format: what `POST /api/v2/{org}/alerts/{id}/export` returns and what its UI's
+Import takes) and `deploy/openobserve/templates/` (its alert templates). Everything else is OpenObserve's: it runs
+each SQL query on its schedule over the metrics and logs the services export, sends one notification when an alert
+starts firing, repeats it at most every `silence` minutes while it keeps firing (10 for critical, 30 for warnings),
+sends one "resolved" message when it stops (`notify_on_recovery`), and keeps the history (Alerts > History in its
+UI). OpenObserve does not evaluate an alert during its silence, so "resolved" can come up to that long after the
+fix (10 / 30 min); that is the price of not being told every minute (v1.1.1 has no repeat interval separate from
+the evaluation; its per-alert `deduplication` and incident mode did not suppress the repeats, checked 2026-11-01). Delivery is its standard HTTP destination straight to the Telegram Bot API's `sendMessage`. Nothing in the app
+takes part: no endpoint, no forwarding, no state. Plan: docs/plans/2026-10-31-1800-review-fix-plan.md, P3 item 2;
+what the v1.1.1 API taught us: [docs/solutions/2026-11-01-openobserve-alerting.md](solutions/2026-11-01-openobserve-alerting.md).
+
+**Messages.** One line that says what is wrong, the rows the query returned (which stream, which buffer), the window
+it saw (UTC), the objective and a runbook link into this page:
+
+```
+🔴 Coinbase BTC feed down: every price and model reads it.
+coinbase stale
+Window from 2026-11-01T21:31:00 UTC · SLO: Coinbase feed live 99.5% of minutes (7 days); fires after 3 min stale.
+Runbook: https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-feed-coinbase
+```
+
+🔴 critical alerts notify; 🟠 warnings and 🟢 "Resolved: ..." arrive silently (Telegram's `disable_notification`), so
+a night of warnings never wakes anyone. Plain text (no markup a row could break), link previews off.
+
+**Quiet hours.** OpenObserve has no per-destination schedule, and Telegram none per chat: warnings and resolutions
+are already silent, so quiet hours are your phone's own Focus / Do Not Disturb schedule. To let critical alerts
+through it, allow the alerts bot's chat (iOS Focus "Allowed notifications", Android DND "Exceptions").
+
+**SLIs and objectives** (each row is one alert file `settleview_<key>.json`; "for" is how long it must hold before
+it fires):
+
+| Alert | Severity | SLI (metric / log) | Objective; fires when |
+|---|---|---|---|
+| `feed_coinbase` | critical | `settleview.feed.stale` | Coinbase trade feed live 99.5% of minutes over 7 days; stale for 3 min |
+| `feed_kalshi` | critical | `settleview.stream.stale` (venue kalshi) | each Kalshi stream fresh 99.5% of minutes; stale for 3 min |
+| `feed_polymarket` | critical | `settleview.stream.stale` (venue polymarket) | each book servable 99% of minutes; not servable for 5 min |
+| `feed_perps` | critical | `settleview.perps.book_live` | perps book live 99% of minutes while perps are on; not live for 5 min |
+| `writer_outage` | critical | `settleview.writer.outage` | the database takes writes within 60 s; 60 s without |
+| `writer_dead_letters` | critical | `settleview.writer.dead_lettered` (counter) | zero dead-lettered writes; any in 10 min |
+| `service_silent` | critical | `process.memory.usage` per service | the app and both recorders report every 5 min; one missing for 5 min |
+| `migration_failed` | critical | ERROR log of service `settleview-migrate` | every migration succeeds; any failure in 30 min |
+| `writer_backlog` | warning | `settleview.writer.pending` | under 5,000 queued writes; over it for 5 min |
+| `venue_dropped` | warning | `settleview.venue.dropped` (counter) | no venue message or row dropped; any in 10 min |
+| `event_loop_stalls` | warning | `settleview.event_loop.stalls` | fewer than 3 stalls over 500 ms an hour |
+| `order_gate_refusals` | warning | `settleview.order_gate.decisions` (stage approve, refused) | fewer than 3 refused approvals in 15 min |
+| `agent_spend` | warning | `settleview.agent.spend_ratio` | each session's and the daily API spend under 80% of its cap |
+| `recorder_coverage` | warning | `settleview.recorder.coverage` | 98% of the last 24 h's 288 five-minute windows recorded |
+| `recorder_gap` | warning | `settleview.recorder.longest_gap` | no recording gap of 30 min or more in 24 h |
+| `service_restart` | warning | `process.uptime` | no unplanned restart; a service up for under 5 min |
+| `loop_restarts` | warning | `settleview.loop.restarts` | no supervised loop restart in 15 min |
+| `test` | - | none (disabled; `alerts.py test` triggers it by hand) | a test message arrives |
+
+A counter's increase over a period is computed per series and process start, and a series that started inside the
+period counts from zero, so the first dead letter after a restart is not missed (the SQL in the files; the solution
+doc explains it). The research recorders' own silence alert stays the app's Telegram `data` alert ("Health").
+
+**Why the bot token lives in OpenObserve, and why a separate bot.** The Bot API takes the token in the URL path, so
+the destination holds it (its admins can read it; it never appears in a log line of ours: the app scrubs Telegram
+tokens and nothing of ours calls that URL). Use a bot made only for alerts (@BotFather, `/newbot`), never the app's
+`BTCFLOW_TELEGRAM_BOT_TOKEN`: the app's bot is the remote control (it approves proposals and stops agents), so its
+token must stay in the app alone; an alerts bot can only send you text, and revoking it stops only the alerts. The
+alternative, a webhook into the app that forwards to the app's bot, was not built: it would be an endpoint and a
+delivery layer of our own for what OpenObserve does natively.
+
+**Set up** (once OpenObserve runs and the services export to it, "Observability (OpenTelemetry)" above):
+
+```bash
+# 1. a bot for alerts only: @BotFather -> /newbot; send it one message, then read your chat id from
+#    https://api.telegram.org/bot<token>/getUpdates ("chat":{"id":...})
+printf '%s\n' '<alerts bot token>' > secrets/alerts_telegram_bot_token     # never the app's telegram_bot_token
+printf '%s\n' '<your chat id>'     > secrets/alerts_telegram_chat_id
+python deploy/openobserve/alerts.py apply   # templates, 3 destinations, every alert; prints names and results only
+python deploy/openobserve/alerts.py test    # one 🔴 Test alert message, through OpenObserve, to your phone
+```
+
+`apply` reads OpenObserve's root password (`secrets/openobserve.env`, or `O2_ROOT_PASSWORD`) only while it runs: the
+services keep their ingest-only token and never hold an admin credential. The bot token and chat id can also come
+from `ALERTS_TELEGRAM_BOT_TOKEN` / `ALERTS_TELEGRAM_CHAT_ID` (e.g. on Swarm, with `--url` over an SSH tunnel). It is
+idempotent: run it again after any change to the files; it replaces each `settleview_*` alert by name, deletes ones
+no longer in the folder and never touches other alerts. An alert whose metric does not exist in OpenObserve yet
+(nothing has exported it: perps off, a fresh install) is listed `pending` and the run exits 2; run it again later.
+`--runbook-base URL` points the links at a fork's docs. To keep an edit made in OpenObserve's UI: `alerts.py export
+settleview_<key>` writes it back into the folder (commit it). To rotate the bot token: revoke it in @BotFather, write
+the new one, run `apply`.
+
+**Dead man's switch (optional).** If OpenObserve itself is down, nothing above can fire. The standard remedy is an
+external heartbeat monitor (healthchecks.io, Uptime Kuma, Better Stack...): it expects a ping every few minutes and
+alerts you on its own channel when the pings stop. Point one at OpenObserve's `/healthz` (or a cron job that pings
+after `curl -fsS http://127.0.0.1:5080/healthz`); nothing in Settleview needs to change for it.
+
+### Runbooks
+
+<a id="alert-feed-coinbase"></a>
+**Coinbase BTC feed down** (`feed_coinbase`). Play's prices, the model and every ticket read the Coinbase trade feed.
+Check `GET /api/health` (`feed`, `lag_ms`) and `docker compose logs app | grep -i coinbase`. Coinbase's status page
+(status.coinbase.com) first; a local network or DNS problem shows as every venue failing at once. The collector
+reconnects on its own; a feed stale for many minutes with the network fine: restart the app between agent sessions
+(`docker compose restart app`). Gaps are repaired from Coinbase's history once it is back.
+
+<a id="alert-feed-kalshi"></a>
+**Kalshi feed stale** (`feed_kalshi`). The row names the stream (`kalshi_market`, `trading_prod`, ...). REST polling
+keeps trading working while the WebSocket is down; `docker compose logs app | grep -i kalshi` shows the reconnects.
+Check status.kalshi.com. Several streams at once usually means the network or the clock ("Clock").
+
+<a id="alert-feed-polymarket"></a>
+**Polymarket feed stale** (`feed_polymarket`). See "Polymarket book freshness": a quiet book is normal for seconds,
+five minutes is not. If the trades recorder still gets prints, it is a venue-side book outage (2026-10-31 had 45
+minutes of it); entries are refused meanwhile, which is the intended behaviour. Otherwise check the logs for refused
+subscriptions or reconnect loops.
+
+<a id="alert-feed-perps"></a>
+**Kalshi perps book not live** (`feed_perps`). `GET /api/health` `perps.stream.reason` says why (book feed broken,
+no book yet, disconnected). The perps book rule is the same as Polymarket's; the stream reconnects itself. Positions
+stay protected by their resting orders at Kalshi; do not open new ones until it is live.
+
+<a id="alert-writer"></a>
+**Database not taking writes / writes backing up** (`writer_outage`, `writer_backlog`). Nothing is lost while the
+writer retries ("Postgres: timeouts, outages and the dead-letter file"). `docker compose ps postgres`, `docker compose
+logs postgres`, disk space (`docker system df`). A long `pg_dump` holds no write lock; a full disk or a stopped
+Postgres does. Once it is back the queue drains on its own; a backlog that never shrinks with Postgres healthy is a
+bug: capture `GET /api/health` and the app's log.
+
+<a id="alert-dead-letters"></a>
+**Writes dead-lettered** (`writer_dead_letters`). The row says why (`data`: the database refused a write; `overflow`:
+market data shed during a very long outage; `shutdown`: a stop during an outage). Replay with the dry run first:
+`docker compose exec app python -m btc_signal_engine.ops replay-dead-letter`, then `--apply`
+("Replaying the dead-letter file"). A `data` line that fails again needs a person: read it before deciding.
+
+<a id="alert-venue-dropped"></a>
+**Venue data dropped** (`venue_dropped`). A bounded buffer was full and dropped its oldest items (the row names the
+component: the Coinbase feed's queue behind a slow consumer, the quotes recorder during a database outage). Usually
+a symptom: look for a database outage or event-loop stalls at the same time ("Venue retries, reconnects and bounds").
+
+<a id="alert-event-loop"></a>
+**App event loop stalling** (`event_loop_stalls`). Each stall over 500 ms logs the loop thread's stack (`docker
+compose logs app | grep -A30 "event loop stall"`). Common causes: a blocking call on the loop, CPU starvation from
+agent wakes (lower `BTCFLOW_AGENT_WAKE_CONCURRENCY`), memory pressure (`docker stats`).
+
+<a id="alert-order-gate"></a>
+**Approvals refused by the order gate** (`order_gate_refusals`). The row is the refusal code (`price_moved`,
+`stale_quote`, a limit...). A few are the gate doing its job; three or more in 15 minutes usually means a stale feed
+(see the feed alerts) or a limit set too tight. Nothing was sent for a refused approval.
+
+<a id="alert-agent-spend"></a>
+**Agent API spend near its budget** (`agent_spend`). A session (named in the row) or the day (`day all`) has used 80%
+of its API cap; the runner ends the session at 100% ("spend_cap"). Raise the cap on the PC if that is intended, or
+let it end.
+
+<a id="alert-recorder-coverage"></a>
+**Research recording incomplete / long gap** (`recorder_coverage`, `recorder_gap`). Over the last 24 h fewer than 98%
+of the 5-minute Polymarket windows have a recorded quote, or 30+ minutes in a row are missing. Check `docker compose
+ps rec-pm-quotes`, its logs and `GET /api/health` `recorders`; a venue-side book outage also leaves gaps (nothing to
+record). Coverage recovers only as the gap ages out of the 24 h window, so "resolved" can come a day later.
+
+<a id="alert-restarts"></a>
+**Service restarted / app loop restarting** (`service_restart`, `loop_restarts`). A deploy restarts every service
+once: ignore those. Otherwise `docker compose ps` (the restart count), `docker compose logs <service> --since 15m`
+for the traceback, and `docker inspect <container> --format '{{.State.OOMKilled}}'` (memory limit). A supervised loop
+that keeps restarting logs its traceback every time.
+
+<a id="alert-service-silent"></a>
+**Service stopped reporting** (`service_silent`). The row counts samples per service in the last 5 minutes; a 0 is
+down or not exporting. `docker compose ps`; if it runs, check its telemetry settings (`OTEL_EXPORTER_OTLP_ENDPOINT`,
+`secrets/otlp_headers`) and that OpenObserve accepts the token (`deploy/openobserve/ingest_token.py`). On a host
+without the recorders, delete their part of the query (and `export`/commit) or the alert stays on.
+
+<a id="alert-migration"></a>
+**Database migration failed** (`migration_failed`). The app does not start on an image whose migration failed (it
+checks the revision). `docker compose logs migrate` has the traceback (also in OpenObserve's logs, service
+`settleview-migrate`). A lock wait gives up after `BTCFLOW_DB_MIGRATION_LOCK_WAIT_S`: run `docker compose up -d`
+again once the backup's dump is done. Anything else: deploy the previous image (its schema is unchanged by a failed,
+rolled-back migration) and investigate.
 
 ## Clock
 

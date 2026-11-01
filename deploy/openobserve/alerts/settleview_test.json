@@ -1,0 +1,33 @@
+{
+  "name": "settleview_test",
+  "stream_type": "metrics",
+  "stream_name": "process_memory_usage",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT count(*) AS n FROM \"process_memory_usage\" WHERE 1 = 0 HAVING count(*) > 0"
+  },
+  "trigger_condition": {
+    "period": 60,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 60,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": false,
+  "recovery_destinations": [],
+  "row_template": "",
+  "row_template_type": "String",
+  "description": "Test alert: the path from OpenObserve to Telegram works.",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "A test message arrives.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alerting"
+  },
+  "enabled": false
+}

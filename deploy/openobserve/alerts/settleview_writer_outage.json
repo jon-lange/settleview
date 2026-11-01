@@ -1,0 +1,35 @@
+{
+  "name": "settleview_writer_outage",
+  "stream_type": "metrics",
+  "stream_name": "settleview_writer_outage",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT max(value) AS v FROM \"settleview_writer_outage\" HAVING max(value) >= 60"
+  },
+  "trigger_condition": {
+    "period": 2,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 1,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{v} s without writes",
+  "row_template_type": "String",
+  "description": "Database not taking writes (queued in memory, nothing lost yet).",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "The database takes writes within 60 s.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-writer"
+  },
+  "enabled": true
+}

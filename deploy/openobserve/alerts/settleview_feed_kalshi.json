@@ -1,0 +1,35 @@
+{
+  "name": "settleview_feed_kalshi",
+  "stream_type": "metrics",
+  "stream_name": "settleview_stream_stale",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT stream, min(value) AS v FROM \"settleview_stream_stale\" WHERE venue = 'kalshi' GROUP BY stream HAVING min(value) >= 1"
+  },
+  "trigger_condition": {
+    "period": 3,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 1,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{stream}",
+  "row_template_type": "String",
+  "description": "Kalshi feed stale: no fresh message on a Kalshi stream.",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "Each Kalshi stream fresh 99.5% of minutes (7 days); fires after 3 min stale.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-feed-kalshi"
+  },
+  "enabled": true
+}

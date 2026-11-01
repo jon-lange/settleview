@@ -1,0 +1,35 @@
+{
+  "name": "settleview_order_gate_refusals",
+  "stream_type": "metrics",
+  "stream_name": "settleview_order_gate_decisions",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT code, sum(inc) AS n FROM (SELECT code, max(value) - CASE WHEN min(CAST(start_time AS BIGINT)) >= min(_timestamp) * 1000 - 90000000000 THEN 0 ELSE min(value) END AS inc FROM \"settleview_order_gate_decisions\" WHERE stage = 'approve' AND result = 'refused' GROUP BY code, __hash__, start_time) GROUP BY code HAVING sum(inc) >= 3"
+  },
+  "trigger_condition": {
+    "period": 15,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 5,
+    "frequency_type": "minutes",
+    "silence": 30,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_warning"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{code}: {n}",
+  "row_template_type": "String",
+  "description": "Approvals refused by the order gate (3+ in 15 min).",
+  "context_attributes": {
+    "severity": "warning",
+    "slo": "Fewer than 3 approved tickets refused at send time per 15 min.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-order-gate"
+  },
+  "enabled": true
+}

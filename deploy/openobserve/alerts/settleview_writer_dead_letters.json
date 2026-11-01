@@ -1,0 +1,35 @@
+{
+  "name": "settleview_writer_dead_letters",
+  "stream_type": "metrics",
+  "stream_name": "settleview_writer_dead_lettered",
+  "is_real_time": false,
+  "query_condition": {
+    "type": "sql",
+    "sql": "SELECT reason, sum(inc) AS n FROM (SELECT reason, max(value) - CASE WHEN min(CAST(start_time AS BIGINT)) >= min(_timestamp) * 1000 - 90000000000 THEN 0 ELSE min(value) END AS inc FROM \"settleview_writer_dead_lettered\" WHERE 1 = 1 GROUP BY reason, __hash__, start_time) GROUP BY reason HAVING sum(inc) >= 1"
+  },
+  "trigger_condition": {
+    "period": 10,
+    "operator": ">=",
+    "threshold": 1,
+    "frequency": 1,
+    "frequency_type": "minutes",
+    "silence": 10,
+    "align_time": true
+  },
+  "destinations": [
+    "settleview_telegram_critical"
+  ],
+  "notify_on_recovery": true,
+  "recovery_destinations": [
+    "settleview_telegram_resolved"
+  ],
+  "row_template": "{reason}: {n}",
+  "row_template_type": "String",
+  "description": "Writes dead-lettered: they need a replay.",
+  "context_attributes": {
+    "severity": "critical",
+    "slo": "Zero dead-lettered writes.",
+    "runbook": "https://github.com/jon-lange/settleview/blob/main/docs/operations.md#alert-dead-letters"
+  },
+  "enabled": true
+}
