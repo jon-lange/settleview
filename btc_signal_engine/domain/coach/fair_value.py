@@ -30,7 +30,11 @@ keeps every number auditable. The engine's view is shown alongside instead.
 from __future__ import annotations
 
 import math
+from bisect import bisect_left
 from collections.abc import Sequence
+from operator import itemgetter
+
+_TS = itemgetter(0)
 
 CLOSE_SECONDS = 60
 SIGMA_FLOOR_FRAC = 2e-5
@@ -120,14 +124,14 @@ def minute_sigma(at: int, rows: Sequence[tuple[int, float]], end: int) -> float 
     before it; at least MIN_VOL_RETURNS returns are required.
     """
     samples: list[float] = []
-    i = end - 1
+    hi = end
     for k in range(VOL_MINUTES + 1):
         mark = at - k * 60_000
-        while i >= 0 and rows[i][0] >= mark:
-            i -= 1
+        i = bisect_left(rows, mark, 0, hi, key=_TS) - 1  # the latest row before the mark (a bisection, not a walk)
         if i < 0:
             break
         samples.append(rows[i][1])
+        hi = i + 1
     rets = [math.log(a / b) for a, b in zip(samples, samples[1:], strict=False) if a > 0 and b > 0]
     if len(rets) < MIN_VOL_RETURNS:
         return None
@@ -145,14 +149,7 @@ def fair_from_index(at: int, rows: Sequence[tuple[int, float]], open_avg: float,
     previous row (or S). None when the data is not there yet. Live advice and paper replay both use
     this function, so the record is scored with exactly the odds the screen would have shown.
     """
-    lo, hi = 0, len(rows)
-    while lo < hi:  # first index with ts >= at
-        mid = (lo + hi) // 2
-        if rows[mid][0] < at:
-            lo = mid + 1
-        else:
-            hi = mid
-    end = lo
+    end = bisect_left(rows, at, key=_TS)  # first index with ts >= at
     if end == 0 or rows[end - 1][0] < at - MAX_PRICE_AGE_MS:
         return None
     recent = [p for ts, p in rows[max(0, end - PRICE_SMOOTH_S):end] if ts >= at - PRICE_SMOOTH_S * 1000]
@@ -163,8 +160,9 @@ def fair_from_index(at: int, rows: Sequence[tuple[int, float]], open_avg: float,
     close_start = window_end - CLOSE_SECONDS * 1000
     observed: list[float] = []
     if at > close_start:
-        by_ts = {ts: p for ts, p in rows[:end] if ts >= close_start}
-        prev = next((p for ts, p in reversed(rows[:end]) if ts < close_start), price)
+        c = bisect_left(rows, close_start, 0, end, key=_TS)  # the first closing second's row (no copy of `rows`)
+        by_ts = {ts: p for ts, p in rows[c:end]}
+        prev = rows[c - 1][1] if c > 0 else price
         for s in range(close_start, min(at, window_end), 1000):
             prev = by_ts.get(s, prev)
             observed.append(prev)

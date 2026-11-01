@@ -131,12 +131,12 @@ def test_known_order_ids_fn_keeps_other_strategies_orders_from_blocking_trading(
         oid = await _resting(ex, "other-1")
         await _resting(ex, "other-2")
         # by client_order_id and by order id
-        svc = await up(svc_for(store, ex, "you", known_order_ids_fn=lambda: ["other-1", "nothing"]))
+        svc = await up(svc_for(store, ex, "you", known_order_ids_fn=lambda ids: {"other-1", "nothing"} & ids))
         assert svc.status(NOW)["external"]["orders"] and (await svc.prepare(proposal(), NOW))["code"] == \
             "unknown_orders"  # other-2 is not known: it still blocks
         n = len(ex.writes())
         svc2 = await up(svc_for(store, ex, "you", set_mode=False,
-                                known_order_ids_fn=lambda: {"other-2", oid}))  # a coid and an order id
+                                known_order_ids_fn=lambda ids: {"other-2", oid} & ids))  # a coid and an order id
         assert svc2.status(NOW)["external"]["orders"] == []
         r = await enter(svc2, proposal())
         assert r["ok"] and r["bracket"]["state"] == "open", r
@@ -147,12 +147,14 @@ def test_known_order_ids_fn_keeps_other_strategies_orders_from_blocking_trading(
 def test_a_failing_known_order_ids_fn_leaves_the_service_unreconciled(store):
     async def go():
         ex = Exchange(Market())
+        await _resting(ex, "other-1")  # a resting order to judge: the lookup is asked (only about it)
+        n = len(ex.writes())
 
-        def boom():
+        def boom(ids):
             raise RuntimeError("order lookup down")
         svc = await up(svc_for(store, ex, "you", known_order_ids_fn=boom))
         assert (await svc.prepare(proposal(), NOW))["code"] == "not_reconciled"
-        assert ex.writes() == []
+        assert len(ex.writes()) == n
     run(go())
 
 

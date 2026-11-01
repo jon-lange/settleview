@@ -304,6 +304,7 @@ class AgentSessions:
         # turn is settled). Every session's wake checks the global daily API limit against usage + these, so
         # concurrent wakes cannot each reserve the same last dollars.
         self._api_held: dict[str, float] = {}
+        self._global: dict | None = None  # the stored global limits, cached (this object writes them)
 
     # -- start-up -------------------------------------------------------------------------------------------
     def restore(self, now: int) -> None:
@@ -530,6 +531,21 @@ class AgentSessions:
         """Realized net loss (gains count negative) plus the worst case of every position not yet closed (R2)."""
         parts = self.budget_parts(session_id)
         return round(parts["realized"] + parts["at_risk"], 4)
+
+    @staticmethod
+    def budget_used_of(rows: list[dict]) -> float:
+        """`budget_used` over rows already read (the fleet's one read per tick)."""
+        parts = _parts(rows)
+        return round(parts["realized"] + parts["at_risk"], 4)
+
+    def brackets_by_session(self, session_ids: list[str]) -> dict[str, list[dict]]:
+        """Every bracket of these sessions in one query (ix_trading_brackets_session), grouped by session id (each
+        id present, [] when it has none)."""
+        out: dict[str, list[dict]] = {sid: [] for sid in session_ids}
+        if session_ids:
+            for b in self.repo.select(BRACKETS, filters=[("session_id", "in", list(session_ids))]):
+                out.setdefault(b["session_id"], []).append(b)
+        return out
 
     def budget_parts(self, session_id: str) -> dict:
         """The budget used, split: `realized` net loss of closed positions (gains negative) and `at_risk` = the worst
@@ -788,11 +804,14 @@ class AgentSessions:
 
     # -- KD3: optional global limits --------------------------------------------------------------------------
     def global_limits(self) -> dict:
-        """{max_loss_day, api_day}: dollars, None = off (the default)."""
-        rows = self.repo.select("strategy_settings", GLOBAL_LIMITS, limit=1)
-        v = rows[0]["value"] if rows else {}
-        v = v if isinstance(v, dict) else {}
-        return {k: v.get(k) for k in GLOBAL_KEYS}
+        """{max_loss_day, api_day}: dollars, None = off (the default). Read once, then cached: only
+        `set_global_limits` writes them (the review asks every tick)."""
+        if self._global is None:
+            rows = self.repo.select("strategy_settings", GLOBAL_LIMITS, limit=1)
+            v = rows[0]["value"] if rows else {}
+            v = v if isinstance(v, dict) else {}
+            self._global = {k: v.get(k) for k in GLOBAL_KEYS}
+        return dict(self._global)
 
     def set_global_limits(self, changes: Mapping[str, Any], now: int) -> dict:
         """Set either limit (a dollar amount above $0, or None = off). An unknown key is refused, never dropped."""
@@ -807,6 +826,7 @@ class AgentSessions:
         if not self.repo.update("strategy_settings", GLOBAL_LIMITS, {"value": new, "updated_ts": now}):
             self.repo.insert("strategy_settings", [{**GLOBAL_LIMITS, "value": new, "updated_ts": now}],
                              ignore_conflicts=False)
+        self._global = {k: new.get(k) for k in GLOBAL_KEYS}
         return {"ok": True, "limits": new, "used": self.global_usage(now)}
 
     day_tz: tzinfo | None = None  # the local zone for "today" (set by bootstrap to the daily summary's zone)
@@ -1063,21 +1083,32 @@ class AgentSessions:
         return {"rows": rows, "next_before_id": rows[-1]["id"] if more and rows else None,
                 "runs": self.runs(session_ids=sids)}
 
-    def runs(self, *, agent_id: str | None = None, session_ids: list[str] | None = None) -> list[dict]:
-        """Run summaries (an agent's, or these sessions'), newest first: {session_id, agent_id, name, run (1 = the
-        agent's first), state, started_ts, ended_ts, end_reason, net (closed trades), trades}."""
+    def runs(self, *, agent_id: str | None = None, session_ids: list[str] | None = None,
+             agent_ids: list[str] | None = None) -> list[dict]:
+        """Run summaries (an agent's, several agents' (`agent_ids`), or these sessions'), newest first: {session_id,
+        agent_id, name, run (1 = the agent's first), state, started_ts, ended_ts, end_reason, net (closed trades),
+        trades}. At most three queries however many agents or runs (the agent list used to ask per agent)."""
         if agent_id is not None:
-            sessions = self.repo.select(SESSIONS, {"agent_id": agent_id})
+            agent_ids = [agent_id]
+        if agent_ids is not None:
+            if not agent_ids:
+                return []
+            sessions = self.repo.select(SESSIONS, filters=[("agent_id", "in", list(agent_ids))])
+            every = sessions  # every run of these agents: the run numbers need nothing more
         elif session_ids:
             sessions = self.repo.select(SESSIONS, filters=[("id", "in", session_ids)])
+            aids = sorted({s["agent_id"] for s in sessions if s.get("agent_id")})
+            every = self.repo.select(SESSIONS, filters=[("agent_id", "in", aids)]) if aids else []
         else:
             return []
         sessions = [self._live.get(s["id"], s) for s in sessions]
-        aids = {s.get("agent_id") for s in sessions if s.get("agent_id")}
+        by_agent: dict[str, list[dict]] = {}
+        for s in every:
+            if s.get("agent_id"):
+                by_agent.setdefault(s["agent_id"], []).append(s)
         order: dict[str, int] = {}
-        for aid in aids:  # the run number counts every run of that agent, oldest first
-            for i, s in enumerate(sorted(self.repo.select(SESSIONS, {"agent_id": aid}),
-                                         key=lambda x: (x["started_ts"], x["id"])), 1):
+        for runs in by_agent.values():  # the run number counts every run of that agent, oldest first
+            for i, s in enumerate(sorted(runs, key=lambda x: (x["started_ts"], x["id"])), 1):
                 order[s["id"]] = i
         net: dict[str, list] = {s["id"]: [0.0, 0] for s in sessions}
         for b in self.repo.select(BRACKETS, filters=[("session_id", "in", list(net))]) if net else []:
@@ -1094,10 +1125,15 @@ class AgentSessions:
 
     def agent_list(self, now: int, *, archived: bool = False) -> list[dict]:
         """Every agent with its runs at a glance: {id, name, market, market_label, created_ts, archived,
-        running_session_id, runs, last_run, net, trades}."""
+        running_session_id, runs, last_run, net, trades}. Four queries for the whole list (agents, their sessions,
+        those sessions' brackets), not three per agent."""
+        agents = self.agents(archived=archived)
+        runs_of: dict[str, list[dict]] = {}
+        for r in self.runs(agent_ids=[a["id"] for a in agents]):  # newest first, kept per agent
+            runs_of.setdefault(r["agent_id"], []).append(r)
         out = []
-        for a in self.agents(archived=archived):
-            runs = self.runs(agent_id=a["id"])
+        for a in agents:
+            runs = runs_of.get(a["id"], [])
             live = self.running_agent(a["id"])
             out.append({**a, "archived": bool(a["archived"]), "market_label": VENUE_LABELS.get(a["market"],
                                                                                               a["market"]),

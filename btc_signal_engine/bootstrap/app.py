@@ -21,7 +21,7 @@ import dataclasses
 import functools
 import importlib.metadata
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -96,6 +96,7 @@ from btc_signal_engine.application.agent_sessions import (BRACKETS, VENUE_LABELS
                                                           position_view)
 from btc_signal_engine.application.agent_tools import AgentTools
 from btc_signal_engine.application.coach import CoachService
+from btc_signal_engine.application.index_tail import IndexTail
 from btc_signal_engine.application.copilot import Copilot
 from btc_signal_engine.application.engine.engine import Engine
 from btc_signal_engine.application.engine.hydrate import LOOKBACK_MS, hydrate
@@ -375,7 +376,9 @@ class Runtime:
         # key file are configured.
         self.portfolio_gw = portfolio_from_settings(settings.kalshi_key_id, settings.kalshi_private_key_path,
                                                     base_url=settings.kalshi_base_url)
-        self.coach = CoachService(self.writer, self.store, self.horizons)
+        # The recent per-second index, read incrementally: the Coach's tick and series, Play's fair odds and chart.
+        self.index_tail = IndexTail(self.store)
+        self.coach = CoachService(self.writer, self.index_tail, self.horizons)
         s = settings
         # The gateways' own notional ceiling on one buy: a bug guard only (a wrong count or price can never send an
         # absurd order), not a trading limit. The real bounds are the phone's user-set PlayLimits and, in production,
@@ -421,7 +424,7 @@ class Runtime:
         self.you_trading = TradingService(
             self.store, self.trading_gws, trading_config, strategy=YOU, paused_fn=lambda: self.coach.paused,
             now=self.clock.now_ms(), index_price_fn=self.live_price, balance_fn=lambda: self.balance,
-            known_order_ids_fn=lambda: self._other_order_ids(YOU), limits_fn=self.play_limits.for_trading,
+            known_order_ids_fn=functools.partial(self._other_order_ids, YOU), limits_fn=self.play_limits.for_trading,
             market_band_fn=self.play_limits.market_band, committed_today_fn=self.committed_today.total,
             cash_backstop=True, **self._agent_hooks())
         self.trading_services[YOU] = self.you_trading
@@ -1082,8 +1085,8 @@ class Runtime:
         return rows[0].get(want) if rows else None
 
     def index_prices(self, start: int, end: int) -> list[tuple[int, float]]:
-        """Per-second index rows (ts, price) with start <= ts < end."""
-        return [(r.ts, r.price) for r in self.store.index_range(start, end)]
+        """Per-second index rows (ts, price) with start <= ts < end (the recent ones from the incremental cache)."""
+        return [(r.ts, r.price) for r in self.index_tail.index_range(start, end)]
 
     def _index_minute_ago(self, now: int) -> float | None:
         rows = self.store.select("index_1s", filters=[("ts", ">=", now - 62_000)], order_by=["ts"], limit=1)
@@ -1147,19 +1150,30 @@ class Runtime:
             return None
         return t.ts, t.price
 
-    def _order_ids(self, strategy: str) -> set[str]:
-        """Order ids and client_order_ids a strategy placed on a shared account, so reconciliation never mistakes them
-        for orders this app did not place."""
-        return {x for o in self.store.select("trading_orders", {"strategy": strategy})
-                for x in (o.get("order_id"), o.get("client_order_id")) if x}
+    def _order_ids(self, strategies: list[str], ids: Iterable[str] | None = None) -> set[str]:
+        """Order ids and client_order_ids these strategies placed on a shared account, so reconciliation never mistakes
+        them for orders this app did not place. With `ids` (what the trading service is judging: resting orders,
+        fills) only those of them are looked up, by the two indexed columns; never every order ever placed."""
+        if not strategies:
+            return set()
+        if ids is None:
+            return {x for o in self.store.select("trading_orders", filters=[("strategy", "in", strategies)])
+                    for x in (o.get("order_id"), o.get("client_order_id")) if x}
+        want = sorted({x for x in ids if x})
+        if not want:
+            return set()
+        rows = [*self.store.select("trading_orders", filters=[("strategy", "in", strategies), ("order_id", "in", want)]),
+                *self.store.select("trading_orders", filters=[("strategy", "in", strategies),
+                                                              ("client_order_id", "in", want)])]
+        return {x for o in rows for x in (o.get("order_id"), o.get("client_order_id")) if x in want}
 
-    def _other_pm_order_ids(self, strategy: str) -> set[str]:
+    def _other_pm_order_ids(self, strategy: str, ids: Iterable[str] | None = None) -> set[str]:
         """Every other strategy's Polymarket order ids (the phone tabs and the retired pnw_poly share one account)."""
-        return set().union(*(self._order_ids(s) for s in PM_LIVE if s != strategy))
+        return self._order_ids([s for s in PM_LIVE if s != strategy], ids)
 
-    def _other_order_ids(self, strategy: str) -> set[str]:
+    def _other_order_ids(self, strategy: str, ids: Iterable[str] | None = None) -> set[str]:
         """Every other strategy's Kalshi order ids (the retired taker and pnw_cushion share the account with "you")."""
-        return set().union(*(self._order_ids(s) for s in KALSHI_LIVE if s != strategy))
+        return self._order_ids([s for s in KALSHI_LIVE if s != strategy], ids)
 
     def _play_kalshi_quote(self, now: int) -> dict | None:
         """The Kalshi quote the Play screens use: the Coach's live quote (WebSocket book, REST fallback) for the

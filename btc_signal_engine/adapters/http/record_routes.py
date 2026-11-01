@@ -20,6 +20,8 @@ RANGE = "^(" + "|".join(record_summary.RANGES) + ")$"
 
 def register_record_routes(app: FastAPI, repo: Repository, now_fn: Callable[[], int],
                            tz: tzinfo | None = None) -> None:
+    links = record_summary.RuleLinks(repo)  # "all": the journal's rule links read incrementally
+
     @app.get("/api/record/summary")
     def record_summary_get(range: str = Query(..., pattern=RANGE)) -> dict:  # noqa: A002 (the query name)
-        return record_summary.summary(repo, now_fn(), range, tz=tz)
+        return record_summary.summary(repo, now_fn(), range, tz=tz, all_links=links)

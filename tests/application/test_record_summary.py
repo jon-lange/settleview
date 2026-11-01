@@ -108,3 +108,27 @@ def test_the_route_needs_a_known_range(store):
     assert r["ok"] and (r["net"], r["trades"], r["wins"]) == (-0.45, 2, 1)
     assert c.get("/api/record/summary").status_code == 422
     assert c.get("/api/record/summary", params={"range": "month"}).status_code == 422
+
+
+def test_record_all_links_read_incrementally_equal_a_full_read(store):
+    """B5#8: RuleLinks folds the journal's rule / decision rows as rule_links does, then reads only the new ones."""
+    w = world(store)
+    links = rec.RuleLinks(store)
+    links.OVERLAP = 1  # this small journal: the re-read overlap would cover it all
+    assert links.all() == rec.rule_links(store)
+    w.ag.journal("decision", {"action": "ENTRY", "rule": "H4", "market": "kalshi_15m", "bracket_id": "late"}, NOW,
+                 session_id=SID)
+    w.ag.journal("rule", {"rule": "CUSHION100", "ok": True, "bracket_id": "late", "market": "kalshi_15m"}, NOW,
+                 session_id=SID)
+    seen = []
+    real = store.select
+
+    def select(table, where=None, **kw):
+        seen.append((table, kw.get("filters")))
+        return real(table, where, **kw)
+    store.select = select
+    got = links.all()
+    assert got == rec.rule_links(store) and got["late"]["rule"] == "CUSHION100"  # a rule entry wins
+    ((_, filters),) = [x for x in seen if x[0] == "agent_journal"][:1]
+    assert any(col == "id" and op == ">" and v > 0 for col, op, v in filters)  # not the whole journal again
+    assert rec.summary(store, NOW, "all", all_links=links) == rec.summary(store, NOW, "all")

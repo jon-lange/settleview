@@ -127,9 +127,21 @@ class PerpPublisher:
         self.min_gap_s = min_gap_s
         self.refresh_s = refresh_s
         self._wake = asyncio.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None  # the loop `run` waits on
 
     def notify(self) -> None:
-        """Cheap and synchronous: safe from a stream callback on the event loop."""
+        """Cheap and synchronous, from any thread. On the loop (a stream callback) it sets the event; from a worker
+        thread (a sync route: heartbeat, resume) it hops onto the loop, since asyncio.Event is not thread-safe (a
+        set() from another thread may never wake the waiting task)."""
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is not loop:
+                loop.call_soon_threadsafe(self._wake.set)
+                return
         self._wake.set()
 
     def publish_now(self) -> None:
@@ -137,6 +149,7 @@ class PerpPublisher:
             self.hub.publish(self.view.changes(self.now_fn()))
 
     async def run(self) -> None:
+        self._loop = asyncio.get_running_loop()
         while True:
             try:
                 await asyncio.wait_for(self._wake.wait(), self.refresh_s)

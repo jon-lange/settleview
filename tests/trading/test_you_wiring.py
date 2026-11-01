@@ -91,6 +91,10 @@ def test_the_phone_service_knows_the_retired_bots_past_orders(rt):
     rt.store.insert("trading_orders", rows)
     assert rt._other_order_ids("you") == {"c-taker", "x-taker", "c-pnw_cushion", "x-pnw_cushion"}
     assert rt.you_trading._known_order_ids_fn() == rt._other_order_ids("you")
+    # asked about the ids being judged only: those of them the other strategies placed (by order id or coid)
+    assert rt.you_trading._known_order_ids_fn({"x-taker", "c-pnw_cushion", "x-you", "c-you", "zzz"}) == {
+        "x-taker", "c-pnw_cushion"}
+    assert rt.you_trading._known_order_ids_fn(set()) == set()
 
 
 def test_a_live_bracket_nothing_monitors_is_warned_about_at_start(tmp_path, caplog, monkeypatch):

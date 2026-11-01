@@ -170,3 +170,51 @@ def test_fair_from_index_carries_the_cone_numbers():
     from btc_signal_engine.domain.coach.fair_value import close_avg_dist
     assert (f["mean_close"], f["sd_close"]) == close_avg_dist(price=f["price"], sigma=f["sigma"], at=at, window_end=end)
     assert f["window_end"] == end and f["at"] == at
+
+
+# -- the bisections (review fix plan 2026-10-31 P1, B5#6): the same numbers as the original walks -------------------
+def _walk_sigma(at, rows, end):
+    """minute_sigma as it was before the bisection (the reference)."""
+    from btc_signal_engine.domain.coach.fair_value import MIN_VOL_RETURNS, VOL_MINUTES
+    samples, i = [], end - 1
+    for k in range(VOL_MINUTES + 1):
+        mark = at - k * 60_000
+        while i >= 0 and rows[i][0] >= mark:
+            i -= 1
+        if i < 0:
+            break
+        samples.append(rows[i][1])
+    rets = [math.log(a / b) for a, b in zip(samples, samples[1:], strict=False) if a > 0 and b > 0]
+    if len(rets) < MIN_VOL_RETURNS:
+        return None
+    price = rows[end - 1][1]
+    return max(price * math.sqrt(sum(r * r for r in rets) / len(rets) / 60), price * SIGMA_FLOOR_FRAC)
+
+
+def test_the_bisected_sigma_and_closing_seconds_match_the_original_walks():
+    import random
+
+    from btc_signal_engine.domain.coach.fair_value import fair_from_index, minute_sigma
+    rng = random.Random(11)
+    end_w = T + 900_000
+    rows, price = [], 80_000.0
+    for ts in range(T - 1_900_000, end_w, 1000):
+        price += rng.gauss(0, 6)
+        if rng.random() > 0.08:  # gaps, as recorded data has
+            rows.append((ts, round(price, 2)))
+    for at in [*range(T - 1_000, end_w, 37_000), *range(end_w - 61_000, end_w + 2_000, 1_000)]:
+        end = next((i for i, r in enumerate(rows) if r[0] >= at), len(rows))
+        assert minute_sigma(at, rows, end) == _walk_sigma(at, rows, end)
+        f = fair_from_index(at, rows, 80_000.0, end_w)
+        if f is None:
+            continue
+        # the closing seconds: missing rows carried forward from the previous row (or S), as before
+        close_start, observed = end_w - 60_000, []
+        if at > close_start:
+            by_ts = {ts: p for ts, p in rows[:end] if ts >= close_start}
+            prev = next((p for ts, p in reversed(rows[:end]) if ts < close_start), f["price"])
+            for s in range(close_start, min(at, end_w), 1000):
+                prev = by_ts.get(s, prev)
+                observed.append(prev)
+        assert f["fair_up"] == prob_up(price=f["price"], strike=80_000.0, sigma=f["sigma"], at=at, window_end=end_w,
+                                       observed=observed)

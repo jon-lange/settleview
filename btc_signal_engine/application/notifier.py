@@ -1597,7 +1597,9 @@ class RemoteControl:
         if self._jid is None:
             self._jid = self._journal_max()
             return
-        rows = self.repo.select(JOURNAL, filters=[("id", ">", self._jid)], order_by=["id"], limit=500)
+        # the pump's per-second reads run in a worker thread: a slow database never stalls the event loop
+        rows = await asyncio.to_thread(self.repo.select, JOURNAL, filters=[("id", ">", self._jid)], order_by=["id"],
+                                       limit=500)
         if rows:
             self._jid = max(int(r["id"]) for r in rows)
         if not alerts["activity"]:
@@ -1672,7 +1674,7 @@ class RemoteControl:
         return self._states(rows)
 
     async def _trades(self, chat: int, alerts: dict, now: int) -> None:
-        rows = self._agent_brackets(now)
+        rows = await asyncio.to_thread(self._agent_brackets, now)  # every second: off the event loop
         seen = self._brackets
         states = self._states(rows)
         # the baseline keeps every bracket still watched and every one not yet closed; a closed one that left the

@@ -45,6 +45,11 @@ def _closed(b: dict) -> bool:
     return b.get("state") == "closed" and float(b.get("filled") or 0) > 0
 
 
+def _held(b: dict) -> bool:
+    """An open or settling position that bought something."""
+    return b.get("state") in (*OPEN_STATES, SETTLING) and float(b.get("filled") or 0) > 0
+
+
 def _left(seconds: int) -> str:
     mins = max(0, int(seconds)) // 60
     return f"{mins // 60}h left" if mins >= 60 else f"{mins}m left"
@@ -83,18 +88,35 @@ class FleetView:
         brackets = self._brackets(s["id"] for s in rows)
         overlap_ids = {x["session_id"] for w in self.sessions.overlaps() for side in ("UP", "DOWN")
                        for x in w["sides"][side]}
-        out = [self.row(s, now, brackets.get(s["id"], []), overlap=s["id"] in overlap_ids) for s in rows]
+        held = [sid for sid, bs in brackets.items() if any(_held(b) for b in bs)]
+        rules = self._rules_of(held)  # one journal read for every session that holds something
+        out = [self.row(s, now, brackets.get(s["id"], []), overlap=s["id"] in overlap_ids,
+                        rules_of=rules.get(s["id"], {})) for s in rows]
         live_rows = [r for r in out if r["state"] in LIVE]
         live_rows.sort(key=lambda r: (not r["needs_you"], r["started_ts"], r["id"]))
         return live_rows + [r for r in out if r["state"] not in LIVE]
 
-    def row(self, s: dict, now: int, brackets: list[dict] | None = None, *, overlap: bool = False) -> dict:
+    def _rules_of(self, session_ids: list[str]) -> dict[str, dict[str, str]]:
+        """session id -> {bracket id: the rule entry that opened it} (its "rule" journal row, or an ENTRY decision),
+        for these sessions in one query (ix_agent_journal_session)."""
+        out: dict[str, dict[str, str]] = {sid: {} for sid in session_ids}
+        if not session_ids:
+            return out
+        for j in self.sessions.repo.select(JOURNAL, filters=[("session_id", "in", list(session_ids)),
+                                                             ("kind", "in", ("rule", "decision"))]):
+            d = j.get("data") or {}
+            if d.get("bracket_id") and d.get("rule") and (d.get("ok") or d.get("action") == "ENTRY"):
+                out.setdefault(j["session_id"], {}).setdefault(d["bracket_id"], d["rule"])
+        return out
+
+    def row(self, s: dict, now: int, brackets: list[dict] | None = None, *, overlap: bool = False,
+            rules_of: dict[str, str] | None = None) -> dict:
         sid, lim = s["id"], s["limits"]
         if brackets is None:
             brackets = self.sessions.repo.select(BRACKETS, {"session_id": sid}, order_by=["created_ts"])
         market = self.sessions.market_key(s)
         closed = [b for b in brackets if _closed(b)]
-        held = [b for b in brackets if b.get("state") in (*OPEN_STATES, SETTLING) and float(b.get("filled") or 0) > 0]
+        held = [b for b in brackets if _held(b)]
         parts = _parts(brackets)
         used = round(parts["realized"] + parts["at_risk"], 4)
         budget = float(lim["budget"])
@@ -136,13 +158,8 @@ class FleetView:
             cum += _net(b)
             spark.append(round(cum, 4))
         net = round(sum(_net(b) for b in closed), 4)
-        rules_of: dict[str, str] = {}
-        if held:  # which rule entry opened each held position (its "rule" journal row, or an ENTRY decision)
-            for j in self.sessions.repo.select(JOURNAL, {"session_id": sid}, filters=[("kind", "in", ("rule",
-                                                                                                    "decision"))]):
-                d = j.get("data") or {}
-                if d.get("bracket_id") and d.get("rule") and (d.get("ok") or d.get("action") == "ENTRY"):
-                    rules_of.setdefault(d["bracket_id"], d["rule"])
+        if rules_of is None:  # which rule entry opened each held position (`rows` reads them for every session)
+            rules_of = self._rules_of([sid]).get(sid, {}) if held else {}
         holding = [{"bracket_id": b["id"], "side": b.get("side"), "cost": round(float(b.get("entry_cost") or 0.0), 4),
                     "rule": rules_of.get(b["id"])} for b in held]
         wakes = None

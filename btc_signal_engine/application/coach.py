@@ -8,6 +8,12 @@ Each tick (about twice a second, from the decision loop) the service computes, f
 PlayService (application/play.py) reads the latest result through `evaluation`.
 
 `series` gives one window's recorded data every 5 s (our odds, Kalshi's recorded quotes, BTC): the Play odds pane.
+The live window's points are kept once they are SERIES_STABLE_MS old (their rows and quotes are recorded by then), so
+a request computes only the newest ones; the whole series is rebuilt every SERIES_REBUILD_MS (a row that landed late).
+A finished window's whole series is cached once its result is known.
+
+`market` needs only `index_range`: the runtime passes application/index_tail.IndexTail (the recent index read
+incrementally) so neither the tick nor the series re-reads 31 minutes of rows each time.
 
 Pause (`coach_settings.paused`, persisted): the second half of the Play kill switch. While paused every phone
 trading service refuses new entries (TradingService's `paused_fn`).
@@ -34,6 +40,8 @@ LABELS = {60: "1m", 300: "5m", 900: "15m"}
 SETTINGS = "coach_settings"
 SERIES_STEP_MS = 5_000
 SERIES_CACHE = 24
+SERIES_STABLE_MS = 15_000  # a live point this old is final: its index rows and quotes are recorded
+SERIES_REBUILD_MS = 60_000  # the live window's kept points are recomputed this often
 QUOTE_STALE_MS = 10_000
 PAUSED_SENTENCE = "Paused: new entries are refused on every Play tab until you resume."
 RUNNING_SENTENCE = "Running."
@@ -48,6 +56,8 @@ class CoachService:
         self._open_avgs: dict[int, float] = {}
         self._leans: dict[int, dict] = {}
         self._series: dict[int, dict] = {}
+        # the live window's final points: boundary -> (open_avg, ticker, points, built at)
+        self._live_points: dict[int, tuple[float | None, str | None, list[dict], int]] = {}
         paused = repo.select(SETTINGS, {"key": "paused"})
         self._paused = bool(paused and (paused[0]["value"] or {}).get("paused"))
         self._paused_since = paused[0]["updated_ts"] if paused else None
@@ -163,9 +173,15 @@ class CoachService:
         mrows = self._repo.select("kalshi_markets", {"open_ts": boundary})
         ticker = mrows[0]["ticker"] if mrows else (max(counts, key=counts.get) if counts else None)
         quotes = [q for q in quotes if q["ticker"] == ticker]
-        points = []
+        kept = self._live_points.get(boundary)
+        if kept is not None and kept[0] == open_avg and kept[1] == ticker and now - kept[3] < SERIES_REBUILD_MS:
+            points = [p for p in kept[2] if p["ts"] <= now - SERIES_STABLE_MS]
+            built = kept[3]
+        else:
+            points, built = [], now
+        t_from = points[-1]["ts"] + SERIES_STEP_MS if points else boundary
         qi, ri, last_q = 0, 0, None
-        for t in range(boundary, upto, SERIES_STEP_MS):
+        for t in range(t_from, upto, SERIES_STEP_MS):
             while qi < len(quotes) and quotes[qi]["ts"] <= t:
                 last_q = quotes[qi]
                 qi += 1
@@ -197,4 +213,9 @@ class CoachService:
             if len(self._series) >= SERIES_CACHE:
                 self._series.pop(next(iter(self._series)))
             self._series[boundary] = out
+            self._live_points.pop(boundary, None)
+        elif upto > boundary:
+            self._live_points = {b: v for b, v in list(self._live_points.items()) if b >= boundary - 2 * H_MS}
+            self._live_points[boundary] = (open_avg, ticker, [p for p in points if p["ts"] <= now - SERIES_STABLE_MS],
+                                           built)
         return out

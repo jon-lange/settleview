@@ -11,10 +11,14 @@ in the span, and the net after that API. Perps are not here (their own record, f
 the Perps screen), exactly as in the daily summary.
 
 Days are local: `tz` is the zone (None = this PC's own zone), as the daily summary uses. Ranges: "today" (since local
-midnight), "week" (today and the six local days before it), "all" (everything recorded)."""
+midnight), "week" (today and the six local days before it), "all" (everything recorded).
+
+"All" reads its rule links from a `RuleLinks` (the Record route keeps one): the journal's "rule" and "decision" rows
+read once, then only the new ones each time (ix_agent_journal_kind), instead of the whole journal on every request."""
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable
 from datetime import datetime, timedelta, tzinfo
 
@@ -73,15 +77,44 @@ def rule_links(repo: Repository, *, session_id: str | None = None, since: int | 
         filters.append(("ts", ">=", since))
     out: dict[str, dict] = {}
     for r in repo.select(JOURNAL, where, filters=filters, order_by=["id"]):
-        d = r.get("data") or {}
-        bid = d.get("bracket_id")
-        if not bid or not d.get("rule"):
-            continue
-        if r["kind"] == "rule" and d.get("ok"):
-            out[bid] = {"rule": d["rule"], "market": d.get("market"), "inputs": d.get("inputs") or {}}
-        elif r["kind"] == "decision" and d.get("action") == "ENTRY":
-            out.setdefault(bid, {"rule": d["rule"], "market": d.get("market"), "inputs": {}})
+        _fold(out, r)
     return out
+
+
+class RuleLinks:
+    """`rule_links` over the whole journal, read incrementally: the rule and decision rows past the last id read
+    (re-reading the last OVERLAP ids, so a row whose insert committed after a higher id was read is still seen),
+    folded in id order exactly as `rule_links` folds them. Safe from several worker threads."""
+
+    OVERLAP = 200
+
+    def __init__(self, repo: Repository) -> None:
+        self.repo = repo
+        self._links: dict[str, dict] = {}
+        self._after = 0
+        self._lock = threading.Lock()
+
+    def all(self) -> dict[str, dict]:
+        with self._lock:
+            rows = self.repo.select(JOURNAL, filters=[("kind", "in", ("rule", "decision")),
+                                                      ("id", ">", max(0, self._after - self.OVERLAP))],
+                                    order_by=["id"])
+            for r in rows:
+                self._after = max(self._after, int(r["id"]))
+                _fold(self._links, r)
+            return dict(self._links)
+
+
+def _fold(out: dict[str, dict], r: dict) -> None:
+    """One journal row into the links (`rule_links`' rule: a rule entry wins, an ENTRY decision only fills in)."""
+    d = r.get("data") or {}
+    bid = d.get("bracket_id")
+    if not bid or not d.get("rule"):
+        return
+    if r["kind"] == "rule" and d.get("ok"):
+        out[bid] = {"rule": d["rule"], "market": d.get("market"), "inputs": d.get("inputs") or {}}
+    elif r["kind"] == "decision" and d.get("action") == "ENTRY":
+        out.setdefault(bid, {"rule": d["rule"], "market": d.get("market"), "inputs": {}})
 
 
 def closed_stats(rows: Iterable[dict], links: dict[str, dict]) -> dict:
@@ -100,13 +133,18 @@ def closed_stats(rows: Iterable[dict], links: dict[str, dict]) -> dict:
             "by_rule": {r: (n, w, round(x, 2)) for r, (n, w, x) in sorted(by_rule.items())}}
 
 
-def closed_between(repo: Repository, start: int, now: int, strategies: Iterable[str] = PLAY_STRATEGIES) -> dict:
+def closed_between(repo: Repository, start: int, now: int, strategies: Iterable[str] = PLAY_STRATEGIES, *,
+                   all_links: RuleLinks | None = None) -> dict:
     """The trades closed in [start, now] over every agent session and your own Play trades, with their rule links
-    (journal rows from a day before `start`, so an entry opened before midnight still names its rule)."""
+    (journal rows from a day before `start`, so an entry opened before midnight still names its rule; from start 0,
+    `all_links` when given, else every row)."""
     rows = [b for b in repo.select(BRACKETS, filters=[("strategy", "in", list(strategies)),
                                                       ("updated_ts", ">=", start)])
             if start <= closed_at(b) <= now]
-    links = rule_links(repo, since=start - DAY_MS if start > 0 else None)
+    if start <= 0 and all_links is not None:
+        links = all_links.all()
+    else:
+        links = rule_links(repo, since=start - DAY_MS if start > 0 else None)
     return {**closed_stats(rows, links), "links": links, "start": start}
 
 
@@ -156,12 +194,12 @@ def by_agent(repo: Repository, closed: list[dict], sessions: list[dict]) -> list
 
 
 def summary(repo: Repository, now: int, range_: str, *, tz: tzinfo | None = None,
-            strategies: Iterable[str] = PLAY_STRATEGIES) -> dict:
+            strategies: Iterable[str] = PLAY_STRATEGIES, all_links: RuleLinks | None = None) -> dict:
     """The Record tab's card: net, trades and wins over the range; the split you / agent; the API cost of the agent
     sessions started in it; per agent (`by_agent`); and per rule (every rule that traded, plus each rule a session in the range ran with and
     that did not trade, as 0 trades)."""
     start = range_start(now, range_, tz)
-    day = closed_between(repo, start, now, strategies)
+    day = closed_between(repo, start, now, strategies, all_links=all_links)
     sessions = sessions_between(repo, start, now)
     closed = day["closed"]
     rules = {r: {"rule": r, "trades": n, "wins": w, "net": x} for r, (n, w, x) in day["by_rule"].items()}

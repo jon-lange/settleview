@@ -33,7 +33,14 @@ stream and the poller may see the same fact in any order: the second is a no-op.
 stream for an environment is healthy, take-profit orders are re-polled every `reconcile_backup_ms` and the REST
 quote is used only when the stream's quote for that market is older than `stream_quote_max_age_ms`; when it is
 unhealthy (disconnected or a sequence gap) the old cadence returns (`reconcile_every_ms`, a REST quote every tick),
-audited as `stream_down` / `stream_up`.
+audited as `stream_down` / `stream_up`. Those REST quotes are read concurrently BEFORE `tick` takes the monitor lock
+(review fix plan 2026-10-31 P1, B1#6): a slow quote no longer holds an approve, an exit or another bracket's stop
+behind it; under the lock each bracket uses the quote read for it (a bracket that appeared meanwhile reads its own).
+
+Threads: the sync routes (status, Play's view) run in FastAPI's worker threads while the event loop changes the
+watched brackets, so every read outside the loop iterates a snapshot (`_watched()`, one C-level copy), never the live
+dict. Reconciliation and the external-fill check look up only the order ids they are judging (resting orders, fills),
+never every order ever placed.
 
 Strategies: each service trades for one phone `strategy` (one per Play tab of the market table, domain/markets.py:
 "you", "you_poly", "you_poly5"). Every trading_brackets/orders/audit row it reads is filtered by that strategy and
@@ -472,7 +479,7 @@ class TradingService:
                  id_fn: Callable[[], str] = lambda: uuid.uuid4().hex, token_fn: Callable[[], str] = lambda:
                  secrets.token_urlsafe(24), now: int = 0,
                  streams: dict[str, TradingStream] | None = None,
-                 known_order_ids_fn: Callable[[], Iterable[str]] | None = None,
+                 known_order_ids_fn: Callable[[set[str]], Iterable[str]] | None = None,
                  index_price_fn: Callable[[], tuple[int, float] | None] | None = None,
                  balance_fn: Callable[[], tuple[float | None, int | None]] | None = None,
                  modes: dict[str, str] | None = None, venue: str = "Kalshi",
@@ -488,6 +495,8 @@ class TradingService:
         (and its settings keys, except the shared kill switch). `known_order_ids_fn` returns order ids and
         client_order_ids placed by other strategies on the same account (the other phone tabs, and the retired bots'
         past orders) so reconciliation never counts them as external orders.
+        `known_order_ids_fn(ids)` is asked about the ids being judged only (a set; it returns those of them the other
+        strategies placed): reconciliation's resting orders, the external-fill check's fills.
         `index_price_fn()` -> (exchange ts ms, price) of the live BTC index, or None: the source for index stops.
         `modes` maps each allowed mode to its environment name (default MODES: sandbox->demo, shadow, prod); a
         service on another exchange uses its own environment names (e.g. {"shadow": "pm_shadow", "prod": "pm_prod"})
@@ -808,14 +817,20 @@ class TradingService:
         (log.info if ok else log.warning)("%s %s %s", self.strategy, event, text)
         self._audit(event, now, code="connectivity", reason=text[:300], detail={"exposed": exposed})
 
+    def _watched(self) -> list[dict]:
+        """The watched brackets as a snapshot: `list(dict.values())` copies in one C call under the GIL, so a sync
+        route's worker thread never iterates the dict while the event loop adds or drops a bracket (a Python-level
+        loop over the live dict could raise "dictionary changed size during iteration")."""
+        return list(self._brackets.values())
+
     def live_brackets(self) -> list[dict]:
         """This service's brackets that are still live (sending, unknown, open or stopping). Settling ones (window
         closed, result pending) are not: see `settling_brackets`."""
-        return [b for b in self._brackets.values() if b["state"] in LIVE_STATES]
+        return [b for b in self._watched() if b["state"] in LIVE_STATES]
 
     def settling_brackets(self) -> list[dict]:
         """Brackets whose window closed while holding, waiting for the market's official result."""
-        return [b for b in self._brackets.values() if b["state"] == SETTLING]
+        return [b for b in self._watched() if b["state"] == SETTLING]
 
     # -- exposure and limits ------------------------------------------------------------------------
     @staticmethod
@@ -829,7 +844,7 @@ class TradingService:
 
     def _env_brackets(self, env: str, since: int) -> list[dict]:
         rows = {r["id"]: r for r in self._select(BRACKETS, {"env": env}, filters=[("created_ts", ">=", since)])}
-        rows.update({k: v for k, v in self._brackets.items() if v["env"] == env and v["created_ts"] >= since})
+        rows.update({v["id"]: v for v in self._watched() if v["env"] == env and v["created_ts"] >= since})
         return list(rows.values())
 
     def exposure(self, env: str, now: int, ticker: str | None = None) -> dict:
@@ -1561,6 +1576,7 @@ class TradingService:
     # -- the monitor (stop, take profit, reconciliation) -----------------------------------------------
     async def tick(self, now: int, quotes: dict[str, dict] | None = None) -> None:
         """StopMonitor: call about once a second. `quotes` (ticker -> quote) overrides fetching from the exchange."""
+        pre = await self._prefetch_quotes(now) if quotes is None else {}
         async with self._lock:
             self._sync_streams(now)
             for env in set(self.streams) | set(self._stream_up):
@@ -1573,7 +1589,7 @@ class TradingService:
                 if not self._ready.get(b["env"]):
                     continue
                 try:
-                    await self._watch(b, now, quotes)
+                    await self._watch(b, now, quotes, pre)
                 except Exception as exc:
                     self._audit("error", now, bracket=b, code="monitor", reason=f"{type(exc).__name__}: {exc}"[:300])
             try:
@@ -1584,7 +1600,24 @@ class TradingService:
         if due:  # the result reads run OUTSIDE the lock: a slow venue never delays a live bracket's stop
             await self._settle_reads(due, now)
 
-    async def _watch(self, b: dict, now: int, quotes: dict[str, dict] | None) -> None:
+    def _needs_rest_quote(self, b: dict, now: int) -> bool:
+        """`_watch` will read this bracket's quote from REST: it is open or stopping on a ready env, its window is
+        open, and the stream has no fresh quote for its market."""
+        return (b["state"] in ("open", "stopping") and bool(self._ready.get(b["env"])) and now < b["window_end"]
+                and self.stream_quote(b["env"], b["ticker"], now) is None)
+
+    async def _prefetch_quotes(self, now: int) -> dict[tuple[str, str], dict | None]:
+        """The REST quotes this tick's `_watch` calls need, read concurrently and WITHOUT the lock, each market once
+        (`_quote` logs a failure and answers None). Keyed (env, ticker); None = the read failed: no bid this tick, as
+        a failed read under the lock gave."""
+        keys = list(dict.fromkeys((b["env"], b["ticker"]) for b in self._watched() if self._needs_rest_quote(b, now)))
+        if not keys:
+            return {}
+        got = await asyncio.gather(*(self._quote(env, ticker, now) for env, ticker in keys), return_exceptions=True)
+        return {k: (q if isinstance(q, dict) else None) for k, q in zip(keys, got, strict=True)}
+
+    async def _watch(self, b: dict, now: int, quotes: dict[str, dict] | None,
+                     pre: dict[tuple[str, str], dict | None] | None = None) -> None:
         if b["state"] in ("sending", "unknown"):
             await self._resolve_unknown(b, now)
             return
@@ -1600,8 +1633,11 @@ class TradingService:
                 return
         if quotes is not None:
             q = quotes.get(b["ticker"])
-        else:  # the stream's quote when it is fresh; otherwise the REST quote (the backup)
-            q = self.stream_quote(b["env"], b["ticker"], now) or await self._quote(b["env"], b["ticker"], now)
+        else:  # the stream's quote when it is fresh; otherwise the REST quote (the backup), read before the lock
+            key = (b["env"], b["ticker"])
+            q = self.stream_quote(b["env"], b["ticker"], now)
+            if q is None:
+                q = pre[key] if pre is not None and key in pre else await self._quote(b["env"], b["ticker"], now)
         if quotes is not None:
             self._remember_quote(b["env"], b["ticker"], q)
         bid = _bid(b["side"], q) if q and q.get("ticker") == b["ticker"] else None
@@ -1790,6 +1826,13 @@ class TradingService:
             if o is None:
                 return  # not visible yet: the next poll (or the stream) brings it
         self._apply_tp(b, o, now)
+
+    def _own_order_ids(self, ids: set[str]) -> set[str]:
+        """Those of these venue order ids that this strategy placed: an indexed IN lookup (ix_trading_orders_order_id),
+        never a scan of every order ever placed."""
+        if not ids:
+            return set()
+        return {o["order_id"] for o in self._select(ORDERS, filters=[("order_id", "in", sorted(ids))])}
 
     def _coid_of(self, order_id: str) -> str | None:
         rows = self._select(ORDERS, {"order_id": order_id})
@@ -2222,10 +2265,11 @@ class TradingService:
             return None
         if not rows:
             return None
-        mine = {o["order_id"] for o in self._select(ORDERS, filters=[("order_id", "is_null", False)])}
-        if self._known_order_ids_fn is not None:
+        ids = {f["order_id"] for f in rows if f.get("order_id")}
+        mine = self._own_order_ids(ids)
+        if self._known_order_ids_fn is not None and ids:
             try:
-                mine |= set(self._known_order_ids_fn() or ())
+                mine |= set(self._known_order_ids_fn(ids) or ())
             except Exception:  # only this table's own orders count as ours then
                 log.warning("the other services' order ids could not be read; only this table's count as ours",
                             exc_info=True)
@@ -2274,7 +2318,9 @@ class TradingService:
                     await self._poll_tp(b, now)
             positions = await gw.positions()
             resting = await gw.orders(status="resting")
-            elsewhere = set(self._known_order_ids_fn() or ()) if self._known_order_ids_fn is not None else set()
+            ids = {x for o in resting for x in (o.get("order_id"), o.get("client_order_id")) if x}
+            elsewhere = (set(self._known_order_ids_fn(ids) or ()) if self._known_order_ids_fn is not None and ids
+                         else set())
         except Exception as exc:
             self._ready[env] = False
             self._audit("error", now, code="reconcile", reason=f"Reconciliation failed: {type(exc).__name__}", env=env)
@@ -2293,12 +2339,15 @@ class TradingService:
                 if b["held"] <= 0:
                     b.update(state="closed", exit_reason=b.get("exit_reason") or "reconciled", closed_ts=now)
                 self._save(b, now)
-        known_orders = {o["order_id"] for o in self._select(ORDERS, filters=[("order_id", "is_null", False)])}
+        known_orders = self._own_order_ids({o["order_id"] for o in resting if o.get("order_id")})
         known_orders |= elsewhere  # the other strategies' orders on this account: this app placed them
-        # a bracket that never bought anything (rejected, unfilled, not found) does not make a market's position ours
-        known_tickers = {r["ticker"] for r in self._select(BRACKETS, {"env": env})
-                         if r["state"] != "closed" or float(r.get("filled") or 0.0) > 0}
         series = self.config.series + "-"
+        # a bracket that never bought anything (rejected, unfilled, not found) does not make a market's position ours;
+        # only the markets the account holds are looked up (never every bracket ever placed)
+        held = sorted({p["ticker"] for p in positions if (p.get("ticker") or "").startswith(series)})
+        known_tickers = {r["ticker"] for r in (self._select(BRACKETS, {"env": env}, filters=[("ticker", "in", held)])
+                                               if held else [])
+                         if r["state"] != "closed" or float(r.get("filled") or 0.0) > 0}
         self._external[env] = {
             "positions": [p for p in positions if (p.get("ticker") or "").startswith(series)
                           and p["ticker"] not in known_tickers],
@@ -2465,7 +2514,7 @@ class TradingService:
         and every listed manual exit's audit rows come from one more query."""
         rows = {r["id"]: r for r in self._select(BRACKETS, filters=[("created_ts", ">=", since)],
                                                  order_by=["-created_ts"], limit=limit)}
-        rows.update({k: v for k, v in self._brackets.items() if v["created_ts"] >= since})
+        rows.update({v["id"]: v for v in self._watched() if v["created_ts"] >= since})
         out = []
         for b in sorted(rows.values(), key=lambda r: r["created_ts"], reverse=True)[:limit]:
             closed = b["state"] == "closed"

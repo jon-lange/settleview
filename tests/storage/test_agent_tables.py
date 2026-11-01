@@ -96,4 +96,4 @@ def test_0021_adds_agent_wake_inputs_and_downgrade_removes_it(tmp_path):
     cols = {r[1] for r in con.execute("pragma table_info(agent_wake_inputs)")}
     assert cols == {"journal_id", "session_id", "wake_id", "ts", "message", "message_sha256", "fingerprint",
                     "sensitive"}
-    assert con.execute("select version_num from alembic_version").fetchone()[0] == HEAD == "0021"
+    assert con.execute("select version_num from alembic_version").fetchone()[0] == HEAD

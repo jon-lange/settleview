@@ -1873,8 +1873,9 @@ class PerpTradingService:
         why = "Kalshi's fills could not be read"
         try:
             fills = await self._fills_since(o["created_ms"])
+            ids = sorted({f["order_id"] for f in fills if f.get("order_id")})  # only the fills' orders, not every one
             known = {r["order_id"] for r in self.repo.select(ORDERS, {"env": self.env},
-                                                             filters=[("order_id", "is_null", False)])}
+                                                             filters=[("order_id", "in", ids)])} if ids else set()
             cands = candidate_orders(((f.get("order_id"), f.get("created_ts"), f.get("side")) for f in fills),
                                      since_ms=o["created_ms"], book_side=o["side"], known=known)
             for oid in cands:

@@ -21,7 +21,7 @@ def _schema(con) -> dict[str, list[tuple]]:
             for t in sorted(_tables(con) - PERP_TABLES - AGENT_TABLES - {"trades_archive"})}
 
 
-LATER_INDEXES = {"ix_trading_orders_order_id"}  # 0020
+LATER_INDEXES = {"ix_trading_orders_order_id", "ix_trading_brackets_session"}  # 0020, 0022
 
 
 def _order(con, coid: str, position_id: str = "p1") -> None:

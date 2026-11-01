@@ -309,6 +309,9 @@ class AgentRunner:
         self._waking = False
         self._closed_seen = False  # a session position closed since the last auto-retire check
         self._enforced_at: int | None = None
+        # The fleet's one read of every live session's brackets this tick (`prime`): (tick ms, this session's rows),
+        # used by this tick's scan, holds check and wake budget instead of a query each; None = read it here.
+        self._primed: tuple[int, list[dict]] | None = None
         self.proposals = proposals  # assist sessions' proposals (None: assist cannot run in this app)
         self.signal_board = signal_board  # KD6: the fleet's shared per-market call / light detection (None: own)
         if proposals is not None:
@@ -389,6 +392,22 @@ class AgentRunner:
     def _live_session(self) -> dict | None:
         return self.sessions.get(self.session_id)
 
+    def prime(self, now: int, rows: list[dict]) -> None:
+        """The fleet's one read of every live session's brackets at tick `now` (KD6 for the account: one query per
+        tick for the whole fleet, not three or more per session). Valid for that tick until this session sends an
+        order (`_unprime`)."""
+        self._primed = (now, rows)
+
+    def _unprime(self) -> None:
+        self._primed = None
+
+    def _brackets(self, now: int | None = None) -> list[dict]:
+        """This session's brackets: the fleet's primed rows of tick `now`, else a read."""
+        p = self._primed
+        if now is not None and p is not None and p[0] == now:
+            return p[1]
+        return self.sessions.repo.select(BRACKETS, {"session_id": self.session_id})
+
     async def tick(self) -> bool:
         """One pass of a session run on its own (`run`, the tests): review, `step`, then the wake when one is due,
         awaited here. False once the session is over. The fleet (agent_fleet.AgentFleet) instead calls `step` for
@@ -424,7 +443,7 @@ class AgentRunner:
                 log.exception("agent rules failed during a wake")
             return True
         ev = self.events
-        ids = self._scan(now, push=True)
+        ids = self._scan(now, push=True, primed=True)
         for key in s["limits"]["venues"]:
             if key not in views:
                 m = market_spec(key)
@@ -452,7 +471,10 @@ class AgentRunner:
         s = self._live_session()
         if s is None or s["state"] != "running" or self._waking or self.events is None:
             return None
-        budget_left = float(s["limits"]["budget"]) - self.sessions.budget_used(self.session_id)
+        p = self._primed
+        used = (self.sessions.budget_used_of(p[1]) if p is not None and p[0] == now
+                else self.sessions.budget_used(self.session_id))
+        budget_left = float(s["limits"]["budget"]) - used
         if not self.events.should_wake(now, budget_exhausted=budget_left <= 0):
             return None
         return "urgent" if self.events.has_urgent() else "normal"
@@ -466,14 +488,14 @@ class AgentRunner:
         if self.proposals is not None:
             self.proposals.off_approved(self.proposal_approved)
 
-    def _scan(self, now: int, *, push: bool, quiet: set | frozenset = frozenset()) -> set:
+    def _scan(self, now: int, *, push: bool, quiet: set | frozenset = frozenset(), primed: bool = False) -> set:
         """Diff the session's brackets; push account events when `push`, except for the brackets in `quiet` (the
         one an action just touched: its own change is not news to the agent; it is re-baselined, every other
-        position's fill, stop-out or settlement is still pushed). Returns the ids the agent manages."""
-        sid = self.session_id
+        position's fill, stop-out or settlement is still pushed). Returns the ids the agent manages. `primed`: the
+        tick's step may use the fleet's rows of this tick; every other scan (after an action, in a wake) reads."""
         taken = set((self._live_session() or {}).get("taken_over") or [])
         mine = set()
-        for b in self.sessions.repo.select(BRACKETS, {"session_id": sid}):
+        for b in self._brackets(now if primed else None):
             bid, filled = b["id"], float(b.get("filled") or 0)
             state = (b["state"], filled, b.get("exit_reason"))
             prev = self._seen.get(bid)
@@ -562,12 +584,13 @@ class AgentRunner:
                         continue
                     if rule.min_left_ms is not None and end - now < rule.min_left_ms:
                         continue
-                    if self._holds(market):
+                    if self._holds(market, now):
                         continue
                     match = rule_match(rid, market, v)
                     if match is None:
                         continue
                     self._rule_tried.add((rid, market, start))
+                    self._unprime()  # an entry or proposal may follow: later reads this tick see its bracket
                     taken = self._rule_settle.get(int(end)) if one_bet else None
                     if taken is not None:
                         out.append(self._rule_skip(now, rid, market, match, taken))
@@ -602,11 +625,11 @@ class AgentRunner:
             except Exception:
                 log.warning("agent rule notify failed", exc_info=True)
 
-    def _holds(self, market: str) -> bool:
-        """The session has a position (open or still sending) in this market."""
+    def _holds(self, market: str, now: int | None = None) -> bool:
+        """The session has a position (open or still sending) in this market (the tick's primed rows when fresh)."""
         strategy = VENUES[market]
-        return any(b.get("strategy") == strategy and b["state"] in OPEN_STATES
-                   for b in self.sessions.repo.select(BRACKETS, {"session_id": self.session_id}))
+        rows = self._brackets(None if self._waking else now)  # a wake's own orders land mid-tick: read then
+        return any(b.get("strategy") == strategy and b["state"] in OPEN_STATES for b in rows)
 
     async def _rule_entry(self, now: int, s: dict, rid: str, market: str, m: dict) -> dict:
         """One rule entry, start to journal, as its own tracked task: the caller (the fleet's step, the side task
@@ -700,6 +723,7 @@ class AgentRunner:
         """AgentProposals' hook: the user approved this session's proposal and its entry was sent."""
         if p.get("session_id") != self.session_id or self.events is None:
             return
+        self._unprime()
         m = {**p["inputs"], "side": p["side"], "window_start": p["window_start"], "window_end": p["window_end"]}
         self._entered(now, p["rule"], p["market"], m, bracket.get("id"), p.get("note") or "", p["inputs"],
                       source="assist")
@@ -916,6 +940,7 @@ class AgentRunner:
         """One model tool call through the registry, as the session. Writes and session tools are shielded (a Stop
         never cancels an order in flight). Urgent events that arrived meanwhile ride on the result as <new_events>."""
         sid = self.session_id
+        self._unprime()  # the call may send an order: the rules' holds check reads again this tick
         self._scan(self.now(), push=True)  # account changes during the model's turn are news
         entry = {"name": name, "args": args, "ok": None, "code": None, "result": None}
         rec["tools"].append(entry)

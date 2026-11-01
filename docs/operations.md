@@ -487,6 +487,18 @@ reconciles on start.
 - **Schema** (a new Alembic migration): the app migrates on start, in one transaction under an advisory lock (two
   services starting together never migrate twice). By hand: `docker compose run --rm --no-deps app python -m
   btc_signal_engine.ops migrate`. Take a dump first for anything more than an added table or column.
+- **0022** (2026-11-01) adds two indexes, `ix_trading_brackets_session` and `ix_agent_journal_kind` (kind, id). Both
+  tables are small (about 200 brackets and 7,600 journal rows on the live database that day), so the plain CREATE INDEX
+  in the migration's transaction takes milliseconds; it holds writes to those two tables only for that long and, like
+  any DDL, waits out a `pg_dump` lock with the retry above.
+
+**Hot paths that read incrementally** (review fix plan 2026-10-31 P1): the agent fleet reads every live session's
+brackets in one query per tick (in a worker thread), not three or more per session; the stop monitor reads its REST
+quotes before it takes the trading lock; the recent per-second index (the Coach's tick and odds series, Play's fair
+odds and chart) comes from a cache that re-reads only the last 10 s, and the whole range once a minute, so a row the
+writer lands later than that (after an outage) shows within a minute; Record "all" reads the journal's rule links
+once, then only new rows. Why and what was measured: [docs/solutions/2026-11-01-per-session-reads-and-locked-io.md](
+solutions/2026-11-01-per-session-reads-and-locked-io.md).
 
 ### Postgres: moving the SQLite data in (cut-over)
 

@@ -10,7 +10,7 @@ from btc_signal_engine.adapters.sqlite.db import MIGRATIONS_DIR, migrate, write_
 from btc_signal_engine.adapters.sqlite.tables import REVISION_0009, trading_brackets
 
 NEW_TABLES = {t.name for t in REVISION_0009}
-HEAD = "0021"  # the newest migration (0021: agent_wake_inputs)
+HEAD = "0022"  # the newest migration (0022: session and journal-kind indexes)
 STRATEGY_TABLES = ("trading_brackets", "trading_orders", "trading_audit", "trading_sessions")
 
 

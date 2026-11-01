@@ -80,7 +80,8 @@ class PlayService:
         self.evaluation_fn = evaluation_fn
         self.index_fn = index_fn
         # Per-second reuse (every phone and tab polling within one whole second shares one read):
-        # window start -> (second, index series); (tab key, window start, strike) -> (second, fair_fn result).
+        # window start -> (second, index series); (tab key, window start, strike) -> (second, fair_fn result). Worker
+        # threads (the sync routes) and the loop (the agent fleet) share them: a prune iterates a snapshot copy.
         self._series_cache: dict[int, tuple[int, list[tuple[int, float]]]] = {}
         self._fair_cache: dict[tuple, tuple[int, dict | None]] = {}
 
@@ -105,7 +106,7 @@ class PlayService:
         else:
             try:
                 pts = self.index_series_fn(boundary, now + 1)
-                self._series_cache = {k: x for k, x in self._series_cache.items() if x[0] == sec}
+                self._series_cache = {k: x for k, x in list(self._series_cache.items()) if x[0] == sec}
                 self._series_cache[boundary] = (sec, pts)
             except Exception:
                 pts = []
@@ -123,7 +124,7 @@ class PlayService:
             model = v.fair_fn(now, boundary, end, strike)
         except Exception:
             return None
-        self._fair_cache = {k: x for k, x in self._fair_cache.items() if x[0] == sec}
+        self._fair_cache = {k: x for k, x in list(self._fair_cache.items()) if x[0] == sec}
         self._fair_cache[ck] = (sec, model)
         return model
 

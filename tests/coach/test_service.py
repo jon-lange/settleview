@@ -146,3 +146,22 @@ def test_series_points_from_recorded_rows_only(store, coach):
     assert s["points"][2] == {**s["points"][2], "ts": T + 10_000, "yes_bid": 0.55, "yes_ask": 0.57}
     assert s["points"][2 + 3]["yes_bid"] is None  # quotes older than 10 s are not carried forward
     assert s["coverage"]["quotes"] == 1 and s["coverage"]["with_odds"] > 0
+
+
+def test_the_live_series_keeps_its_final_points_and_rebuilds_them_every_minute(store, coach):
+    """B5#6: points SERIES_STABLE_MS old are kept and only the newest computed; a row that lands late changes a kept
+    point at the next rebuild (SERIES_REBUILD_MS), never silently forever."""
+    from btc_signal_engine.application import coach as coach_mod
+    seed_index(store, T - 1_920_000, AT, rising)
+    first = coach.series(T, AT)
+    kept = coach._live_points[T][2]
+    assert kept and all(p["ts"] <= AT - coach_mod.SERIES_STABLE_MS for p in kept)
+    seed_index(store, AT, AT + 5_000, rising)
+    later = coach.series(T, AT + 5_000)
+    assert later["points"][:len(first["points"])] == first["points"]
+    assert later["points"] == CoachService(store, store, (60, 300, 900)).series(T, AT + 5_000)["points"]
+    # an old second rewritten (a late row): kept points stand until the rebuild, then match the store again
+    store.add_index_seconds([IndexSecond(T + 100_000, 81_000.0, T + 100_000, None)])
+    fresh = lambda now: CoachService(store, store, (60, 300, 900)).series(T, now)["points"]  # noqa: E731
+    rebuilt = coach.series(T, AT + coach_mod.SERIES_REBUILD_MS)
+    assert rebuilt["points"] == fresh(AT + coach_mod.SERIES_REBUILD_MS)

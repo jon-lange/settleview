@@ -320,3 +320,44 @@ def test_an_approval_finishes_even_when_its_request_is_cancelled_and_shutdown_wa
         return done, flight.pending
 
     assert run(go()) == (["recorded"], 0)
+
+
+def test_a_notify_from_a_worker_thread_wakes_the_publisher_on_its_loop():
+    """B1#7: the sync routes (heartbeat, resume) notify from FastAPI's threadpool; asyncio.Event is not thread-safe,
+    so the set hops onto the publisher's loop (call_soon_threadsafe) and the change is published at once, not at the
+    next 1 s refresh."""
+    import asyncio
+    import threading
+
+    class View:
+        def __init__(self):
+            self.n = 0
+
+        def changes(self, now):
+            self.n += 1
+            return {"n": self.n}
+
+    class Hub:
+        subscribers = 1
+
+        def __init__(self):
+            self.got = []
+
+        def publish(self, fields):
+            self.got.append(fields)
+
+    async def main():
+        view, hub = View(), Hub()
+        pub = PerpPublisher(view, hub, lambda: 0, min_gap_s=0.0, refresh_s=30.0)
+        task = asyncio.ensure_future(pub.run())
+        await asyncio.sleep(0.01)
+        t = threading.Thread(target=pub.notify)
+        t.start()
+        t.join()
+        for _ in range(100):
+            if hub.got:
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        return hub.got
+    assert asyncio.run(main()) == [{"n": 1}]

@@ -6,6 +6,9 @@ Tick (every `tick_s`, one supervised task for the whole fleet):
    pause every agent: AgentSessions.review); open assist proposals expire once for all;
 2. KD6: each market armed by a live session is read ONCE (`PlayService.now_view`) and that view is shared by every
    session on it (the call / light flip detection is shared too: the runners' engines use the fleet's SignalBoard);
+   likewise every session's brackets are read in ONE query, in a worker thread, and handed to each runner
+   (`AgentRunner.prime`) for its account diff, its rules' holds check and its wake budget: the fleet's database reads
+   per tick no longer grow with the number of sessions (review fix plan 2026-10-31 P1: ~200-300 queries/s at 30);
 3. KD4: every session's `AgentRunner.step` runs (its account diff, its event engine, its armed rules, which open or
    propose entries in code): concurrently, each as its own task, so one session's slow order send never holds up
    another's tick; a session whose previous step is still running skips this tick (it never overlaps itself). Rules
@@ -244,6 +247,23 @@ class AgentFleet:
                 views[key] = self.play.now_view(now, m.venue, span=m.span)
         return views
 
+    async def _prime(self, now: int) -> None:
+        """One read of every runner's session brackets for this tick, off the event loop; a failure leaves the
+        runners to read their own (as before)."""
+        sids = [sid for sid in self._runners if sid not in self._steps]
+        if not sids:
+            return
+        try:
+            rows = await asyncio.to_thread(self.sessions.brackets_by_session, sids)
+        except Exception:
+            log.warning("agent fleet: the sessions' brackets could not be read; each session reads its own",
+                        exc_info=True)
+            return
+        for sid in sids:
+            r = self._runners.get(sid)
+            if r is not None:
+                r.prime(now, rows.get(sid, []))
+
     async def tick(self) -> None:
         t0 = self.now()
         now = t0
@@ -253,6 +273,7 @@ class AgentFleet:
         for sid in [sid for sid in self._runners if self.sessions.get(sid) is None and sid not in self._wakes]:
             self._drop(sid)  # ended elsewhere (end time, end_session, spend cap): no step needed
         views = self._views(now)
+        await self._prime(now)
         started = []
         for sid, r in list(self._runners.items()):
             if sid in self._steps:  # the previous step still runs (an order in flight): never overlap itself

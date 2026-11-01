@@ -467,6 +467,7 @@ trading_brackets = Table(
     Column("stop_index_above", Float),
     Index("ix_trading_brackets_state", "state"),
     Index("ix_trading_brackets_created", "created_ts"),
+    Index("ix_trading_brackets_session", "session_id"),  # migration 0022: the agent fleet's per-tick read
 )
 
 trading_orders = Table(
@@ -820,6 +821,7 @@ agent_journal = Table(
     Column("agent_id", String(40)),  # the session's agent (agents.id): the agent's journal across its runs; 0016
     Index("ix_agent_journal_session", "session_id", "id"),
     Index("ix_agent_journal_agent", "agent_id", "id"),
+    Index("ix_agent_journal_kind", "kind", "id"),  # migration 0022: rule rows by id, rule links by kind
 )
 
 agent_prompts = Table(

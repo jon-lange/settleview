@@ -87,6 +87,8 @@ def test_polymarket_services_know_each_others_and_the_retired_bots_orders(rt):
     rt.store.insert("trading_orders", rows)
     assert rt.you_poly_trading._known_order_ids_fn() == {"c-pnw_poly", "x-pnw_poly", "c-you_poly5", "x-you_poly5"}
     assert rt.you_poly5_trading._known_order_ids_fn() == {"c-pnw_poly", "x-pnw_poly", "c-you_poly", "x-you_poly"}
+    assert rt.you_poly_trading._known_order_ids_fn({"x-pnw_poly", "c-you_poly", "x-you_poly5"}) == {
+        "x-pnw_poly", "x-you_poly5"}
     assert rt._pm_order_field("client_order_id", "c-you_poly", "order_id") == "x-you_poly"
     assert rt._pm_order_field("order_id", "x-pnw_poly", "client_order_id") == "c-pnw_poly"
 

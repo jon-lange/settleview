@@ -77,6 +77,7 @@ def test_trading_orders_order_id_index_on_postgres(pg_admin_url):
 
     from btc_signal_engine.adapters.sqlite.db import MIGRATIONS_DIR
     from tests.conftest import fresh_pg_database
+    from tests.storage.test_strategy_tables import HEAD
     url = fresh_pg_database(pg_admin_url, "settleview_test_0020")
     migrate(url)
     e = create_engine(url, connect_args={"options": "-c search_path=app"})
@@ -95,6 +96,68 @@ def test_trading_orders_order_id_index_on_postgres(pg_admin_url):
         migrate(url)
         assert "ix_trading_orders_order_id" in names()
         with e.connect() as c:
-            assert c.execute(text("select version_num from alembic_version")).scalar() == "0021"
+            assert c.execute(text("select version_num from alembic_version")).scalar() == HEAD
+    finally:
+        e.dispose()
+
+
+INDEXES_0022 = (("ix_trading_brackets_session", "trading_brackets"), ("ix_agent_journal_kind", "agent_journal"))
+
+
+def test_session_and_journal_kind_indexes_on_fresh_and_upgraded_databases(tmp_path):
+    """Migration 0022: a fresh database has both indexes from the table definitions; a database at 0021 without them
+    gets them; the downgrade removes them; the agent reads use them."""
+    from alembic import command
+
+    from tests.storage.test_strategy_tables import HEAD, _cfg, _indexes
+
+    path = tmp_path / "k.db"
+    migrate(path)
+    con = sqlite3.connect(path)
+    assert all(name in _indexes(con, table) for name, table in INDEXES_0022)
+    con.close()
+    command.downgrade(_cfg(path), "0021")
+    con = sqlite3.connect(path)
+    assert not any(name in _indexes(con, table) for name, table in INDEXES_0022)
+    con.close()
+    migrate(path)
+    con = sqlite3.connect(path)
+    assert all(name in _indexes(con, table) for name, table in INDEXES_0022)
+    assert con.execute("select version_num from alembic_version").fetchone()[0] == HEAD == "0022"
+    plan = " ".join(r[3] for r in con.execute(
+        "explain query plan select * from trading_brackets where session_id in ('a', 'b')"))
+    assert "ix_trading_brackets_session" in plan
+    plan = " ".join(r[3] for r in con.execute(
+        "explain query plan select * from agent_journal where kind = 'rule' and id > 5 order by id"))
+    assert "ix_agent_journal_kind" in plan
+    con.close()
+
+
+@pytest.mark.postgres
+def test_session_and_journal_kind_indexes_on_postgres(pg_admin_url):
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, inspect
+
+    from btc_signal_engine.adapters.sqlite.db import MIGRATIONS_DIR
+    from tests.conftest import fresh_pg_database
+    url = fresh_pg_database(pg_admin_url, "settleview_test_0022")
+    migrate(url)
+    e = create_engine(url, connect_args={"options": "-c search_path=app"})
+    try:
+        def present() -> set[str]:
+            with e.connect() as c:
+                return {i["name"] for _, table in INDEXES_0022
+                        for i in inspect(c).get_indexes(table, schema="app")} & {n for n, _ in INDEXES_0022}
+
+        assert present() == {n for n, _ in INDEXES_0022}
+        with e.begin() as c:
+            cfg = Config()
+            cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+            cfg.attributes["connection"] = c
+            command.downgrade(cfg, "0021")
+        assert present() == set()
+        migrate(url)
+        assert present() == {n for n, _ in INDEXES_0022}
     finally:
         e.dispose()
