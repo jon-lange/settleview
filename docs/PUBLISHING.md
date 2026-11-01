@@ -74,7 +74,7 @@ Push only that branch to the new public repository. Keep the full history in you
   a checkbox in `.github/pull_request_template.md`): the contributor keeps copyright and grants a perpetual,
   irrevocable relicensing licence, commercial use included.
 - Third-party licences: `NOTICE` lists the vendored libraries (Lightweight Charts, Apache-2.0, with its NOTICE;
-  Alpine.js, MIT), whose licence texts are in `web/vendor/LICENSE-*`. The charts turn off TradingView's attribution
+  Alpine.js's CSP build, MIT), whose licence texts are in `web/vendor/LICENSE-*`. The charts turn off TradingView's attribution
   logo (`attributionLogo: false`), so the README credits link to tradingview.com instead. The opt-in `openobserve`
   compose service runs the unmodified OpenObserve image, which is AGPL-3.0: it is a separate container, credited in
   the README, and none of its code is copied here. The OpenTelemetry packages (the `otel` extra) are Apache-2.0.

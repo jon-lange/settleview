@@ -388,7 +388,7 @@ Commercial licenses available — contact the copyright holder via GitHub ([gith
 
 - [TradingView Lightweight Charts™](https://www.tradingview.com/lightweight-charts/) draws the charts (Apache-2.0,
   Copyright (c) 2025 TradingView, Inc., https://www.tradingview.com/). [Alpine.js](https://alpinejs.dev/) runs the
-  web app (MIT). Both are vendored unmodified in `web/vendor/` with their licenses; see [NOTICE](NOTICE).
+  web app (MIT; its CSP build, so the page's security policy allows no runtime code). Both are vendored unmodified in `web/vendor/` with their licenses; see [NOTICE](NOTICE).
 - [OpenObserve](https://openobserve.ai/) is the optional local logs, metrics and traces backend (AGPL-3.0). It runs
   as its own unmodified upstream container (the opt-in `observability` profile) and is not part of this work; none of
   its code is in this repository.

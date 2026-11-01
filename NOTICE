@@ -13,8 +13,10 @@ TradingView Lightweight Charts™
 Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/
 
 --------------------------------------------------------------------------------
-web/vendor/alpine-3.14.9.min.js
-MIT License (web/vendor/LICENSE-alpine.md), Copyright (c) 2019-2021 Caleb Porzio and contributors. Unmodified.
+web/vendor/alpine-csp-3.14.9.min.js
+Alpine.js's CSP build (@alpinejs/csp 3.14.9, dist/cdn.min.js from the npm package, the same Alpine project and
+version as alpinejs 3.14.9): MIT License (web/vendor/LICENSE-alpine.md), Copyright (c) 2019-2021 Caleb Porzio and
+contributors. Unmodified.
 
 --------------------------------------------------------------------------------
 Not included: OpenObserve (AGPL-3.0). The opt-in `openobserve` service in compose.yaml runs the

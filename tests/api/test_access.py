@@ -467,7 +467,8 @@ def test_every_response_carries_the_csp(tmp_path):
               client(app, LOCAL, base_url="http://evil.example:8000").get("/")):
         csp = _csp(r)
         assert csp["default-src"] == ["'self'"] and csp["connect-src"] == ["'self'"]
-        assert csp["script-src"][:2] == ["'self'", "'unsafe-eval'"]
+        assert csp["script-src"][0] == "'self'" and len(csp["script-src"]) == 2  # 'self' and the keypad's hash
+        assert "'unsafe-eval'" not in csp["script-src"]  # Alpine's CSP build (B6#6)
         assert csp["style-src"] == ["'self'", "'unsafe-inline'"] and csp["img-src"] == ["'self'", "data:"]
         assert csp["frame-ancestors"] == ["'none'"]
         assert "'unsafe-inline'" not in csp["script-src"]

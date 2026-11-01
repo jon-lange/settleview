@@ -141,10 +141,11 @@ _KEYPAD_JS = ("(function(){var i=document.getElementById('pin'),d=document.getEl
               "'click',function(){var k=b.getAttribute('data-k');if(k==='del'){i.value=i.value.slice(0,-1);}"
               "else if(i.value.length<8){i.value+=k;}draw();});});i.addEventListener('input',draw);draw();})();")
 _KEYPAD_HASH = "sha256-" + base64.b64encode(hashlib.sha256(_KEYPAD_JS.encode("utf-8")).digest()).decode("ascii")
-# 'unsafe-eval': the vendored standard Alpine build compiles its directive expressions at runtime (its CSP build would
-# mean rewriting every expression in web/index.html). Scripts still load only from this origin. 'unsafe-inline' for
-# styles: the login page's <style> and the Play page's style attributes.
-CSP = (f"default-src 'self'; script-src 'self' 'unsafe-eval' '{_KEYPAD_HASH}'; style-src 'self' 'unsafe-inline'; "
+# Scripts load only from this origin, and nothing compiles code at runtime (no 'unsafe-eval', B6#6): the web app runs
+# Alpine's CSP build (web/vendor/alpine-csp-*.min.js), whose directives are property paths into each view's
+# registered component (tests/api/test_alpine_csp.py). 'unsafe-inline' for styles: the login page's <style> and the
+# Play page's style attributes.
+CSP = (f"default-src 'self'; script-src 'self' '{_KEYPAD_HASH}'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
 # FastAPI's Swagger UI (PC-only) loads its files from cdn.jsdelivr.net and boots with an inline script; only these
 # path gets a CSP that allows that. (FastAPI's OAuth2 redirect page is not under /api/docs and the app uses no OAuth2.)
