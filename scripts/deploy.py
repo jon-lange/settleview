@@ -17,7 +17,7 @@ In order, stopping at the first failure:
      no agent session is live (running or paused) on production, since an app restart ends them. That is asked of
      production's Postgres as settleview_research (read-only by permission), inside its own container.
   2. The image: `docker build --build-arg GIT_SHA=<sha> -t settleview:<sha12> .`, or `cosign verify` of the --image
-     reference (by digest only; signed by this repository's GitHub workflows) and `docker compose pull`.
+     reference (tag@digest; signed by this repository's release workflow) and `docker compose pull`.
   3. Staging (deploy/staging/compose.staging.yaml: no real-money path) `up -d --wait` on that image, then the smoke
      suite against it (scripts/dev.py smoke). A failure stops here: production is not touched.
   4. Production: the agent-session check again, a database dump (the backup service, `--once`), the migrate job of the
@@ -222,7 +222,10 @@ class Deployer:
         m = GITHUB_REPO.search(url)
         if m is None:
             raise Refused("origin is not a GitHub repository: cannot tell whose signature to require")
-        return f"^https://github.com/{re.escape(m.group(1))}/.github/workflows/"
+        # The release workflow, for a vX.Y.Z tag or a hand-run main build (docs/operations.md, "Releases and deploying
+        # by digest").
+        return (rf"^https://github\.com/{re.escape(m.group(1))}/\.github/workflows/release\.yml"
+                r"@refs/(tags/v[0-9]+\.[0-9]+\.[0-9]+|heads/main)$")
 
     def image(self) -> None:
         p = self.plan
@@ -284,7 +287,7 @@ class Deployer:
         p = self.plan
         image = ([f"docker build --build-arg GIT_SHA={p.sha} -t {p.target_image} ."] if p.image is None else
                  [f"cosign verify --certificate-oidc-issuer {OIDC_ISSUER} --certificate-identity-regexp "
-                  f"'^https://github.com/<origin>/.github/workflows/' {p.image}",
+                  rf"'^https://github\.com/<origin>/\.github/workflows/release\.yml@refs/...' {p.image}",
                   " ".join(p.compose(p.staging_project, "pull", "--quiet"))])
         env = f"SETTLEVIEW_IMAGE={p.target_image} "
         return [f"check: the checkout is at {p.sha[:12]}, clean" + ("" if p.allow_unpublished else

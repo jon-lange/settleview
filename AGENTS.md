@@ -75,13 +75,15 @@ add host-specific behaviour (Windows-only scripts, `C:\` paths, arch-specific de
   `ops pair-pc` (no PIN), phones :8000 (PIN), external agents :8002 (session token). Never pair against or call the
   live stack from an agent session.
 - Deploy: the deploy checkout is a worktree of the dev clone, so `git -C <dev clone> fetch origin`, then `git
-  checkout <sha>` (a commit on `origin/main`) in the deploy checkout, `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t
-  settleview:local .`, `docker compose up -d`
-  (a restart of `app` ends agent sessions: only between sessions). Build from the real-case path (`Documents`).
-  A release is deployed by tag@digest instead: `SETTLEVIEW_IMAGE=ghcr.io/jon-lange/settleview:X.Y.Z@sha256:...`,
-  `cosign verify`, `docker compose pull` and `up -d`; rollback is the same with the previous Release's reference
-  (docs/operations.md, "Releases and deploying by digest"). The owner makes releases (`scripts/release.py`, then the
-  tag push). Agents never push tags or images.
+  checkout <sha>` (a commit on `origin/main`) in the deploy checkout, then `python scripts/deploy.py --sha <sha>`: it
+  refuses while an agent session is live (a restart of `app` ends them), runs the image on staging
+  (`deploy/staging/`, no real-money path) with the read-only smoke suite (`tests/smoke`), then deploys and smoke-tests
+  production (docs/operations.md, "Staging and the deploy gate"). Never run it, or the smoke suite, against the live
+  stack from an agent session; test it against throwaway projects (`--prod-project`, `--offline`). Build from the real-case path (`Documents`).
+  A release is deployed by tag@digest instead: `python scripts/deploy.py --sha <its commit> --image
+  ghcr.io/jon-lange/settleview:X.Y.Z@sha256:...` (cosign verify, compose pull, the same gate); rollback is the same with
+  the previous Release's reference (docs/operations.md, "Releases and deploying by digest"). The owner makes releases
+  (`scripts/release.py`, then the tag push). Agents never push tags or images.
   Secrets are files in `./secrets` (compose secrets), never `.env` lines; the one-time move is
   `python deploy/secrets_from_env.py` (docs/operations.md, "Docker: secrets as files").
 - Agents and scripts never connect to the live database for writes; research reads use the `settleview_research`

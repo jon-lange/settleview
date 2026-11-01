@@ -1037,15 +1037,18 @@ commit that is on `origin/main`:
 
 ```bash
 git -C <dev clone> fetch origin
-git -C <dev clone> merge-base --is-ancestor <sha> origin/main && echo "on origin/main"
 cd <deploy checkout> && git checkout <sha>      # detached HEAD at that commit; never a branch, never `git pull`
-docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t settleview:local .
-docker compose up -d
+python scripts/deploy.py --sha <sha>            # staging first, then production (next section)
 ```
+
+`scripts/deploy.py` is the one way production changes: it refuses while an agent session is live, builds the commit,
+runs it on staging with the smoke suite, and only then deploys production and smoke-tests it ("Staging and the deploy
+gate"). By hand, the production half is `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t settleview:local .`
+and `docker compose up -d`, with no gate.
 
 That is the local-build path, and it keeps working (compose's image is `${SETTLEVIEW_IMAGE:-settleview:local}`). A
 **release** is deployed by its signed digest instead, with no build on the host: "Releases and deploying by digest"
-below, and one command to roll back.
+below; `scripts/deploy.py --image <tag@digest>` runs it through the same gate.
 
 **Docker**: with the commit checked out as above, build and `docker compose up -d` (or `docker compose up -d --build`
 with `GIT_SHA=$(git rev-parse HEAD)` in the shell; either way the image is labelled with its commit:
@@ -1249,6 +1252,81 @@ it does not know. Then:
 A rollback between two releases with the same schema head (the common case) needs none of this. The non-obvious parts
 of the release tooling:
 [docs/solutions/2026-11-01-release-engineering-gotchas.md](solutions/2026-11-01-release-engineering-gotchas.md).
+## Staging and the deploy gate
+
+**Staging** is production's compose file and image with **no real-money path**, as its own compose project
+(`settleview-staging`: its own containers, network, volumes and secrets) on this PC's loopback ports 18000 (phones),
+18001 (the PC) and 18002 (agents). `deploy/staging/compose.staging.yaml` is an override on top of `compose.yaml`:
+
+```bash
+python deploy/postgres/make_secrets.py deploy/staging/secrets       # once: staging's own passwords (git-ignored)
+docker compose -p settleview-staging --env-file deploy/staging/staging.env   -f compose.yaml -f deploy/staging/compose.staging.yaml up -d --wait
+python scripts/dev.py smoke --project settleview-staging            # the smoke suite (read-only)
+docker compose -p settleview-staging -f compose.yaml -f deploy/staging/compose.staging.yaml down --volumes
+```
+
+Trading modes there: **Shadow** (the venues' real books, simulated sends; no key) and **Sandbox** (Kalshi's demo
+exchange) when `deploy/staging/secrets/trading_demo_key_id` holds a demo key id and `BTCFLOW_TRADING_DEMO_KEY_PATH` in
+`deploy/staging/staging.env` names its key file in `deploy/staging/keys/` (mounted at `/keys`). Agent mode is on (sessions
+can pin only shadow or demo). `SETTLEVIEW_STAGING_OTLP_ENDPOINT` in that file sends staging's telemetry
+somewhere (empty: none); `SETTLEVIEW_IMAGE` (any project) names the image the Python services run (default
+`settleview:local`). Add `-f deploy/staging/compose.offline.yaml` for a staging with no internet at all (an
+`internal` network: no venue, no Coinbase, no Anthropic, and no published port; CI and tests use it).
+
+**Why production is impossible in staging**, each layer enough on its own (tests/deploy/test_staging.py proves each):
+- `BTCFLOW_STAGING=true` (name and purpose: "this is staging"): the settings refuse to start while any production
+  credential or switch is set (`BTCFLOW_TRADING_ENABLED`, `BTCFLOW_TRADING_PROD_KEY_ID` / `_PATH`,
+  `BTCFLOW_AGENT_ALLOW_PRODUCTION`, the Polymarket US keys, whose only other mode is production, the read-only
+  production Kalshi key, and the Telegram bot token, which production's bot would fight over), and the app builds no
+  production gateway at all, whatever the settings say.
+- No `.env` is read (the app's `env_file` is reset; compose's variables come from `deploy/staging/staging.env`), the
+  production keys' `*_FILE` variables are removed, and every secret file comes from `deploy/staging/secrets/`: the
+  production key files are never mounted. `rec-pm-quotes` (Polymarket keys) does not run.
+- The smoke suite checks it again on the running stack: no production key file mounted, trading switched off, the
+  production mode not ready.
+
+**The smoke suite** (`tests/smoke`, pytest + Playwright; `python scripts/dev.py smoke --project <project>`) checks a
+running stack **read-only**, so it runs against production too: the migrate job exited 0; every service healthy; no
+OTLP export error in the last 30 minutes of the app's and recorders' logs (when an exporter is configured); on staging,
+no production key; `/api/health` on the phone and PC listeners; each trading service's status (on staging: production
+off); Play's live stream sends a frame; the agent API lists sessions; the agent listener serves its tool API only; the
+Play, Record, Agents and Perps screens load in headless Chromium with no page error. It runs in the dev image inside
+the app container's network namespace, mounts the app's data volume read-only and signs a PC cookie under the secret
+the app already uses (nothing is paired or written); its client sends GET/HEAD only and the browser aborts any other
+request (docs/solutions/2026-11-01-smoke-tests-in-the-app-network-namespace.md).
+
+**The deploy gate** (`scripts/deploy.py`, standard library, any OS): a thin wrapper around standard commands.
+
+```bash
+python scripts/deploy.py --sha <sha>                                          # build the checked-out commit
+python scripts/deploy.py --sha <sha> --image ghcr.io/<owner>/settleview@sha256:<digest>   # a signed release image
+python scripts/deploy.py --sha <sha> --dry-run                                # print the commands only
+```
+
+1. Preflight: the checkout is at `<sha>`, unchanged, and `<sha>` is on `origin/main`; no agent session is live
+   (running or paused) on production. The sessions are read from production's Postgres as `settleview_research`
+   (read-only by permission) inside its own container.
+2. The image: `docker build --build-arg GIT_SHA=<sha> -t settleview:<sha12> .`, or, for a release (`--image
+   ghcr.io/jon-lange/settleview:X.Y.Z@sha256:...`, "Releases and deploying by digest"), `cosign verify` against the
+   release workflow's identity (a `vX.Y.Z` tag, or `main` for a staging trial) and `docker compose pull`.
+3. Staging `up -d --wait` on that image (compose waits for every healthcheck), then the smoke suite. A failure stops
+   here and production is not touched.
+4. Production: the session check again, a database dump (`docker compose exec backup ... --once`), the new image's
+   migrate job (`docker compose run --rm migrate`: Alembic refuses a database it does not know, before the app is
+   replaced), `docker compose up -d --wait` with `SETTLEVIEW_IMAGE=<image>` (compose.yaml's image setting), the smoke
+   suite. Then `settleview:local` is moved to the image, so a plain `docker compose up -d` keeps it (the
+   `SETTLEVIEW_IMAGE` line in `.env` that "Deploy a release" describes is then optional); `.env` is never written.
+5. Staging is stopped (volumes kept; `--keep-staging` leaves it running).
+
+**Rolling back** is deploying the previous release the same way ("Rolling back" above for releases, and what a
+migration in between means): every run ends by printing the command for the release
+production ran before (`git checkout <previous sha> && python scripts/deploy.py --sha <previous sha>`, plus `--image
+<ref@digest>` when it came from the registry). The previous release's migrate job refuses a database migrated past what
+it knows, so a rollback across a migration stops before the app is replaced.
+
+From Git Bash every command runs with `MSYS_NO_PATHCONV=1`, and an argument Git Bash already rewrote is refused
+(docs/solutions/2026-11-01-git-bash-msys-path-conversion.md). The script was tested against throwaway projects only
+(an offline staging and a throwaway "production" on its own volumes), never the live stack.
 
 ## Where it runs: one section per host
 

@@ -390,3 +390,38 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose down --volumes
+
+  staging:
+    # The deploy gate's first half, as scripts/deploy.py runs it: the image on staging (deploy/staging/: no real-money
+    # path), offline (an internal network: no venue, no internet, no key), then the read-only smoke suite (tests/smoke,
+    # pytest + Playwright in the dev image, inside the app container's network namespace).
+    name: Staging (offline) and the smoke suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      SETTLEVIEW_IMAGE: settleview:ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Build the image and the dev image
+        run: |
+          docker build --build-arg GIT_SHA="${{ github.sha }}" -t settleview:ci .
+          python3 scripts/dev.py build
+
+      - name: Staging up (offline), waiting for every healthcheck
+        run: |
+          python3 deploy/postgres/make_secrets.py deploy/staging/secrets
+          docker compose -p settleview-staging --env-file deploy/staging/staging.env -f compose.yaml \
+            -f deploy/staging/compose.staging.yaml -f deploy/staging/compose.offline.yaml \
+            up -d --wait --wait-timeout 300 --no-build --pull never
+
+      - name: The smoke suite (read-only)
+        run: python3 scripts/smoke.py --project settleview-staging
+
+      - name: Staging logs
+        if: failure()
+        run: docker compose -p settleview-staging -f compose.yaml -f deploy/staging/compose.staging.yaml logs --tail 200
+
+      - name: Stop staging
+        if: always()
+        run: docker compose -p settleview-staging -f compose.yaml -f deploy/staging/compose.staging.yaml down --volumes

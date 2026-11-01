@@ -164,7 +164,7 @@ def test_a_registry_image_by_digest_is_cosign_verified_then_pulled():
     verify = f.calls[f.index("cosign", "verify")]
     assert verify[-1] == DIGEST and dg.OIDC_ISSUER in verify
     assert verify[verify.index("--certificate-identity-regexp") + 1] == \
-        "^https://github.com/owner/settleview/.github/workflows/"
+        r"^https://github\.com/owner/settleview/\.github/workflows/release\.yml@refs/(tags/v[0-9]+\.[0-9]+\.[0-9]+|heads/main)$"
     assert f.index("cosign", "verify") < f.index("pull") < f.index("-p", "settleview-staging", "up")
     assert not f.ran("docker", "build") and f.envs[f.index("-p", "settleview", "up")]["SETTLEVIEW_IMAGE"] == DIGEST
     assert any("--image ghcr.io/owner/settleview@sha256:" + "e" * 64 in s for s in said)  # the rollback, by digest
