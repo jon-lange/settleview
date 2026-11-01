@@ -11,7 +11,7 @@
     python scripts/dev.py script scripts/x.py ...   # any research script the same way
     python scripts/dev.py evals run pipelines/pr.toml   # python -m evals ... (also: evals test | export | review)
     python scripts/dev.py smoke --project settleview-staging   # the deploy gate's READ-ONLY smoke suite against a
-                                                    # running stack (scripts/smoke.py; also --wait S, --no-browser)
+                                                    # running stack (scripts/smoke.py: tests/smoke in pytest)
     python scripts/dev.py shell                     # a bash shell in the container (the checkout at /app)
     python scripts/dev.py run python -m ...         # any command in the container
     python scripts/dev.py build                     # rebuild the image (every command does this first; cached)

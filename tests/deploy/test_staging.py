@@ -189,18 +189,11 @@ def test_the_image_is_a_variable_for_the_deploy_gate(tmp_path):
     assert "image: ${SETTLEVIEW_IMAGE:-settleview:local}" in (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
 
-# -- the smoke suite's read-only client ---------------------------------------------------------------------------
-def _smoke():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("smoke", ROOT / "scripts" / "smoke.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
+# -- the smoke suite's read-only client --------------------------------------------------------------------------
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
 def test_the_smoke_client_refuses_anything_but_get_before_sending(method):
-    c = _smoke().ReadOnlyClient("http://127.0.0.1:9")  # nothing listens: a sent request would be a ConnectError
+    from tests.smoke.conftest import ReadOnlyClient
+    c = ReadOnlyClient("http://127.0.0.1:9")  # nothing listens: a sent request would be a ConnectError
     try:
         with pytest.raises(PermissionError, match="read-only"):
             c.request(method, "/api/trading/mode", json={"mode": "prod"})
@@ -220,8 +213,8 @@ def test_the_smoke_cookie_is_read_only_and_valid_for_the_app(tmp_path):
 
 
 def test_the_smoke_finds_otlp_export_errors():
-    rx = _smoke().OTLP_ERROR
-    assert rx.search("WARNING opentelemetry.exporter.otlp.proto.http.trace_exporter Failed to export span batch "
+    from tests.smoke.test_stack import OTLP_ERROR as rx
+    assert rx.search("ERROR opentelemetry.exporter.otlp.proto.http.trace_exporter Failed to export span batch "
                      "code: 401, reason: Unauthorized")
-    assert rx.search("Transient error ConnectError encountered while exporting metrics to openobserve:5080")
+    assert rx.search("WARNING Transient error ConnectError encountered while exporting metrics batch, retrying in 1s")
     assert not rx.search("INFO btc_signal_engine telemetry: exporting traces, metrics and logs to OTLP")

@@ -299,11 +299,14 @@ services:
       - settleview-backups:/backups
     depends_on: *needs-postgres
     healthcheck:
-      # Healthy while the last good dump is under 26 hours old.
-      test: ["CMD-SHELL", "test -f /backups/last-ok && [ $$(( $$(date -u +%s) - $$(cat /backups/last-ok) )) -lt 93600 ]"]
+      # Healthy while the last good dump is under 26 hours old; on a new volume (no dump yet) for the service's first
+      # 26 hours, while its first nightly dump is not yet due. So `docker compose up --wait` (scripts/deploy.py) never
+      # waits on a backup that has nothing to report yet, and a missing nightly dump still turns it unhealthy.
+      test: ["CMD-SHELL", "if [ -f /backups/last-ok ]; then age=$$(( $$(date -u +%s) - $$(cat /backups/last-ok) )); else age=$$(( $$(date -u +%s) - $$(stat -c %Y /proc/1) )); fi; [ $$age -lt 93600 ]"]
       interval: 5m
       timeout: 10s
       start_period: 30m
+      start_interval: 5s
       retries: 2
     deploy:
       <<: *deploy

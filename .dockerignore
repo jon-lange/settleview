@@ -14,4 +14,3 @@ docs
 secrets
 deploy/staging/secrets
 deploy/staging/keys
-.deploy-history.jsonl
