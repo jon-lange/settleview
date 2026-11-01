@@ -116,7 +116,7 @@ def _staging_config(tmp_path: Path, *extra: str) -> dict:
     (tmp_path / "deploy" / "postgres").mkdir(parents=True)
     (tmp_path / "deploy" / "staging").mkdir(parents=True)
     shutil.copy(ROOT / "compose.yaml", tmp_path / "compose.yaml")
-    for f in ("initdb.sh", "roles.sh", "backup.sh"):
+    for f in ("initdb.sh", "roles.sh", "audit.sql", "backup.sh"):
         shutil.copy(ROOT / "deploy" / "postgres" / f, tmp_path / "deploy" / "postgres" / f)
     for f in ("compose.staging.yaml", "compose.offline.yaml", "staging.env"):
         shutil.copy(ROOT / "deploy" / "staging" / f, tmp_path / "deploy" / "staging" / f)
