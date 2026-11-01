@@ -1271,7 +1271,9 @@ exchange) when `deploy/staging/secrets/trading_demo_key_id` holds a demo key id 
 can pin only shadow or demo). `SETTLEVIEW_STAGING_OTLP_ENDPOINT` in that file sends staging's telemetry
 somewhere (empty: none); `SETTLEVIEW_IMAGE` (any project) names the image the Python services run (default
 `settleview:local`). Add `-f deploy/staging/compose.offline.yaml` for a staging with no internet at all (an
-`internal` network: no venue, no Coinbase, no Anthropic, and no published port; CI and tests use it).
+`internal` network: no venue, no Coinbase, no Anthropic, and no published port; CI and tests use it). Staging's
+Tailscale edge network is 10.89.251.0/29 (production's is 10.89.250.0/29: the two run side by side during a deploy);
+the sidecar itself never runs in staging.
 
 **Why production is impossible in staging**, each layer enough on its own (tests/deploy/test_staging.py proves each):
 - `BTCFLOW_STAGING=true` (name and purpose: "this is staging"): the settings refuse to start while any production
