@@ -7,7 +7,7 @@
 Tools (exit code non-zero when any of them fails; each one's own output is shown as is):
   ruff          `ruff check .` (pyproject.toml [tool.ruff]); from this Python's environment (`pip install -e ".[dev]"`),
                 else .venv's, else PATH
-  hadolint      the Dockerfile, in the official hadolint container
+  hadolint      the Dockerfiles (the app image's and deploy/dev/'s), in the official hadolint container
   shellcheck    deploy/**/*.sh at severity warning, in the official ShellCheck container
   trivy-image   the app image: vulnerabilities with a fix (HIGH, CRITICAL) and secrets
   trivy-config  misconfigurations (HIGH, CRITICAL) in the Dockerfile, compose.yaml and deploy/
@@ -91,9 +91,16 @@ def check_ruff(_a) -> int:
     return run([*cmd, "check", "."])
 
 
+DOCKERFILES = ["Dockerfile", "deploy/dev/Dockerfile"]  # the app image; the dev container (scripts/dev.py)
+
+
 def check_hadolint(_a) -> int:
-    with open(ROOT / "Dockerfile", "rb") as f:
-        return run([docker(), "run", "--rm", "-i", HADOLINT, "hadolint", "-"], stdin=f)
+    code = 0
+    for name in DOCKERFILES:
+        say(f"hadolint {name}")
+        with open(ROOT / name, "rb") as f:
+            code = run([docker(), "run", "--rm", "-i", HADOLINT, "hadolint", "-"], stdin=f) or code
+    return code
 
 
 def check_shellcheck(_a) -> int:

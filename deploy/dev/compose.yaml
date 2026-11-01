@@ -1,0 +1,59 @@
+# The dev container: tests and the quality gates in Linux, on any host. Run it through scripts/dev.py
+# (`python scripts/dev.py test`, `... quality`, `... postgres-tests`); the commands it runs are printed, so this file
+# can also be used directly:
+#   docker compose -p settleview-dev -f deploy/dev/compose.yaml run --rm dev python -m pytest -p no:cacheprovider
+#
+# Its own project (settleview-dev): it never shares a container, network, volume or port with the live stack (project
+# `settleview`, the root compose.yaml). Nothing here publishes a port; nothing reads `.env` or secrets/.
+#
+#   dev       Python 3.13 (the production base), the project's dependencies, Playwright's Chromium;
+#             the checkout bind-mounted at /app (edits need no rebuild)
+#   postgres  profile `postgres`: a throwaway Postgres 17 (the version compose.yaml runs) on tmpfs; gone at `down`
+#   dev-pg    profile `postgres`: `dev` with BTCFLOW_TEST_DATABASE_URL pointing at it
+
+name: settleview-dev
+
+x-dev: &dev
+  image: settleview-dev:local
+  build:
+    context: ../..
+    dockerfile: deploy/dev/Dockerfile
+  working_dir: /app
+  volumes:
+    - type: bind
+      source: ../..
+      target: /app
+    - uv-cache:/cache/uv
+  shm_size: 1gb  # Chromium's shared memory (Docker's default 64 MB crashes tabs)
+  environment:
+    PYTHONDONTWRITEBYTECODE: "1"
+
+services:
+  dev:
+    <<: *dev
+
+  postgres:
+    profiles: [postgres]
+    image: postgres:17.10-bookworm
+    environment:
+      POSTGRES_PASSWORD: dev-only-not-a-secret  # a throwaway server on this project's private network, no port
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  dev-pg:
+    <<: *dev
+    profiles: [postgres]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      BTCFLOW_TEST_DATABASE_URL: postgresql://postgres:dev-only-not-a-secret@postgres:5432/postgres
+
+volumes:
+  uv-cache:

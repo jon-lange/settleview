@@ -23,11 +23,8 @@ dependencies = [
   "ta-lib==0.8.2",
   "apscheduler==3.11.3",
   # cryptography: 50.0.2 (2026-09-30, the newest release older than two weeks; fixes CVE-2026-26007, CVE-2026-69247,
-  # CVE-2026-69249, GHSA-537c-gmf6-5ccf) everywhere it has a wheel, the Docker image and CI included. Windows ARM64
-  # keeps 46.0.3, the newest release with a win_arm64 wheel (later ones would build from source with Rust there): a
-  # residual risk on that dev host only, which runs no service anyone else reaches (docs/operations.md, "Quality gates").
-  "cryptography==50.0.2; sys_platform != 'win32' or platform_machine != 'ARM64'",
-  "cryptography==46.0.3; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  # CVE-2026-69249, GHSA-537c-gmf6-5ccf). One pin everywhere: the services, CI and the dev container all run Linux.
+  "cryptography==50.0.2",
   "polymarket-us==2.4.1",  # Polymarket US official SDK (user-approved 2026-10-29); pulls pynacl
   "kalshi_python_async==3.35.0",  # Kalshi official SDK (user-approved 2026-10-29); pulls aiohttp, aiohttp-retry
   "aiohttp==3.14.5",  # the SDK's HTTP client; backend.py relies on its private _retry_connection switch
@@ -35,7 +32,7 @@ dependencies = [
   "tzdata==2026.6",  # IANA time zones for zoneinfo (Windows has no system database)
   "anthropic==1.15.0",  # Agent mode: official Anthropic SDK (user-approved 2026-10-30); runs on httpx2
   "mcp==2.3.0",  # Agent mode: official MCP SDK for the stdio server (user-approved 2026-10-30)
-  "claude-agent-sdk==0.2.168",  # Agent mode: the in-app agent's model loop runs on the Claude Agent SDK (user-approved 2026-10-30; newest release older than 2 weeks). No win_arm64 wheel: there pip builds the sdist, which bundles no CLI, so set BTCFLOW_AGENT_CLI_PATH
+  "claude-agent-sdk==0.2.168",  # Agent mode: the in-app agent's model loop runs on the Claude Agent SDK (user-approved 2026-10-30; newest release older than 2 weeks). Where a platform has no wheel, pip builds the sdist, which bundles no CLI: set BTCFLOW_AGENT_CLI_PATH
   "httpx2==2.13.1",  # pulled by anthropic and mcp; pinned so a resolve never picks a release under two weeks old
   "httpcore2==2.13.1",  # httpx2 pins this to its own version
   "sse-starlette==3.5.0",  # pulled by mcp; pinned for the same reason
@@ -47,16 +44,14 @@ dependencies = [
 
 [project.optional-dependencies]
 # The Postgres driver (docs/plans/2026-10-31-0900-feat-postgres-plan.md; psycopg 3 user-approved 2026-10-31; 3.3.6 is
-# the newest release older than two weeks). In the Docker image and CI's Postgres job. The binary wheel bundles libpq;
-# there is none for Windows ARM64, where the app runs on SQLite, so the marker skips it there.
+# the newest release older than two weeks). In the Docker image and CI's Postgres job. The binary wheel bundles libpq.
 postgres = [
-  "psycopg[binary]==3.3.6; sys_platform != 'win32' or platform_machine != 'ARM64'",
+  "psycopg[binary]==3.3.6",
 ]
 # OpenTelemetry (docs/plans/2026-10-31-1400-infra-observability-evaluation.md; core set user-approved 2026-10-31):
 # traces, metrics and logs over OTLP/HTTP, inert unless OTEL_EXPORTER_OTLP_ENDPOINT is set (bootstrap/telemetry.py).
 # In the Docker image. 1.45.1 / 0.66b1 (2026-10-06) is the newest release older than two weeks; the transitive pins
-# below keep a resolve from picking anything newer. All pure Python except protobuf (py3-none-any fallback) and wrapt
-# (win_arm64 wheel), so it installs on every dev host.
+# below keep a resolve from picking anything newer.
 otel = [
   "opentelemetry-api==1.45.1",
   "opentelemetry-sdk==1.45.1",

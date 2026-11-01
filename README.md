@@ -123,15 +123,14 @@ toolkit stays in `scripts/` and `docs/research/`.
 
 | Platform | How it is tested |
 | --- | --- |
-| Windows 11 on ARM64, native Python 3.13 (uv) | daily use by the author; the full test suite |
+| The dev container (Linux, the production base image; any host with Docker, amd64 or arm64) | development: the full test suite with the browser tests in Chromium, the Postgres tests and the quality gates (`scripts/dev.py`) |
 | Linux (ubuntu-latest, x64) | CI: the full test suite, import contracts, the Docker image and `docker compose config` |
 | Linux, macOS, Windows (x64) | CI: the supervisor, `ops stop`, recorder and settings tests on all three |
 | Docker (Linux containers) | CI builds the image and smoke-starts every compose service's entry point |
 | Postgres 17 | CI: the full test suite again with the database on Postgres, empty-to-head migrations on both databases, the SQLite → Postgres copy tool, and a backup and restore drill of the compose stack |
 
-Docker Desktop on Windows and macOS runs the same Linux containers; it has not been used day to day yet. On Windows
-ARM64, `pyarrow` and `statsmodels` have no wheels, so the project doesn't use them. `ta-lib` must install for your
-platform; if pip can't find a wheel, install the TA-Lib C library first (see the
+Docker Desktop on Windows and macOS runs the same Linux containers; the dev container runs there too. In a native
+venv `ta-lib` must install for your platform; if pip can't find a wheel, install the TA-Lib C library first (see the
 [TA-Lib docs](https://ta-lib.github.io/ta-lib-python/install.html)).
 
 ## Quick start
@@ -158,7 +157,7 @@ the PC's Phone access card; `BTCFLOW_PUBLIC_URL` in `.env` makes the card show t
 mounted read-only from a git-ignored `compose.override.yaml` (docs/operations.md, "Docker: key files"). Moving an
 existing SQLite install in: `ops migrate-sqlite-to-pg` (docs/operations.md).
 
-**Without Docker** (running the tests, or a host without Docker; SQLite then):
+**Without Docker** (a host without Docker, or an optional native venv for your editor; SQLite then):
 
 ```bash
 uv venv --python 3.13 .venv
@@ -172,7 +171,7 @@ general settings:
 | Variable | What it does |
 | --- | --- |
 | `BTCFLOW_DB_PATH` | Where the SQLite database lives (all app state), when no Postgres URL is set; its folder also holds the logs. |
-| `BTCFLOW_DATABASE_URL`, `BTCFLOW_DATABASE_PASSWORD_FILE` | Use Postgres instead (`postgresql://user@host:5432/database`; the password in a file). Needs the `postgres` extra: `uv pip install --python .venv -e ".[postgres]"` (no Windows ARM64 wheel: SQLite there). |
+| `BTCFLOW_DATABASE_URL`, `BTCFLOW_DATABASE_PASSWORD_FILE` | Use Postgres instead (`postgresql://user@host:5432/database`; the password in a file). Needs the `postgres` extra: `uv pip install --python .venv -e ".[postgres]"`. |
 | `BTCFLOW_PREDICTION_HORIZONS` | The signal engine's horizons, as JSON name → seconds. |
 | `BTCFLOW_TIE_POLICY` | How a close exactly at the strike scores (`kalshi` rule or `push`). |
 | `BTCFLOW_BACKFILL_DAYS` | Days of history the `backfill` command downloads. |
@@ -321,19 +320,27 @@ import no I/O libraries; only the adapters import Kalshi's SDK. The HTTP API is 
 
 ## Testing
 
+Production runs in Linux containers, so the tests and the quality gates run in a Linux dev container by default, on
+any host (`deploy/dev/`: the production base image, the project's dependencies, Playwright's Chromium, and this
+checkout bind-mounted, so edits need no rebuild). It needs Docker and any Python 3; the first run builds the image
+(a few minutes), later runs reuse it:
+
 ```bash
-.venv/Scripts/python -m pytest       # Windows; .venv/bin/python -m pytest on Linux/macOS
-.venv/Scripts/lint-imports           # import-layer contracts
-.venv/Scripts/python scripts/quality.py   # quality gates: Ruff, Hadolint, ShellCheck, Trivy (image, config, secrets)
+python scripts/dev.py test                   # the whole suite, browser tests and import contracts included
+python scripts/dev.py test tests/kalshi -x   # any pytest arguments
+python scripts/dev.py postgres-tests         # the Postgres-only tests on a throwaway Postgres 17 (--full: whole suite)
+python scripts/dev.py quality                # quality gates: Ruff, Hadolint, ShellCheck, Trivy (image, config, secrets)
+python scripts/dev.py shell                  # a shell in the container
 ```
 
-The quality gates run the same pinned tools as CI (Trivy, Hadolint and ShellCheck from their official containers, so
-Docker is the only requirement); `--only ruff` runs just the linter. Details: [docs/operations.md, "Quality
-gates"](docs/operations.md#quality-gates-ruff-trivy-hadolint-shellcheck).
+The dev container is its own compose project (`settleview-dev`): it never touches the running app's containers,
+volumes or ports, and publishes none. The quality gates run the same pinned tools as CI (Ruff in the dev container;
+Trivy, Hadolint and ShellCheck from their official containers); `--only ruff` runs just the linter. Details:
+[docs/operations.md, "Quality gates"](docs/operations.md#quality-gates-ruff-trivy-hadolint-shellcheck).
 
 The tests build their own data (fixtures, fakes and in-memory exchanges). They need no network, keys or local
-database. To run them on Postgres as well (the store and the Postgres-only tests; CI does this on every push), point
-them at a server where the role may create databases; they make and use their own `settleview_test` database:
+database. `postgres-tests` starts a Postgres with no published port, runs the tests against it (they make and use
+their own `settleview_test` database) and removes it. Against a server of your own, from an optional native venv:
 
 ```bash
 uv pip install --python .venv -e ".[dev,postgres]"

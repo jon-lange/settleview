@@ -228,6 +228,18 @@ jobs:
           if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=.venv/Scripts/python.exe; fi
           "$PY" -m pytest -p no:cacheprovider tests/bootstrap/test_process_supervisor.py tests/bootstrap/test_ops_stop.py tests/recorders tests/test_config.py tests/application/test_recorder_health.py
 
+  devbox:
+    # The dev container developers run the tests in (scripts/dev.py, deploy/dev/): it builds, and its entry point runs
+    # pytest in it. A small subset only; the jobs above run the whole suite.
+    name: Dev container (scripts/dev.py builds and runs pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Build the dev container and run the config and architecture tests in it
+        run: python3 scripts/dev.py test tests/test_config.py tests/architecture
+
   image:
     name: Docker image (linux/amd64 + linux/arm64) and compose services (no push, no keys)
     runs-on: ubuntu-latest

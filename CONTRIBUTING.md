@@ -8,23 +8,29 @@ research honesty rules.
 
 ## Development setup
 
-You need Python 3.13 and [uv](https://docs.astral.sh/uv/).
+Production runs in Linux containers, and so do the tests and the quality gates, on any host (Windows, macOS, Linux;
+any CPU). You need [Docker](https://docs.docker.com/get-docker/) and any Python 3 to start the dev container
+(`scripts/dev.py` uses the standard library only):
+
+```bash
+python scripts/dev.py test          # builds the dev container the first time, then runs the suite
+```
+
+A native venv is optional, for your editor and quick runs (Python 3.13 and [uv](https://docs.astral.sh/uv/)):
 
 ```bash
 uv venv --python 3.13 .venv
 uv pip install --python .venv -e ".[dev]"
 ```
 
-The app is developed on Windows 11 ARM64. Paths below use `.venv/Scripts/`; on Linux and macOS use `.venv/bin/`.
-
 ## Before you open a pull request
 
-All of these must pass:
+All of these must pass (each runs in Linux containers, as CI does):
 
 ```bash
-.venv/Scripts/python -m pytest      # the test suite
-.venv/Scripts/lint-imports          # the hexagonal import contracts in .importlinter
-.venv/Scripts/python scripts/quality.py   # Ruff, Hadolint, ShellCheck and Trivy, as CI runs them (needs Docker)
+python scripts/dev.py test             # the test suite (e2e and the import contracts in .importlinter included)
+python scripts/dev.py postgres-tests   # the Postgres tests, on a throwaway Postgres 17
+python scripts/dev.py quality          # Ruff, Hadolint, ShellCheck and Trivy, as CI runs them
 ```
 
 - Keep the layers: `domain/` is pure (no I/O), `application/` talks to the outside only through ports,

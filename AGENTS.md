@@ -12,7 +12,7 @@ strategy idea is tested offline first. Agent mode (2026-10-30) is the one except
 trades only inside a bounded session the user launched (budget, per-trade cap, end time, venues, API cap), and every
 agent order goes through the same prepare -> OrderGate -> approve path as the human's slide, never around it.
 Hexagonal layout (`domain/` pure, `application/` uses ports, `adapters/` do I/O, `bootstrap/` wires) enforced by
-`.venv/Scripts/lint-imports`. Plans live in `docs/plans/`, research in `docs/research/`.
+`lint-imports` (a test in the suite). Plans live in `docs/plans/`, research in `docs/research/`.
 
 ## Hard rules (never break these)
 
@@ -42,8 +42,8 @@ This repo is meant to be published on GitHub with a best-in-class product, marke
 ## Quality gates are part of done
 
 Any change to code, the image (Dockerfile, compose, `deploy/`) or dependencies is finished only when the quality gates
-are green (user, 2026-10-31): `.venv/Scripts/python.exe scripts/quality.py` (Ruff, Hadolint, ShellCheck, and Trivy on
-the rebuilt image, the config and the repository's secrets; CI runs the same script). Fix a finding rather than
+are green (user, 2026-10-31): `python scripts/dev.py quality` (`scripts/quality.py`: Ruff, Hadolint, ShellCheck,
+and Trivy on the rebuilt image, the config and the repository's secrets; CI runs the same script). Fix a finding rather than
 silencing it; a `# noqa` names the rule and the reason, a `.trivyignore` entry has a reason, a date and an expiry
 (docs/operations.md, "Quality gates"). Don't run `ruff format` over the codebase: that one-time reformat is its own
 decision.
@@ -81,9 +81,22 @@ add host-specific behaviour (Windows-only scripts, `C:\` paths, arch-specific de
 
 ## Environment
 
-Development has mostly happened on Windows ARM64 (one host among many; never tune for it). Native Python for tests and tools: `.venv/Scripts/python.exe` (3.13; numpy, pandas, scipy, httpx, polymarket-us, kalshi_python_async). Do not add packages without the user's OK.
-Tests: `.venv/Scripts/python.exe -m pytest` (check pytest's own exit code). Lint: `.venv/Scripts/lint-imports`
-(re-run once if the first run fails) and `.venv/Scripts/python.exe scripts/quality.py` (Ruff and the container scans). The research data exists only on the machine that recorded it (`data/` is git-ignored).
+Production runs in Linux containers, so tests and the quality gates do too: the dev container (`deploy/dev/`, compose
+project `settleview-dev`, never the live `settleview` stack) is the default on every host. It needs Docker and any
+Python 3 (standard library only) to start it; the checkout is bind-mounted, so edits need no rebuild:
+
+- Tests: `python scripts/dev.py test` (the whole suite, e2e in Playwright's Chromium; any pytest arguments after it;
+  check pytest's own exit code). Import contracts are part of it (`tests/architecture`); alone:
+  `python scripts/dev.py run lint-imports` (re-run once if the first run fails).
+- Postgres: `python scripts/dev.py postgres-tests` (the `postgres`-marked tests on a throwaway Postgres 17; none may
+  skip; `--full` then runs the whole suite on it).
+- Quality gates: `python scripts/dev.py quality` (Ruff in the dev container; Hadolint, ShellCheck and Trivy in their own
+  pinned containers, as CI).
+
+A native venv (`uv venv --python 3.13 .venv && uv pip install --python .venv -e ".[dev]"`) is optional, on any OS, for
+editor tooling and quick runs; the dev container's result is the one that counts. The host's CPU or OS never shapes a
+dependency: one pin per package, no platform markers. Do not add packages without the user's OK. The research data
+exists only on the machine that recorded it (`data/` is git-ignored).
 
 ## Venue APIs
 
@@ -103,12 +116,13 @@ Tests: `.venv/Scripts/python.exe -m pytest` (check pytest's own exit code). Lint
 
 ## Running experiments
 
-The harness is `scripts/experiments.py` (read its module docstring — it defines the honesty rules).
+The harness is `scripts/experiments.py` (read its module docstring — it defines the honesty rules). `python` below
+is any environment with the project installed (`python scripts/dev.py shell`, or a native venv).
 
 ```bash
-.venv/Scripts/python.exe scripts/experiments.py selftest
-.venv/Scripts/python.exe scripts/experiments.py run --entry h6_favourite_75_90:lo=75,hi=90 --exit hold,sl10
-.venv/Scripts/python.exe scripts/experiments.py report
+python scripts/experiments.py selftest
+python scripts/experiments.py run --entry h6_favourite_75_90:lo=75,hi=90 --exit hold,sl10
+python scripts/experiments.py report
 ```
 
 Add an idea as one decorated function in `scripts/experiments.py`:

@@ -4,7 +4,7 @@ The browser: SETTLEVIEW_E2E_BROWSER_CHANNEL picks one of `msedge`, `chrome` (the
 Chrome, launched by Playwright through its channel) or `chromium` (Playwright's own build: `playwright install
 chromium`, as on Linux CI). Unset: msedge, then chrome, then chromium, and the tests are skipped with the reasons when
 none starts. A channel named explicitly that does not start fails the tests (never a silent fallback); any other value
-is an error. Windows ARM64 note: Playwright's bundled browsers are x64 builds this PC blocks, so it uses Edge or Chrome.
+is an error. The dev container (scripts/dev.py) sets `chromium`.
 
 Playwright's sync API is started per module and stopped after it: while it runs, its event loop is "running" on this
 thread and asyncio.run() (used by many other tests) would fail. That is also why pytest-playwright (session-scoped

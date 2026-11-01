@@ -297,8 +297,7 @@ the two and why (JSON as text, unbounded VARCHAR, booleans, row order):
 | `BTCFLOW_DB_POOL_TIMEOUT_S` | How long a request waits for a free pooled connection before it fails (default 5). |
 | `BTCFLOW_DB_MIGRATION_LOCK_WAIT_S` | How long a migration keeps retrying a table lock someone else holds (the backup's `pg_dump`) before the start fails (default 120, at most 3600; 0 = fail on the first lock timeout). |
 
-The driver is psycopg 3 (`pip install -e ".[postgres]"`, in the Docker image). It has no wheel for Windows ARM64; there
-the app runs on SQLite, or in Docker Desktop's Linux containers.
+The driver is psycopg 3 (`pip install -e ".[postgres]"`, in the Docker image and the dev container).
 
 **Schemas and roles.** The app's tables are in the schema `app` (made by its Alembic migrations: `ops migrate` or the
 app's start), the recorders' in `research` (made by the recorders on start). Each connection sets its schema, so no
@@ -540,12 +539,43 @@ Then, read-only as the research role: `select calls, round(mean_exec_time::numer
 pg_stat_statements order by total_exec_time desc limit 10`, and `EXPLAIN (ANALYZE, BUFFERS)` the top ones. Statement
 texts are normalized (`$1` for each value).
 
+## Development and tests (the dev container)
+
+Production runs in Linux containers, so tests and the quality gates do too, on every host: `scripts/dev.py` (standard
+library only; any Python 3 and Docker) drives `deploy/dev/compose.yaml`. The image (`deploy/dev/Dockerfile`) is the
+production base (`python:3.13.18-slim-trixie`, the same digest as the root Dockerfile), uv, every extra of
+`pyproject.toml` (`dev`, `postgres`, `otel`) at its pins, and Playwright's Chromium with its system libraries; the
+checkout is bind-mounted at `/app`, so an edit needs no rebuild. Every command first runs `docker compose build`
+(cached: a no-op unless `pyproject.toml` or the dev Dockerfile changed).
+
+```bash
+python scripts/dev.py test [pytest args]     # the suite; e2e in Chromium (SETTLEVIEW_E2E_BROWSER_CHANNEL=chromium)
+python scripts/dev.py postgres-tests         # `-m postgres` on a throwaway Postgres 17, none may skip (CI's rule)
+python scripts/dev.py postgres-tests --full  # ... then the whole suite with the store on that Postgres
+python scripts/dev.py quality [args]         # scripts/quality.py: ruff in the container, the rest from the host
+python scripts/dev.py shell | run CMD...     # a shell, or any command, in the container
+python scripts/dev.py down                   # remove the dev project's containers, network and uv cache volume
+```
+
+Isolation from the live stack: the compose project is `settleview-dev` (passed with `-p` on every call, and any
+`COMPOSE_*` or `BTCFLOW_*` variable in the shell is dropped first), its network and volume (`settleview-dev_uv-cache`)
+are its own, and no service publishes a port. The test Postgres keeps its data on tmpfs, has a dev-only password and
+is removed after the run. On Linux and macOS the container runs as the host user, so anything it writes into the
+checkout (e2e screenshots under `tests/e2e/.artifacts/`) is yours. The image has the docker CLI and compose plugin
+for `tests/deploy/test_compose.py` (`docker compose config` only); no Docker socket is mounted.
+
+A native venv (`uv venv --python 3.13 .venv`, `uv pip install --python .venv -e ".[dev]"`) remains optional on any OS
+for an editor or a quick run; the dev container's result is the one that counts. No dependency carries a platform
+marker: a pin that a dev host cannot install is that host's problem, not a reason for a second version.
+
 ## Quality gates (Ruff, Trivy, Hadolint, ShellCheck)
 
 One command runs every gate, locally on any OS and in CI (`.github/workflows/ci.yml`, jobs `lint` and `trivy`, which
-call the same script):
+call the same script). Locally the default is the dev container (`scripts/dev.py`, "Development and tests" below),
+which runs Ruff inside it and the container tools from the host's Docker:
 
 ```bash
+python scripts/dev.py quality              # everything, as below; any scripts/quality.py arguments after it
 python scripts/quality.py                    # everything; builds the image as settleview:quality first
 python scripts/quality.py --only ruff        # or hadolint, shellcheck, trivy-image, trivy-config, trivy-fs, trivy
 python scripts/quality.py --only trivy --image settleview:local    # scan an image you already built
@@ -557,7 +587,7 @@ tools run from their official images with Docker, pinned by version and digest i
 | Gate | Tool | What fails it |
 |---|---|---|
 | `ruff` | Ruff 0.17.1 (the `dev` extra) | any finding of the rules in `pyproject.toml` `[tool.ruff]`: pyflakes, pycodestyle errors, bugbear, pyupgrade, bandit (`S`), async, simplify |
-| `hadolint` | `hadolint/hadolint:v2.12.0` | a Dockerfile warning or error |
+| `hadolint` | `hadolint/hadolint:v2.12.0` | a warning or error in `Dockerfile` or `deploy/dev/Dockerfile` |
 | `shellcheck` | `koalaman/shellcheck:v0.10.0` | a warning or error in `deploy/**/*.sh` |
 | `trivy-image` | `aquasec/trivy:0.76.0` | a HIGH / CRITICAL vulnerability **with a fixed version** in the image (OS and Python packages), or a secret in it |
 | `trivy-config` | Trivy | a HIGH / CRITICAL misconfiguration (Trivy recognizes the Dockerfile; it has no checks for compose or systemd files) |
@@ -578,12 +608,6 @@ accepted it, and an `exp:` date so it is reviewed again:
 # 2026-11-05 owner: CVE-XXXX-YYYY in libfoo, not reachable (no TLS in this path); fix expected in Debian 13.3
 CVE-XXXX-YYYY exp:2026-12-31
 ```
-
-**Python versions held back on one host.** `cryptography` is 50.0.2 everywhere it has a wheel, the image and CI
-included. Windows ARM64 keeps 46.0.3 (pyproject.toml, an environment marker): newer releases have no win_arm64 wheel.
-That host carries the four CVEs fixed since 46.0.3 (OpenSSL in the wheel, and three cryptography issues); it is a
-development PC running tests and tools, and the services run from the Linux image. Revisit when a win_arm64 wheel
-ships.
 
 **The base image** is pinned by digest in the Dockerfile (`python:3.13.18-slim-trixie@sha256:...`); the build runs
 `apt-get upgrade`, so Debian's security fixes since that digest land in the image (the layer depends on the build day:
