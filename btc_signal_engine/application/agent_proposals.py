@@ -45,7 +45,7 @@ from collections.abc import Callable
 from typing import Any
 
 from btc_signal_engine.application.actor import AGENT_PREFIX, actor, agent_session
-from btc_signal_engine.application.agent_rules import DEFAULT_CUTOFF_MS, RULES, order_fee
+from btc_signal_engine.application.agent_rules import APPROVE_SLACK, DEFAULT_CUTOFF_MS, RULES, entry_cap, order_fee
 from btc_signal_engine.application.agent_rules import note as rule_note
 from btc_signal_engine.application.agent_sessions import VENUES, AgentSessions, assist_step
 from btc_signal_engine.application.agent_tools import AgentTools
@@ -60,7 +60,7 @@ OPEN = ("pending", "approving")
 MISSED = ("skipped", "expired")
 SETTLE_POLL_MS = 15_000
 READ_TIMEOUT_S = 5.0  # one result read may take this long (TradingConfig.settle_read_timeout_ms)
-APPROVE_SLACK = 0.02  # how far above the shown ask an Approve may fill
+__all__ = ["APPROVE_SLACK", "AgentProposals"]  # APPROVE_SLACK lives in agent_rules (entry_cap); kept importable here
 EPS = 1e-9
 INPUT_KEYS = ("market", "window_start", "window_end", "ticker", "elapsed_s", "left_s", "btc", "strike", "gap",
               "gap_pct", "side", "ask", "ask_cap", "stop_index_below", "stop_index_above", "fair_up", "fee",
@@ -170,7 +170,9 @@ class AgentProposals:
             return _refused("unavailable", f"{spec.label} is not available in this app; nothing was proposed.")
         v = self.play.now_view(now, spec.venue, span=spec.span, stake=per_trade)
         # you approve the price you were shown: the cap is the ask at proposal time + 2c, never above the rule's cap
-        cap = min(rule.ask_cap, round(float(m["ask"]) + APPROVE_SLACK, 2))
+        cap = entry_cap(rule, m.get("ask"))  # the one cap rule (agent_rules.entry_cap), as Auto and a setup
+        if cap is None:
+            return _refused("no_price", "The rule matched without a usable ask; nothing was proposed.")
         args = {"side": m["side"], "stake": per_trade, "order_type": "limit", "max_price": cap,
                 "btc_stop": stop}
         prop = AgentTools._proposal(v, args, ride=True)  # the same ticket proposal place_entry builds for a rule

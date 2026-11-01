@@ -31,6 +31,12 @@ All need an available view with a fresh quote, a strike, a BTC price and entry o
 the session guards: armed, running, one rule entry per market window, one per settlement instant across venues when
 the session's one_bet_per_window is on (the default), none while the session holds that market, none with under the
 rule's `min_left_ms` left (MIN_LEFT_MS; HPANIC: None, the market's own entry cutoff, which the rule checks).
+
+The price cap (one rule for every way a rule's entry is sent; review fix plan 2026-10-31, B2 "Auto vs Assist price
+caps differ"): `entry_cap(rule, ask)` = the ask the rule matched + APPROVE_SLACK (2c), never above the rule's own
+`ask_cap`. Auto's rule entry (agent_runner), an Assist proposal (agent_proposals: the ask shown when proposed) and a
+setup light's match (setups) all take it; before 2026-10-31 Auto sent at the rule's cap (up to 95c on a 58c match).
+A match without a usable ask has no cap: None, and the caller sends nothing (Auto used to fall back to the rule's cap).
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ TAKE_PROFIT = 0.99  # hold to settlement
 KILLED = "killed in backtest — live forward check"
 FEES: dict[str, Callable[..., float]] = {"kalshi": kalshi_fee, "polymarket": polymarket_fee}  # by venue
 EPS = 1e-9
+APPROVE_SLACK = 0.02  # how far above the matched (or shown) ask a rule's entry may fill: entry_cap
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,18 @@ class Rule:
     match: Callable[[dict, str], dict | None]
     label: str = ""  # KILLED for the backtest-killed forward checks
     min_left_ms: int | None = MIN_LEFT_MS  # the runner's floor; None: the market's entry cutoff (the rule checks it)
+
+
+def entry_cap(rule: Rule, ask: object) -> float | None:
+    """The most a rule's entry may pay per contract: the matched ask + APPROVE_SLACK, never above the rule's cap
+    (module docstring). None when `ask` is not a price strictly between 0 and 1 (nothing may be sent)."""
+    try:
+        a = float(ask)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 < a < 1.0:
+        return None
+    return min(rule.ask_cap, round(a + APPROVE_SLACK, 2))
 
 
 def _base(v: dict, market: str) -> dict | None:

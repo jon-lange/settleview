@@ -82,7 +82,8 @@ line alone carries the news (it is the lock-screen preview): one status emoji, u
 positive / negative close, ⚠️ heads-up / refused rule / needs you, ⏸ pause, ⏹ stop or session end, 📊 hourly digest,
 🌙 daily summary, 🟣 Assist proposal, ▶️ session started, 📌 the pinned live status), the key numbers in <b>, the rest
 plain. Details sit behind a tap in <blockquote expandable> (`Note` -> `compose`). No monospace tables. Telegram's
-4096-character limit: `compose` drops detail lines (marked "…") before heads, and coalesced heads last.
+4096-character limit (UTF-16 code units, `tg_len`: an emoji counts 2), sends and edits alike: `compose` drops detail
+lines (marked "…") before heads, and coalesced heads last; a single head over the limit is cut by `cut_html`.
 Silent (disable_notification): the session started message, digests, the daily summary, heads-ups, stop / take-profit
 moves, unfilled orders and one-bet-per-window skips. Entries, closes, pauses, the session end, refused rule matches,
 agent exits, settle warnings, setups and proposals notify. A coalesced message is silent only when all of it is.
@@ -128,6 +129,7 @@ DEFAULT_ALERTS = {"proposals": True, "trades": True, "activity": True, "pauses":
 DAILY_AT = "daily_at"  # stored with the alert choices: the daily summary's local time "HH:MM"
 DEFAULT_DAILY_AT = "22:00"
 HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+INDEX = re.compile(r"[0-9]{1,3}")  # an agent number in /note, /pause, /stop, /mute (ASCII digits only)
 PAIRING = {"strategy": "telegram", "key": "pairing"}
 ALERTS = {"strategy": "telegram", "key": "alerts"}
 DAILY_SENT = {"strategy": "telegram", "key": "daily_sent"}
@@ -301,7 +303,7 @@ def compose(notes: Sequence[Note], limit: int = MAX_CHARS) -> str:
     def text(extra: str = "") -> str:
         return "\n\n".join(_block(h, d) for h, d in units) + extra
     t = text()
-    while len(t) > limit and any(d and d != [CUT] for _, d in units):
+    while tg_len(t) > limit and any(d and d != [CUT] for _, d in units):
         i = max((k for k, (_, d) in enumerate(units) if d and d != [CUT]), key=lambda k: len(_block(*units[k])))
         d = units[i][1]
         if d[-1] == CUT:
@@ -310,21 +312,33 @@ def compose(notes: Sequence[Note], limit: int = MAX_CHARS) -> str:
         d.append(CUT)
         t = text()
     dropped = 0
-    while len(t) > limit and len(units) > 1:
+    while tg_len(t) > limit and len(units) > 1:
         units.pop()
         dropped += 1
         t = text(f"\n\n… and {dropped} more")
-    return t if len(t) <= limit else cut_html(t, limit)  # one head over the limit: never ours (heads are short)
+    return t if tg_len(t) <= limit else cut_html(t, limit)  # one head over the limit: never ours (heads are short)
 
 
 _TAG = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)[^<>]*>")
 _ENTITY = re.compile(r"&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);")
 
 
+def tg_len(t: str) -> int:
+    """A message's length as Telegram counts it: UTF-16 code units (an emoji such as 🔵 is 2, not 1). Measured on the
+    HTML source, which is never shorter than the text Telegram counts after parsing the tags, so it errs safe."""
+    return len(t.encode("utf-16-le")) // 2
+
+
+def _index(s: str) -> int | None:
+    """An agent number as /status lists them: ASCII digits only ("²" or "٣" pass str.isdigit, and int("²") raises),
+    at most 3 of them; else None."""
+    return int(s) if INDEX.fullmatch(s or "") else None
+
+
 def cut_html(t: str, limit: int) -> str:
-    """`t` (Telegram HTML) cut to at most `limit` characters on a text boundary: never inside a tag or an entity,
-    with "…" and every tag still open closed again, so the message still parses."""
-    if len(t) <= limit:
+    """`t` (Telegram HTML) cut to at most `limit` characters (tg_len) on a text boundary: never inside a tag or an
+    entity, with "…" and every tag still open closed again, so the message still parses."""
+    if tg_len(t) <= limit:
         return t
     out: list[str] = []
     stack: list[str] = []
@@ -340,14 +354,14 @@ def cut_html(t: str, limit: int) -> str:
             if stack and stack[-1] == m.group(2).lower():
                 stack.pop()
             out.append(piece)
-            size += len(piece)
+            size += tg_len(piece)
             i += len(piece)
             continue
         extra = len(m.group(2)) + 3 if is_tag else 0  # an opening tag also reserves its closing tag
-        if size + len(piece) + extra + closing() + len(CUT) > limit:
+        if size + tg_len(piece) + extra + closing() + tg_len(CUT) > limit:
             break
         out.append(piece)
-        size += len(piece)
+        size += tg_len(piece)
         if is_tag:
             stack.append(m.group(2).lower())
         i += len(piece)
@@ -606,7 +620,7 @@ class RemoteControl:
         """Send an HTML message (cut to the limit)."""
         if self.messenger is None:
             return None
-        if len(text) > MAX_CHARS:
+        if tg_len(text) > MAX_CHARS:
             text = compose([Note(text)])
         try:
             return await self.messenger.send(chat_id, text, buttons, silent=silent)
@@ -625,6 +639,8 @@ class RemoteControl:
     async def _edit(self, chat_id: int, message_id: int | None, text: str) -> None:
         if self.messenger is None or message_id is None:
             return
+        if tg_len(text) > MAX_CHARS:  # an edit has the same limit as a send
+            text = compose([Note(text)])
         try:
             ok = await self.messenger.edit(chat_id, message_id, text, None)
         except Exception:
@@ -705,8 +721,8 @@ class RemoteControl:
             live = self._agents()
             # an agent number only with several agents ("/note 2 text") or written "#2"; with one agent a leading
             # number is the note's own text ("/note 5 minutes left: hold")
-            explicit = first.startswith("#") and first[1:].isdigit()
-            if text.strip() and (explicit or (first.isdigit() and len(live) > 1)):
+            explicit = first.startswith("#") and _index(first[1:]) is not None
+            if text.strip() and (explicit or (_index(first) is not None and len(live) > 1)):
                 targets, why = self._targets(first.lstrip("#"), "note")
             elif len(live) == 1:
                 targets, why, text = live, None, rest
@@ -752,8 +768,7 @@ class RemoteControl:
             return None, self._which(verb, f"/{verb} 1")
         if arg.lower() == "all":
             return live, None
-        if arg.isdigit():
-            i = int(arg)
+        if (i := _index(arg)) is not None:
             if 1 <= i <= len(live):
                 return [live[i - 1]], None
             return None, f"There is no agent {i}; /status lists them."

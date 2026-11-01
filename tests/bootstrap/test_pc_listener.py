@@ -74,6 +74,8 @@ def test_two_servers_start_share_one_lifespan_and_stop_together(tmp_path, monkey
     servers = rt.make_servers(app)
     assert [s.config.port for s in servers] == [main_port, pc_port]
     assert servers[1].config.host == "127.0.0.1" and servers[1].config.lifespan == "off"
+    # the client is the TCP peer: uvicorn never rewrites it from X-Forwarded-For (the lockout key, the PC's place)
+    assert all(s.config.proxy_headers is False for s in servers)
 
     async def run() -> bool:
         task = asyncio.ensure_future(rt.serve_all(servers))

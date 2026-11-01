@@ -1082,3 +1082,77 @@ def test_the_card_in_a_container_shows_the_public_url_and_its_host_is_allowed():
                    lan_ip_fn=lambda: "172.17.0.2", container_fn=lambda: True, pc_port=PC_PORT)
     v = pc_client(app2).get("/api/access").json()
     assert v["lan_url"] is None and "BTCFLOW_PUBLIC_URL" in v["how_to_find_ip"]
+
+
+# -- B1#9: behind Docker's gateway every phone shares one IP; the lockout key is per device ---------------------------
+GATEWAY = ("172.17.0.1", 40000)  # what every phone's TCP peer is behind Docker's port publishing
+
+
+def _device(c) -> str:
+    r = c.get("/login")
+    assert r.status_code == 200
+    return c.cookies.get(access.DEVICE_COOKIE)
+
+
+def test_the_login_page_gives_each_browser_a_signed_device_cookie_scoped_to_login():
+    app, guard, _ = make()
+    c = client(app, GATEWAY)
+    r = c.get("/login")
+    set_cookie = r.headers["set-cookie"]
+    assert access.DEVICE_COOKIE in set_cookie and "HttpOnly" in set_cookie and "Path=/login" in set_cookie
+    assert "samesite=strict" in set_cookie.lower()
+    dev = c.cookies.get(access.DEVICE_COOKIE)
+    assert guard.device_id(dev) is not None
+    assert "set-cookie" not in c.get("/login").headers  # a valid one is kept, not replaced
+    nonce, sig = dev.split(".")
+    assert guard.device_id(f"{nonce}.{'0' * len(sig)}") is None  # forged
+    assert guard.device_id(f"{'a' * 24}.{sig}") is None
+    assert AccessGuard(PinStore(None)).device_id(dev) is None  # another process's secret: not ours
+
+
+def test_five_wrong_pins_from_one_phone_behind_the_gateway_do_not_lock_the_others_out():
+    app, _, _ = make()
+    attacker, phone = client(app, GATEWAY), client(app, GATEWAY)
+    _device(attacker), _device(phone)
+    for _ in range(4):
+        assert attacker.post("/login", data={"pin": "111111"}).status_code == 401
+    assert attacker.post("/login", data={"pin": "111111"}).status_code == 429  # its own device is locked
+    assert attacker.post("/login", data={"pin": PIN}).status_code == 429
+    assert phone.post("/login", data={"pin": PIN}).status_code == 303  # same IP, its own device: signs in
+
+
+def test_dropping_the_device_cookie_lands_in_the_shared_ip_bucket_never_in_another_devices(caplog):
+    app, _, _ = make()
+    phone = client(app, GATEWAY)
+    _device(phone)
+    script = client(app, GATEWAY)  # never loads the page: no device cookie
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            script.post("/login", data={"pin": "111111"})
+    assert script.post("/login", data={"pin": PIN}).status_code == 429  # the bare-IP bucket is locked
+    assert phone.post("/login", data={"pin": PIN}).status_code == 303
+    assert any("172.17.0.1 locked out" in r.getMessage() for r in caplog.records)
+    forged = client(app, GATEWAY)
+    forged.cookies.set(access.DEVICE_COOKIE, "a" * 24 + "." + "b" * 32, path="/login")
+    assert forged.post("/login", data={"pin": PIN}).status_code == 429  # a forged cookie is the bare IP
+
+
+def test_rotating_device_cookies_still_meets_the_cap_across_all_clients():
+    app, _, _ = make()
+    codes = []
+    for _ in range(access.GLOBAL_MAX_FAILURES):
+        c = client(app, GATEWAY)
+        _device(c)
+        codes.append(c.post("/login", data={"pin": "111111"}).status_code)
+    assert codes[-1] == 429  # the 20th wrong PIN across all clients locks every login
+    fresh = client(app, GATEWAY)
+    _device(fresh)
+    assert fresh.post("/login", data={"pin": PIN}).status_code == 429
+
+
+def test_a_forwarded_for_header_never_changes_the_lockout_key_or_the_client():
+    app, _, _ = make()
+    c = client(app, GATEWAY)
+    for i in range(5):
+        c.post("/login", data={"pin": "111111"}, headers={"X-Forwarded-For": f"10.0.0.{i}"})
+    assert c.post("/login", data={"pin": PIN}, headers={"X-Forwarded-For": "10.0.0.99"}).status_code == 429

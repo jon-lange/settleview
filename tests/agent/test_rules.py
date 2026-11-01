@@ -405,3 +405,25 @@ def test_a_rule_position_held_to_the_close_books_1_dollar_a_contract_when_it_win
     (info,) = ev["latest"]["brackets"]  # the result itself, not only that it closed (code review 2026-10-30 #5)
     assert info["held"] == held and info["proceeds"] == held
     assert info["pnl"] == round(held - b["entry_cost"] - (row.get("tp_fees") or 0.0) - (row.get("exit_fees") or 0.0), 4)
+
+
+# -- one price-cap rule for Auto, Assist and a setup light (P1 batch C, B2 "Auto vs Assist price caps differ") -----
+def test_entry_cap_is_the_matched_ask_plus_two_cents_never_above_the_rules_cap():
+    h4 = R.RULES["H4"]  # ask cap 95c
+    assert R.APPROVE_SLACK == 0.02
+    assert R.entry_cap(h4, 0.58) == 0.60
+    assert R.entry_cap(h4, 0.94) == 0.95  # 96c would be above the rule's own cap
+    assert R.entry_cap(R.RULES["HPANIC"], 0.34) == 0.35
+    for bad in (None, "", "x", 0, 1.0, -0.1, float("nan")):
+        assert R.entry_cap(h4, bad) is None, bad  # no usable ask: no cap, nothing is sent
+
+
+def test_auto_assist_and_setups_all_take_the_one_cap_rule():
+    import inspect
+
+    from btc_signal_engine.application import agent_proposals, agent_runner, setups
+    for mod in (agent_runner, agent_proposals, setups):
+        src = inspect.getsource(mod)
+        assert "entry_cap(" in src, mod.__name__
+        assert "APPROVE_SLACK, 2)" not in src, mod.__name__  # no private copy of the formula left
+    assert agent_proposals.APPROVE_SLACK is R.APPROVE_SLACK

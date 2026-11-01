@@ -12,8 +12,8 @@ session's loop on its own (the tests): every `tick_s` it:
 4. runs the session's armed entry rules (agent_rules; "rules open, code exits, the agent supervises") on those views,
    each rule on each of its markets that is among the session's venues: a match opens one entry through
    `AgentTools.call("place_entry", by_rule=...)` as the agent (request_id "rule:<id>:<market>:<window start>", an IoC
-   limit at the matched ask + APPROVE_SLACK (2c), never above the rule's ask cap: the same protection as an Assist
-   proposal and a setup since 2026-10-31), stake and max_worst_case = the per-trade cap, the rule's invalidation BTC
+   limit at `agent_rules.entry_cap`: the matched ask + APPROVE_SLACK (2c), never above the rule's ask cap, the one
+   cap rule an Assist proposal and a setup take too; a match without a usable ask sends nothing), stake and max_worst_case = the per-trade cap, the rule's invalidation BTC
    stop, if it has one, in the same ticket), journals a "rule" row (rule, market, inputs and outcome; a refusal's
    reason) and, on
    success, a "decision" row (ENTRY, p_source experimental, source "rule", its rule and market) and pushes an urgent
@@ -92,10 +92,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from btc_signal_engine.application.agent_rules import RULES
+from btc_signal_engine.application.agent_rules import RULES, entry_cap
 from btc_signal_engine.application.agent_rules import evaluate as rule_match
 from btc_signal_engine.application.agent_rules import note as rule_note
-from btc_signal_engine.application.agent_proposals import APPROVE_SLACK, AgentProposals
+from btc_signal_engine.application.agent_proposals import AgentProposals
 from btc_signal_engine.application.agent_events import (DECISION_POINTS, POSITION_EVENTS, AgentEvents, EventsConfig,
                                                         SignalBoard, Snapshot)
 from btc_signal_engine.application.agent_sessions import BRACKETS, OPEN_STATES, SETTLING, VENUES, AgentSessions
@@ -608,15 +608,6 @@ class AgentRunner:
         return any(b.get("strategy") == strategy and b["state"] in OPEN_STATES
                    for b in self.sessions.repo.select(BRACKETS, {"session_id": self.session_id}))
 
-    @staticmethod
-    def rule_cap(rule_cap: float, ask: Any) -> float:
-        """The most a rule's entry may pay: the ask the rule matched + APPROVE_SLACK, never above the rule's own cap
-        (the same protection as an Assist proposal and a setup; 2026-10-31: Auto used to send at the rule's cap)."""
-        try:
-            return min(rule_cap, round(float(ask) + APPROVE_SLACK, 2))
-        except (TypeError, ValueError):
-            return rule_cap
-
     async def _rule_entry(self, now: int, s: dict, rid: str, market: str, m: dict) -> dict:
         """One rule entry, start to journal, as its own tracked task: the caller (the fleet's step, the side task
         during a wake, the loop) being cancelled by a Stop never cancels the order nor loses its "rule" row; the
@@ -628,14 +619,20 @@ class AgentRunner:
         per_trade = float(s["limits"]["per_trade"])
         stop = m["stop_index_below"] if m["side"] == "UP" else m["stop_index_above"]
         text = rule_note(m)
+        # the one cap rule (agent_rules.entry_cap): the matched ask + 2c, never above the rule's cap, as Assist
+        cap = entry_cap(rule, m.get("ask"))
         args = {"market": market, "side": m["side"], "stake": per_trade, "order_type": "limit",
-                "max_price": self.rule_cap(rule.ask_cap, m.get("ask")), "max_worst_case": per_trade,
+                "max_price": cap, "max_worst_case": per_trade,
                 "btc_stop": stop, "note": text[:500], "request_id": f"rule:{rid}:{market}:{m['window_start']}"}
-        try:
-            res = await self.tools.call("place_entry", args, now, session_id=sid, by_rule=rid)
-        except Exception as e:  # recorded as the rule's refusal; not retried this window
-            log.exception("rule entry failed")
-            res = {"ok": False, "code": "error", "reason": f"{type(e).__name__}: {e}"}
+        if cap is None:  # no usable ask: nothing is sent (never the rule's own cap as a fallback)
+            res = {"ok": False, "code": "no_price", "reason": "The rule matched without a usable ask; nothing was "
+                                                              "sent."}
+        else:
+            try:
+                res = await self.tools.call("place_entry", args, now, session_id=sid, by_rule=rid)
+            except Exception as e:  # recorded as the rule's refusal; not retried this window
+                log.exception("rule entry failed")
+                res = {"ok": False, "code": "error", "reason": f"{type(e).__name__}: {e}"}
         bracket = res.get("bracket") if isinstance(res.get("bracket"), dict) else {}
         inputs = self._rule_inputs(m)
         row = {"rule": rid, "market": market, "ok": bool(res.get("ok")), "code": res.get("code"),

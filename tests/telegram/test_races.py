@@ -149,3 +149,27 @@ def test_taps_answered_proposals_and_closed_brackets_are_pruned(store):
     run(c.pump())
     assert set(c._taps) == {"new"} and set(c._props) == {"p2"}  # main: kept forever
     assert "gone" not in c._brackets and c._brackets["still-open"] == (True, False)
+
+
+def test_an_agent_number_is_ascii_digits_only_and_never_crashes_the_command(store):
+    """"²" passes str.isdigit and int("²") raises: a superscript, an Arabic-Indic digit or a huge number is the
+    note's text or an unknown agent, never an exception (P1 batch C, B2 "/note number parsing")."""
+    c, m, ag = remote(store, 2)
+    c.actions = acts = FakeActions()
+    for odd in ("²", "٣", "#²", "99999999999999999999"):
+        k = len(m.sent)
+        run(c.handle_message(message(f"/note {odd} careful")))
+        assert acts.calls == [] and len(m.sent) == k + 1, odd  # a plain answer each time
+    run(c.handle_message(message("/pause ²")))
+    assert "No running agent is called ²" in m.texts()[-1]
+    run(c.handle_message(message("/note 2 careful")))
+    assert acts.calls == [("note", A2, "careful")]
+
+
+def test_the_limit_counts_utf16_units_as_telegram_does():
+    assert N.tg_len("🔵") == 2 and N.tg_len("abc") == 3 and N.tg_len("−") == 1
+    head = "🔵" * 3000  # 3000 characters, 6000 UTF-16 units: over Telegram's 4096
+    t = compose([Note(head)])
+    assert N.tg_len(t) <= MAX_CHARS and t.endswith("…")
+    under = "🔵" * 2000
+    assert compose([Note(under)]) == under  # 4000 units: fits as it is

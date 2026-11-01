@@ -23,8 +23,16 @@
   random 16-byte salt; compared in constant time). Success sets an HttpOnly, SameSite=Strict cookie signed with
   HMAC-SHA256 under a random per-process secret (a restart signs every phone out) and the PIN's session generation
   (setting, changing or clearing the PIN bumps it, so every old cookie stops working), valid for `session_hours`.
-  Failures are rate limited per client IP (5 in 10 minutes -> 15-minute lockout) and across all addresses (20 in
-  10 minutes -> every login locked for 15 minutes, so rotating addresses does not help), and logged without the PIN.
+  Failures are rate limited per client (5 in 10 minutes -> 15-minute lockout) and across all clients (20 in
+  10 minutes -> every login locked for 15 minutes, so rotating addresses or devices does not help), and logged
+  without the PIN. A client is its IP plus, when it holds one, its DEVICE cookie (B1#9): behind Docker's port
+  publishing every phone arrives from the bridge gateway's one address, so an IP-only key let five wrong PINs from any
+  LAN device lock every phone out. The login page (GET /login, which a browser loads before it can post the form)
+  sets `btcflow_device` (random, HMAC-signed under the per-process secret, HttpOnly, SameSite=Strict, path /login, a
+  year); a POST with a valid one is counted under "<ip>#<device>", one without (a script, a cookie-less client) under
+  the bare IP, and a POST never hands one out, so dropping the cookie only lands in the shared bucket and never frees
+  another device's (rotating fresh cookies from the page still meets the cap across all clients). The cookie cannot be forged (signed) and no header is trusted for it: X-Forwarded-For is
+  never read and uvicorn's proxy-header rewriting is off (bootstrap/app.py). Logs name the device too.
   The PBKDF2 comparison runs in a worker thread so a login never blocks the event loop; logins from one address are
   checked one at a time, and each attempt counts as a (pending) failure from before its hash starts until it succeeds,
   so the cap stays exact when logins arrive in parallel.
@@ -88,6 +96,8 @@ from btc_signal_engine.application.actor import current_actor
 log = logging.getLogger(__name__)
 
 COOKIE = "btcflow_session"
+DEVICE_COOKIE = "btcflow_device"  # the login's per-device lockout key (B1#9); signed, carries nothing else
+DEVICE_COOKIE_S = 365 * 86_400
 LOOPBACK_CLIENTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 PIN_RE = re.compile(r"^[0-9]{6,8}$")
@@ -418,6 +428,26 @@ class AccessGuard:
                 and self._sessions.get(nonce) == int(expires)):
             return nonce
         return None
+
+    # -- devices (the lockout key behind a gateway) ----------------------------------------------------------
+    def issue_device(self) -> str:
+        nonce = secrets.token_hex(12)
+        return f"{nonce}.{self._sign('device.' + nonce)[:32]}"
+
+    def device_id(self, token: str | None) -> str | None:
+        """The device id of a valid device cookie (signed by this process), else None."""
+        if not token or token.count(".") != 1:
+            return None
+        nonce, sig = token.split(".")
+        if not re.fullmatch(r"[0-9a-f]{24}", nonce) or not hmac.compare_digest(self._sign("device." + nonce)[:32],
+                                                                                sig):
+            return None
+        return nonce
+
+    @staticmethod
+    def client_key(ip: str, device: str | None) -> str:
+        """Whose failures these are: the IP, plus the device when the client holds a valid device cookie."""
+        return f"{ip}#{device[:8]}" if device else ip
 
     # -- login and lockout ------------------------------------------------------------------------------------
     def locked_for_ms(self, ip: str) -> int:
@@ -796,19 +826,27 @@ class AccessMiddleware:
         if request.method != "POST":
             if self.guard.valid(request.cookies.get(COOKIE)):
                 return RedirectResponse("/#play", status_code=303)
-            return HTMLResponse(_login_page())
-        ip = _client_ip(request.scope)
+            return self._with_device(request, HTMLResponse(_login_page()))
+        device = self.guard.device_id(request.cookies.get(DEVICE_COOKIE))
+        key = AccessGuard.client_key(_client_ip(request.scope), device)
         try:
             form = await read_small_form(request)
         except BodyTooLarge:
             return _too_large()
         pin = (form.get("pin") or [""])[0]
-        ok, refusal = await self.guard.check_pin(ip, pin)
-        if not ok:
+        ok, refusal = await self.guard.check_pin(key, pin)
+        if not ok:  # (no device cookie handed out here: a cookie-less client stays in its IP's bucket)
             return HTMLResponse(_login_page(refusal), status_code=429 if "Too many" in (refusal or "") else 401)
         resp = RedirectResponse("/#play", status_code=303)
         resp.set_cookie(COOKIE, self.guard.issue(), max_age=self.guard.session_ms // 1000, httponly=True,
                         samesite="strict", path="/")
+        return resp
+
+    def _with_device(self, request: Request, resp: Response) -> Response:
+        """Give the login page's browser its device cookie (the lockout key) unless it holds a valid one."""
+        if self.guard.device_id(request.cookies.get(DEVICE_COOKIE)) is None:
+            resp.set_cookie(DEVICE_COOKIE, self.guard.issue_device(), max_age=DEVICE_COOKIE_S, httponly=True,
+                            samesite="strict", path="/login")
         return resp
 
     async def _pair(self, request: Request) -> Response:

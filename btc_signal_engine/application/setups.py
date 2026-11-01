@@ -23,8 +23,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from btc_signal_engine.application.agent_proposals import APPROVE_SLACK
-from btc_signal_engine.application.agent_rules import RULES, _base, _edges, _fee, _inputs, evaluate
+from btc_signal_engine.application.agent_rules import RULES, _base, _edges, _fee, _inputs, entry_cap, evaluate
 
 GREY, AMBER, GREEN = "grey", "amber", "green"
 STATES = (GREY, AMBER, GREEN)
@@ -260,8 +259,8 @@ def light(rule_id: str, market: str, view: dict, record: dict | None = None, bac
         return {**base, "state": GREEN, "progress": 1.0, "side": m["side"], "ask": m["ask"],
                 "line": f"{rule_id} fits this window.", "details": details,
                 "match": {"side": m["side"], "ask": m["ask"],
-                          # the price you were shown + 2c, never above the rule's cap (as Assist approves)
-                          "max_price": min(rule.ask_cap, round(float(m["ask"]) + APPROVE_SLACK, 2)),
+                          # the price you were shown + 2c, never above the rule's cap (agent_rules.entry_cap)
+                          "max_price": entry_cap(rule, m["ask"]),
                           "stop_index_below": m["stop_index_below"], "stop_index_above": m["stop_index_above"],
                           "stop": stop, "window_end": m["window_end"], "ticker": m["ticker"],
                           "break_even_pct": be}}
