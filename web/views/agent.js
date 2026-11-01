@@ -445,6 +445,7 @@
       fleet: null, fleetErr: '', agents: null, agentsErr: '',
       // the agent on screen (its id) and the run shown (its live session, else its last)
       sel: null, selSid: null, selView: null, selErr: '',
+      stateSeq: 0,          // bumped by every applied state (stream, action answer, read): a read sent before one is late
       stopAsk: false,       // the accessory's on-screen "Stop all?" (the server asks nothing: R18)
 
       init: function () {
@@ -542,11 +543,15 @@
       },
       unselect: function () { this.sel = null; this.showRun(null); },
       loadSel: function () {
-        var self = this, sid = self.selSid;
+        var self = this, sid = self.selSid, seq = self.stateSeq;
         if (!sid) return Promise.resolve();
         return api.get('/api/agent/sessions/' + encodeURIComponent(sid)).then(function (r) {
           if (sid !== self.selSid) return;
-          self.selView = r; self.selErr = '';
+          self.selErr = '';
+          // A state applied after this read was sent (the stream's pause, a stop's answer) is newer: a late answer
+          // would put the run back as it was when the read started (running, no pause reason) until the next change.
+          if (seq !== self.stateSeq) return;
+          self.selView = r;
           if (!self.state) self.applyState({ session: r.session, positions: r.positions || null, prompts: self.status && self.status.prompts }, true, true);
           else if (r.session) self.applyState({ session: r.session }, false, true);
         }, function (e) { if (sid === self.selSid) self.selErr = errText(e); });
@@ -556,6 +561,7 @@
       applyState: function (st, snapshot, partial) {
         var prev = this.state && this.state.session, next = st && st.session;
         if (next && this.selSid && next.id !== this.selSid) return;  // another run's answer, after a switch
+        this.stateSeq++;
         if (partial && this.state) { this.state = Object.assign({}, this.state, { session: next }); }
         else this.state = st;
         if (next && (!prev || prev.seconds_left !== next.seconds_left || snapshot)) { this.leftS = next.seconds_left; this.leftAt = Date.now(); }
