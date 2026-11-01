@@ -1,6 +1,9 @@
 """The Assist proposal card (web/views/proposal.js) in a real browser, mounted on an agent's screen for its run: shown from
 the run's feed CUSTOM proposal_new, Approve sends one entry, Skip and expiry send nothing. The app is tests/e2e/server.py
-(shadow exchange, scripted fake harness); the proposal is the real AgentProposals over a test-built rule match."""
+(shadow exchange, scripted fake harness); the proposal is the real AgentProposals over a test-built rule match.
+Approve is press-and-hold (B6#11): held to the end it sends (a mouse on desktop, a real touch on the phone looks, Space
+held on the keyboard); a tap, an early release or a short key press sends nothing; assistive activation (a click with
+no press behind it) needs an explicit second confirm."""
 
 from __future__ import annotations
 
@@ -56,6 +59,33 @@ def reload_cards(ui):
     ui.page.evaluate("() => window.__pc.reload()")
 
 
+HOLD_S = 0.8  # proposal.js HOLD_MS
+
+
+def hold(ui, button, seconds: float) -> None:
+    """Press the button for `seconds`, then let go: a mouse on desktop; on the phone looks a real touch (Chromium's
+    touch input over CDP, the events a finger makes), since Playwright's touchscreen only taps."""
+    button.scroll_into_view_if_needed()
+    box = button.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page = ui.page
+    if ui.look["phone"]:
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        page.wait_for_timeout(seconds * 1000)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        cdp.detach()
+    else:
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.wait_for_timeout(seconds * 1000)
+        page.mouse.up()
+
+
+def someone_at_the_screen(ui) -> None:
+    ui.server.call(lambda: ui.server.world.r.svc.heartbeat(ui.server.world.clock.now_ms()))
+
+
 def buys(ui) -> list:
     return ui.server.call(lambda: [p for p in ui.server.world.r.ex.posts()
                                    if p and "-entry" in p.get("client_order_id", "")])
@@ -72,13 +102,103 @@ def test_the_card_shows_a_proposal_and_approve_sends_the_entry(ui):
     expect(card.locator(".pc-make")).to_have_text(f"Could make +${p['could_make']:.2f}")
     expect(card.locator(".pc-lose")).to_have_text(f"Could lose ${p['could_lose']:.2f}")
     expect(card.locator(".pc-left")).to_have_text("0:20")  # the server's clock stands still in this world
-    expect(card.locator(".pc-note")).to_have_text("One Approve sends the entry and its stop. Unanswered proposals "
-                                                  "expire; nothing is sent.")
+    note = ("Hold Approve to send the entry and its stop. Unanswered proposals expire; nothing is sent.")
+    expect(card.locator(".pc-note")).to_have_text(note)
+    ok = card.get_by_role("button", name="Hold to approve")
+    expect(ok).to_have_accessible_description(note)
     ui.no_horizontal_scroll()
     ui.shot("proposal")
     assert buys(ui) == []
-    ui.server.call(lambda: ui.server.world.r.svc.heartbeat(ui.server.world.clock.now_ms()))  # someone at the screen
-    card.get_by_role("button", name="Approve").click()
+    someone_at_the_screen(ui)
+    hold(ui, ok, HOLD_S + 0.4)
+    expect(root.locator(".pc-status")).to_have_text("Approved: the entry and its stop were sent.")
+    expect(card).to_have_count(0)
+    assert len(buys(ui)) == 1
+
+
+def test_a_tap_or_an_early_release_sends_nothing(ui):
+    root = mount_card(ui, assist_session(ui))
+    propose(ui)
+    someone_at_the_screen(ui)
+    card = root.locator("article.pc-card")
+    ok = card.get_by_role("button", name="Hold to approve")
+    status = root.locator(".pc-status")
+    if ui.look["phone"]:
+        ok.tap()  # a stray tap
+    else:
+        ok.click()
+    expect(status).to_have_text("Released early: nothing was sent. Hold until it fills to approve.")
+    ui.page.evaluate("() => { document.querySelector('#pc-mount .pc-status').textContent = ''; }")
+    # held, but let go before the fill completes: cancelled, the fill resets, nothing is sent
+    hold(ui, ok, HOLD_S / 3)
+    expect(status).to_have_text("Released early: nothing was sent. Hold until it fills to approve.")
+    assert ok.evaluate("b => b.classList.contains('pc-holding')") is False
+    assert ok.locator(".pc-fill").evaluate("f => f.style.transform") == ""
+    ui.page.wait_for_timeout(HOLD_S * 1000)  # longer than a hold: the cancelled hold must not complete later
+    expect(card).to_have_count(1)
+    assert buys(ui) == []
+
+
+def test_mid_hold_progress_shows_and_sliding_off_cancels(ui):
+    if ui.look["phone"]:
+        pytest.skip("a mouse drag; the touch path is covered by the hold tests above")
+    root = mount_card(ui, assist_session(ui))
+    propose(ui)
+    someone_at_the_screen(ui)
+    card = root.locator("article.pc-card")
+    ok = card.get_by_role("button", name="Hold to approve")
+    box = ok.bounding_box()
+    page = ui.page
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.wait_for_timeout(HOLD_S * 1000 / 2)
+    scale = ok.locator(".pc-fill").evaluate("f => parseFloat(f.style.transform.slice(7))")
+    assert 0.2 < scale < 1, scale  # the fill shows how far the hold has come
+    assert ok.evaluate("b => b.classList.contains('pc-holding')") is True
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] - 80)  # slid off the button, still pressed
+    page.wait_for_timeout(HOLD_S * 1000)
+    page.mouse.up()
+    expect(root.locator(".pc-status")).to_have_text("Released early: nothing was sent. Hold until it fills to approve.")
+    expect(card).to_have_count(1)
+    assert buys(ui) == []
+
+
+def test_keyboard_hold_approves_and_a_short_press_does_not(ui):
+    root = mount_card(ui, assist_session(ui))
+    propose(ui)
+    someone_at_the_screen(ui)
+    card = root.locator("article.pc-card")
+    ok = card.get_by_role("button", name="Hold to approve")
+    status = root.locator(".pc-status")
+    kb = ui.page.keyboard
+    ok.focus()
+    kb.press("Enter")  # a short press: no native click, nothing sent
+    expect(status).to_have_text("Released early: nothing was sent. Hold until it fills to approve.")
+    kb.press("Space")
+    ui.page.wait_for_timeout(HOLD_S * 1000)
+    expect(card).to_have_count(1)
+    assert buys(ui) == []
+    kb.down("Space")  # held: the fill completes and the proposal is approved
+    expect(status).to_have_text("Approved: the entry and its stop were sent.", timeout=HOLD_S * 1000 + 4000)
+    kb.up("Space")
+    expect(card).to_have_count(0)
+    assert len(buys(ui)) == 1
+
+
+def test_assistive_activation_needs_an_explicit_confirm(ui):
+    """A screen reader's or voice control's activation is a click with no press behind it (detail 0): the first one
+    arms "Confirm approve", only a second one sends."""
+    root = mount_card(ui, assist_session(ui))
+    propose(ui)
+    someone_at_the_screen(ui)
+    card = root.locator("article.pc-card")
+    ok = card.get_by_role("button", name="Hold to approve")
+    ok.evaluate("b => b.click()")
+    confirm = card.get_by_role("button", name="Confirm approve")
+    expect(confirm).to_be_visible()
+    expect(root.locator(".pc-status")).to_have_text("Activate Confirm approve again to send; nothing is sent otherwise.")
+    assert buys(ui) == []
+    confirm.evaluate("b => b.click()")
     expect(root.locator(".pc-status")).to_have_text("Approved: the entry and its stop were sent.")
     expect(card).to_have_count(0)
     assert len(buys(ui)) == 1
