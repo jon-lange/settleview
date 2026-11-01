@@ -120,6 +120,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
+      # The action uses an installed `devcontainer` and otherwise installs the newest 0.x: pin the CLI here instead
+      # (2026-08-31, older than two weeks when adopted; the version the local headless proof ran).
+      - name: Install the Dev Containers CLI (pinned)
+        run: npm install -g @devcontainers/cli@0.89.0
+
       # Import contracts (lint-imports); the OpenTelemetry tests, none may be skipped (the scrubbing tests fail if a
       # token, key, cookie, signature or query secret reaches an exporter; the GenAI one runs the bundled Claude Code
       # CLI against a local fake API); then the whole suite.
