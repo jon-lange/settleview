@@ -516,9 +516,9 @@ class AgentTools:
         svc = self._svc(key)
         if ctx.view is None or svc is None:
             return {"ok": False, "code": "no_agent_session", "reason": "There is no session to score."}
-        ids = {b["id"] for b in self.sessions.repo.select(BRACKETS, {"session_id": ctx.sid})}
-        trades = [t for t in svc.trades(0, now, 500) if t["id"] in ids]
-        return {"ok": True, "market": key, "this_session_only": True, "scoreboard": P.scoreboard(trades, now)}
+        ids = [b["id"] for b in self.sessions.repo.select(BRACKETS, {"session_id": ctx.sid})]
+        trades = svc.trades(0, now, None, ids=ids)  # every trade of this session, however long it ran
+        return {"ok": True, "market": key, "this_session_only": True, "scoreboard": self.play.score(trades, now)}
 
     async def get_journal(self, ctx: Ctx, args: dict, now: int) -> dict:
         if ctx.view is None:

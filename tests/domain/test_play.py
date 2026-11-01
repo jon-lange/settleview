@@ -66,30 +66,59 @@ def test_advice_consider_exit_near_stop_or_under_half():
     assert pending["action"] == "WAITING"
 
 
-def _t(pnl, ts, entry=0.6, state="closed", exit_="settled"):
+def _t(pnl, ts, entry=0.6, state="closed", exit_="settled", cost=6.17, filled=10.0):
     return {"id": str(ts), "side": "UP", "state": state, "pnl": pnl, "exit_ts": ts, "entry_avg": entry, "exit": exit_,
-            "env": "prod"}
+            "env": "prod", "entry_cost": cost, "filled": filled}
+
+
+DAY0 = NOW - NOW % DAY  # the tests' "local" midnight (a UTC day here; the zone is the caller's: domain/days.py)
+
+
+def _sb(trades, **kw):
+    return P.scoreboard(trades, NOW, day_start=DAY0, week_start=DAY0 - 6 * DAY, **kw)
 
 
 def test_scoreboard_record_streak_and_periods():
     trades = [_t(1.0, NOW - 10 * DAY), _t(-2.0, NOW - 3 * DAY), _t(0.5, NOW - 2 * 3_600_000, exit_="manual"),
               _t(0.7, NOW - 1000), _t(None, NOW, state="open"), _t(0.0, NOW - 5 * DAY)]
-    sb = P.scoreboard(trades, NOW)
+    sb = _sb(trades)
     assert sb["record"] == {"wins": 3, "losses": 1, "pushes": 1, "trades": 5, "pnl": 0.2}
     assert sb["streak"]["text"] == "W2"
     assert sb["pnl"] == {"today": 1.2, "week": -0.8, "all": 0.2}
     assert sb["open"] == 1
     c = sb["calls"]
-    assert c["n"] == 4 and c["win_rate"] == 0.75 and c["avg_price"] == 0.6 and c["edge"] == 0.15
-    assert c["mostly_luck"] and "mostly luck" in c["verdict"] and "break-even 60%" in c["verdict"]
+    # break-even is the cost WITH the entry fee: $6.17 for 10 contracts = 61.7c, not the 60c price (review B5#1)
+    assert c["n"] == 4 and c["win_rate"] == 0.75 and c["avg_price"] == 0.6 and c["break_even"] == 0.617
+    assert c["edge"] == 0.133 and c["break_even_n"] == 4
+    assert c["mostly_luck"] and "mostly luck" in c["verdict"] and "61.7¢ with fees (break-even 61.7%)" in c["verdict"]
     assert [r["result"] for r in sb["recent"]][:2] == ["W", "W"] and "vs_bot" not in sb
+    assert [p["break_even"] for p in sb["attempts"]["points"]][:1] == [0.617]
+
+
+def test_scoreboard_days_are_the_callers_local_days_not_utc():
+    """Today and the week are from the caller's local midnights: a trade after a local midnight that is not the UTC
+    one is in today; one before it is not (review B5#2)."""
+    local0 = DAY0 + 5 * 3_600_000  # a zone five hours behind UTC: its midnight is 05:00 UTC
+    now = local0 + 3_600_000
+    trades = [_t(1.0, local0 + 60_000), _t(-0.25, local0 - 60_000)]
+    sb = P.scoreboard(trades, now, day_start=local0, week_start=local0 - 6 * DAY)
+    assert sb["pnl"]["today"] == 1.0 and sb["pnl"]["week"] == 0.75
+
+
+def test_scoreboard_break_even_skips_unknown_costs_and_says_so():
+    sb = _sb([_t(1.0, NOW - 2000), _t(-1.0, NOW - 1000, cost=None)])
+    c = sb["calls"]
+    assert c["break_even"] == 0.617 and c["break_even_n"] == 1 and c["edge"] == round(0.5 - 0.617, 4)
+    assert "from the 1 of 2 with a known cost" in c["verdict"]
+    none = _sb([_t(1.0, NOW - 2000, cost=None)])["calls"]
+    assert none["break_even"] is None and none["edge"] is None and "break-even" not in none["verdict"]
 
 
 def test_scoreboard_empty_and_loss_streak():
-    assert P.scoreboard([], NOW)["calls"]["verdict"] == "No finished calls yet."
-    assert P.scoreboard([], NOW)["streak"]["text"] == "—"
+    assert _sb([])["calls"]["verdict"] == "No finished calls yet."
+    assert _sb([])["streak"]["text"] == "—"
     mine = [_t(1.0, NOW - DAY), _t(-1.0, NOW - 2000), _t(-0.5, NOW - 1000)]
-    assert P.scoreboard(mine, NOW)["streak"] == {"kind": "L", "n": 2, "text": "L2"}
+    assert _sb(mine)["streak"] == {"kind": "L", "n": 2, "text": "L2"}
 
 
 def test_sell_now_uses_the_bid_after_the_taker_fee_not_the_mid():

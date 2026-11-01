@@ -232,7 +232,7 @@ reaches an exporter. The agent's Claude Code CLI gets no `OTEL_*` variable (the 
 telemetry stays off.
 
 **Sampling** (the default sampler): a span with a parent follows it. Requests that change something (POST, PUT, PATCH,
-DELETE: the order path) are always traced; GET polls (the Play screen asks every 2 s) and `/api/trading/heartbeat` at
+DELETE: the order path) are always traced; GET polls (Play's scoreboard, odds and kill-switch reads) and `/api/trading/heartbeat` at
 the background ratio (1 %); `/api/health` and every SSE `/stream` never. A background HTTP call (Kalshi perps polling,
 Coinbase, Polymarket) is traced at the background ratio; api.telegram.org never; a SQL statement outside a request or
 a wake (the writer's flush every 250 ms) is never a trace of its own: its timing is in the writer and pool metrics.
@@ -1005,10 +1005,17 @@ once the app answers.
 
 ### Running in Docker: time zone
 
-The app's "today" (Record, the Agents fleet, global limits, the daily Telegram summary) is the process's local day,
-and a container runs in UTC unless told otherwise. Set `TZ=<IANA zone>` (e.g. `TZ=America/Chicago`) in the `.env` next
-to `compose.yaml`; compose passes it to the app and the recorders (default `UTC`). Found in the 2026-10-31 dry run:
-the copied data matched to the cent, but "today" started at UTC midnight until TZ was set.
+Every "today" in the app is one day in one zone (`domain/days.py`, since 2026-11-01): Play's day limit and its today /
+week P&L, Record, the Agents fleet and global limits, the daily Telegram summary. The zone is read once at startup from
+`TZ` (an IANA name such as `America/Chicago`; a leading `:` is accepted); unset means `UTC`, and a name the zone
+database does not know stops the start with an error naming it (never another zone). The log says
+`days run midnight to midnight <zone> (TZ)` at startup, and Record, Play's scoreboard and the trade-limits card name
+the zone; when the browser is in another zone the screen says so. A container runs in UTC unless told otherwise: set
+`TZ=<IANA zone>` in the `.env` next to `compose.yaml`; compose passes it to the app and the recorders (default `UTC`).
+Changing it moves where "today" starts (the day limit's use included) from the next start. Found in the 2026-10-31 dry
+run: the copied data matched to the cent, but "today" started at UTC midnight until TZ was set; before 2026-11-01
+Play's day limit and P&L always used the UTC day even then (review B5#2;
+docs/solutions/2026-11-01-one-users-day.md).
 
 ### Running in Docker: who counts as the PC
 

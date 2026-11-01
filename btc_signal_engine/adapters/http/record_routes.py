@@ -2,7 +2,8 @@
 computed exactly as the Telegram daily summary computes it (application/record_summary.py). Read only.
 
 GET /api/record/summary?range=today|week|all -> {ok, range, start_ms, now_ms, net, trades, wins,
-    you {net, trades, wins}, agent {net, trades, wins}, api {usd, wakes, sessions}, by_rule [{rule, trades, wins, net}]}
+    you {net, trades, wins}, agent {net, trades, wins}, api {usd, wakes, sessions}, by_rule [{rule, trades, wins, net}],
+    day_tz (the zone the days run in: domain/days.py, the app's TZ)}
 `range` is required: missing or unknown is 422 (never a default range)."""
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ RANGE = "^(" + "|".join(record_summary.RANGES) + ")$"
 
 
 def register_record_routes(app: FastAPI, repo: Repository, now_fn: Callable[[], int],
-                           tz: tzinfo | None = None) -> None:
+                           tz: tzinfo = record_summary.UTC_ZONE) -> None:
     links = record_summary.RuleLinks(repo)  # "all": the journal's rule links read incrementally
 
     @app.get("/api/record/summary")

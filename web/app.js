@@ -1,4 +1,9 @@
 /* Core: API client, formatters, the app store, hash router, the tab bar's navigation, toasts and the chrome sizes.
+   Signed out (review P1, B6#9): any /api answer 401 sets $store.app.auth ({title, text, action, href}) and the page
+   shows one prompt with the way back in (/login with the PIN, or /pair for a PC browser that is no longer paired);
+   the next answer that is not 401 clears it. Presence (B6#8): this file sends the ONE presence heartbeat (POST
+   /api/trading/heartbeat) while Play or Perps is on screen and the page is visible, every HEARTBEAT_MS and when
+   either comes into view; the screens send none of their own.
    Sections (the tab bar, design pass 2026-10-31): Play (views/play.js; its Kalshi picker opens Perps, views/perps.js),
    Agent (views/agent.js) and Record (views/play.js recordView). The chart lives in playchart.js. Loaded before Alpine
    (deferred). */
@@ -12,6 +17,7 @@
   var SECTION = { play: 'play', perps: 'play', agent: 'agent', record: 'record' };
   var PERPS_OPEN_KEY = 'perps.open';  // views/perps.js: Play's last market was BTC Perps (Play's tab reopens it)
   var TOAST_MS = 4000;
+  var HEARTBEAT_MS = 30000, PRESENCE_VIEWS = { play: true, perps: true };
 
   // ---------- formatters ----------
   function pad(n) { return String(n).padStart(2, '0'); }
@@ -71,12 +77,30 @@
       return res.text().then(function (text) {
         var data = null;
         try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+        if (url.indexOf('/api/') === 0) signedIn(res.status, data);
         if (!res.ok) throw new ApiError(res.status, data, errorMessage(res.status, data));
         return data;
       });
     }, function (e) {
       throw new ApiError(0, null, e && e.name === 'AbortError' ? 'The server took too long to answer.' : 'Could not reach the server.');
     }).finally(function () { clearTimeout(timer); });
+  }
+
+  // A 401 from the access middleware: the PC browser lost its pairing ("pair_required") or the phone's PIN session
+  // ended. Said once, as one prompt (index.html .nv-auth); any later answer that is not 401 clears it.
+  function signedIn(status, body) {
+    if (!window.Alpine || !Alpine.store('app')) return;
+    var s = Alpine.store('app');
+    if (status !== 401) { if (s.auth) s.auth = null; return; }
+    if (s.auth) return;
+    if (body && body.code === 'pair_required') {
+      s.auth = { title: 'This browser is not paired', text: (body && body.detail) || 'Pair this browser with Settleview first.',
+        action: 'Pair this browser', href: '/pair' };
+    } else {
+      s.auth = { title: 'You are signed out', text: 'Your session ended (it expired, or every phone was signed out). The app refuses every request until you sign in again with the PIN.',
+        action: 'Sign in again', href: '/login' };
+    }
+    s.announce(s.auth.title + '. ' + s.auth.text);
   }
 
   var api = {
@@ -109,6 +133,7 @@
       routeNote: first.note,   // the one-time "no such screen" note (Play shows it until dismissed)
       announcement: '',
       perpsOff: null,          // Kalshi's BTC Perps switched off on the server (null = not known yet): Play's picker says "off"
+      auth: null,              // signed out: {title, text, action, href} (signedIn), null = signed in
       toastText: '', toastCls: '', toastT: null,
       // The tab bar's section for the current view (Perps is Play's).
       section: function () { return SECTION[this.view] || 'play'; },
@@ -185,6 +210,24 @@
       var s = Alpine.store('app');
       if (r && typeof r.enabled === 'boolean' && s.perpsOff == null) s.perpsOff = !r.enabled;
     }, function () { /* unknown: the picker just says BTC Perps */ });
+    // The one presence heartbeat ("a person is at the trading screen"): Play or Perps on screen, the page visible,
+    // signed in. Every HEARTBEAT_MS, and at once when one of them comes into view or the page becomes visible.
+    var lastBeat = 0;
+    function presence(force) {
+      var s = Alpine.store('app');
+      if (!PRESENCE_VIEWS[s.view] || document.visibilityState !== 'visible' || s.auth) return;
+      if (!force && Date.now() - lastBeat < HEARTBEAT_MS - 1000) return;
+      lastBeat = Date.now();
+      api.post('/api/trading/heartbeat', { visible: true })['catch'](function () { /* a 401 shows the prompt */ });
+    }
+    var shown = null;
+    Alpine.effect(function () {
+      var v = Alpine.store('app').view;
+      if (PRESENCE_VIEWS[v] && !PRESENCE_VIEWS[shown]) setTimeout(function () { presence(true); }, 0);
+      shown = v;
+    });
+    setInterval(function () { presence(false); }, HEARTBEAT_MS);
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') presence(true); });
   });
 
   // A 150 ms flash on a number that changed (a fill, a settle): elements marked data-flash. Off under Reduce Motion.

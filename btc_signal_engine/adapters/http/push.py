@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from fastapi.responses import StreamingResponse
+
+log = logging.getLogger(__name__)
 
 
 class _Sub:
@@ -195,3 +198,76 @@ class FeedHub:
 
 def _data(event: dict) -> str:
     return f"data: {json.dumps(event, separators=(',', ':'), default=str)}\n\n"
+
+
+# -- per-connection read-model stream (Play; review P1, B6#1-5) ---------------------------------------------------------
+
+
+class TickStreams:
+    """Server-sent events for a read model that is per-screen (Play's /api/play/now depends on the venue, span and
+    amount the screen shows) and has no change events of its own: each open stream reads its view every
+    `interval_s` (1 s) in a worker thread (the read is synchronous; the event loop never waits for it) and sends
+    the top-level fields that changed since its last frame.
+
+    Frames: `event: view`, data `{"seq": n, "full": bool, "view": {...}}`. The first frame of a stream is the whole
+    view (`full: true`), as is any frame whose set of top-level keys changed (a market became unavailable): the page
+    replaces its view then, and merges field by field otherwise. `seq` counts the frames of this stream, so the page can
+    tell a frame from an older HTTP answer. A read that fails sends `event: stale` `{"seq", "reason"}` instead: the page
+    must stop treating its numbers as live (no slide), not keep the last ones on screen. Every frame proves the stream is
+    alive (the view's `now` changes each read, so a healthy stream is never quiet); a page that hears nothing for a
+    few intervals treats it as dead.
+
+    At most `max_streams` (64) are open at once; another answers 503 (the page retries). `close()` (app shutdown) ends
+    every stream at its next wake, so the web server can stop."""
+
+    def __init__(self, *, interval_s: float = 1.0, max_streams: int = 64) -> None:
+        self.interval_s = float(interval_s)
+        self.max_streams = int(max_streams)
+        self._subs: set[asyncio.Event] = set()
+        self._closed = False
+
+    @property
+    def subscribers(self) -> int:
+        return len(self._subs)
+
+    def full(self) -> bool:
+        return len(self._subs) >= self.max_streams
+
+    async def close(self) -> None:
+        self._closed = True
+        for wake in self._subs:
+            wake.set()
+
+    async def stream(self, read: Callable[[], dict[str, Any]]) -> AsyncIterator[str]:
+        if self._closed:
+            return
+        wake = asyncio.Event()
+        self._subs.add(wake)
+        last: dict[str, Any] | None = None
+        seq = 0
+        try:
+            while not self._closed:
+                seq += 1
+                try:
+                    view = await asyncio.to_thread(read)
+                except Exception as exc:
+                    log.warning("play stream read failed: %s", type(exc).__name__, exc_info=True)
+                    yield _frame("stale", {"seq": seq, "reason": "The server could not read the market just now."})
+                    last = None  # the next good read is sent whole
+                else:
+                    if last is None or set(view) != set(last):
+                        yield _frame("view", {"seq": seq, "full": True, "view": view})
+                    else:
+                        yield _frame("view", {"seq": seq, "full": False,
+                                              "view": {k: v for k, v in view.items() if last.get(k) != v}})
+                    last = view
+                try:
+                    await asyncio.wait_for(wake.wait(), self.interval_s)
+                except TimeoutError:
+                    pass
+        finally:
+            self._subs.discard(wake)
+
+    def response(self, read: Callable[[], dict[str, Any]]) -> StreamingResponse:
+        return StreamingResponse(self.stream(read), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

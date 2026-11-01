@@ -3,6 +3,12 @@ except the phone's own trade limits: orders go through the existing /api/trading
 routes with the venue's strategy. `venue` and `span` are required (missing or unknown = 422): a screen always says
 which tab it is showing.
 
+/api/play/stream (GET, text/event-stream; same `venue`, `span`, `stake` as /api/play/now): the Play screen's live
+view pushed once a second (adapters/http/push.py TickStreams; review P1, B6#1-5): the whole /api/play/now payload
+first, then its changed top-level fields; `event: stale` when a read fails. The screen opens one per tab and amount
+(a new amount reopens it) and falls back to nothing: while the stream is down its numbers are shown as stale and its
+slide is off. More than TickStreams.max_streams open streams answer 503 {"detail"}.
+
 /api/play/limits (GET, POST): the per-trade and per-day limits shared by every phone strategy (PlayLimits). Like
 every /api route it is open to the PC and to a signed-in phone (the PIN middleware); it is not loopback-only. POST
 needs both fields (a dollar amount or null = no limit); raising or removing one needs `confirm` == LIMITS_CONFIRM.
@@ -21,9 +27,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import FastAPI, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from btc_signal_engine.adapters.http.access import from_pc, human, only_pc, only_people
+from btc_signal_engine.adapters.http.push import TickStreams
 from btc_signal_engine.application.play import PlayService
 from btc_signal_engine.application.play_limits import LimitsUnreadable, PlayLimits
 
@@ -43,11 +51,20 @@ class LimitsBody(BaseModel):
 
 
 def register_play_routes(app: FastAPI, play: PlayService, now_fn: Callable[[], int],
-                         limits: PlayLimits | None = None) -> None:
+                         limits: PlayLimits | None = None, streams: TickStreams | None = None) -> None:
+    hub = streams if streams is not None else TickStreams()
+
     @app.get("/api/play/now")
     def play_now(venue: str = Query(..., pattern=VENUE), span: str = Query(..., pattern=SPAN),
                  stake: float | None = Query(None, gt=0, le=10_000)) -> dict:
         return play.now_view(now_fn(), venue, span=span, stake=stake)
+
+    @app.get("/api/play/stream")
+    def play_stream(venue: str = Query(..., pattern=VENUE), span: str = Query(..., pattern=SPAN),
+                    stake: float | None = Query(None, gt=0, le=10_000)):
+        if hub.full():
+            return JSONResponse({"detail": "Too many live Play screens are open; try again shortly."}, status_code=503)
+        return hub.response(lambda: play.now_view(now_fn(), venue, span=span, stake=stake))
 
     @app.get("/api/play/scoreboard")
     def play_scoreboard(venue: str = Query(..., pattern=VENUE), span: str = Query(..., pattern=SPAN),

@@ -27,10 +27,12 @@ says it in words ("No per-trade limit · up to your $90.09 cash").
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import tzinfo
 
 from btc_signal_engine.application.trading import TradingService
+from btc_signal_engine.domain import days
 from btc_signal_engine.domain.markets import phone_markets, venue as venue_spec
 from btc_signal_engine.domain.strategy import play as P
 
@@ -72,6 +74,10 @@ class PlayVenue:
 
 
 class PlayService:
+    # The user's day zone (domain/days.py): Play's "today" and "week" P&L and the day limit's use, the same days as
+    # Record. Bootstrap sets the zone it resolved at startup.
+    day_tz: tzinfo = days.zone(None)
+
     def __init__(self, venues: dict[str, PlayVenue], *, evaluation_fn: Callable[[], dict | None],
                  index_fn: Callable[[], tuple[int, float] | None] = lambda: None,
                  index_series_fn: Callable[[int, int], list[tuple[int, float]]] = lambda start, end: []) -> None:
@@ -379,7 +385,7 @@ class PlayService:
                           "fee_rounding": FEE_ROUNDING[venue]},
                 "limits": {"per_trade": caps["per_trade"], "per_day": caps["per_day"],
                            "day_used": svc.exposure(svc.modes[svc.mode], now)["day"],
-                           "error": caps["limits_error"]},
+                           "day_tz": days.zone_name(self.day_tz), "error": caps["limits_error"]},
                 "mode": self._mode(svc, now), "positions": positions, "cone": cone,
                 # settling > 60 min after the close (result not booked): "check the venue" (code review #7)
                 "settle_warnings": svc.settle_warnings(now),
@@ -399,6 +405,14 @@ class PlayService:
         mine: list[dict] = []
         for name, x in pick:
             want = x.svc.modes.get(mode or x.svc.mode)  # None: this venue has no such mode (Polymarket sandbox)
-            mine += [{**t, "venue": name} for t in x.svc.trades(0, now, 500) if mode == "all" or t["env"] == want]
+            # every trade (no newest-N cap): the record, P&L and break-even are over the whole history
+            mine += [{**t, "venue": name} for t in x.svc.trades(0, now, None) if mode == "all" or t["env"] == want]
         return {"venue": venue, "span": span, "both": both, "available": True, "mode": mode or v.svc.mode,
-                "strategy": v.svc.strategy, **P.scoreboard(mine, now, last=last)}
+                "strategy": v.svc.strategy, **self.score(mine, now, last=last)}
+
+    def score(self, trades: Sequence[dict], now: int, *, last: int | None = None) -> dict:
+        """domain scoreboard over `trades` with the user's days (today since local midnight, the week since local
+        midnight six days ago, as Record), the zone named in `day_tz`."""
+        return {**P.scoreboard(trades, now, day_start=days.day_start(now, self.day_tz),
+                               week_start=days.day_start(now, self.day_tz, 6), last=last),
+                "day_tz": days.zone_name(self.day_tz)}

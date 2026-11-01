@@ -30,9 +30,10 @@ verification pass; each is checked against the code before it is fixed.
 - **Front end** (B6#1–5,#8,#9): Play polling without an in-flight guard (old replies overwrite new); stale prices stay
   live after failures; slide approves the ticket unchecked; hidden tabs keep ticking; ~2.5 req/s per Play screen →
   push Play over SSE like Perps, visibility gating, stale state greys the slide, bind/check the ticket, one presence
-  heartbeat, 401 handling.
+  heartbeat, 401 handling. Done 2026-11-01 (`fix/p1-play-money`): docs/solutions/2026-11-01-play-stream-stale-and-signed-out.md.
 - **Money display** (B5#1–5): scoreboard break-even ignores fees; Play "today" UTC vs Record local; record cache
-  freezes unknown results; 500-trade cap; DST edge without tz.
+  freezes unknown results; 500-trade cap; DST edge without tz. Done 2026-11-01 (`fix/p1-play-money`):
+  docs/solutions/2026-11-01-one-users-day.md.
 - **Hot paths** (B5#6–8): coach series recomputed per request (bisect + cache), tick re-reads 31 min of index, Record
   "all" scans the whole journal.
 - **Venue resilience** (B3#6–8,#10–12): recorder socket leak + unbounded buffers in a DB outage; private-subscription

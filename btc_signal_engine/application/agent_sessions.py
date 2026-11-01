@@ -65,7 +65,7 @@ Rules:
 
 from __future__ import annotations
 
-from datetime import datetime, tzinfo
+from datetime import tzinfo
 
 import hashlib
 import logging
@@ -82,6 +82,7 @@ from btc_signal_engine.application.agent_rules import RULES
 from btc_signal_engine.application.ports import Repository
 from btc_signal_engine.application.rule_scores import BRACKETS, JOURNAL, OPEN_STATES, SETTLING, RuleBook
 from btc_signal_engine.application.trading import GateResult
+from btc_signal_engine.domain import days
 from btc_signal_engine.domain.markets import market as market_spec
 from btc_signal_engine.domain.markets import phone_markets
 
@@ -829,13 +830,12 @@ class AgentSessions:
         self._global = {k: new.get(k) for k in GLOBAL_KEYS}
         return {"ok": True, "limits": new, "used": self.global_usage(now)}
 
-    day_tz: tzinfo | None = None  # the local zone for "today" (set by bootstrap to the daily summary's zone)
+    day_tz: tzinfo = days.zone(None)  # the user's day zone (bootstrap sets the one it resolved; UTC until then)
 
     def day_start(self, now: int) -> int:
-        """Local midnight of today (`day_tz`, else this machine's zone): the day the global limits and the fleet's
-        "today" count, the same day Record and the Telegram daily summary use."""
-        t = datetime.fromtimestamp(now / 1000, self.day_tz) if self.day_tz is not None             else datetime.fromtimestamp(now / 1000).astimezone()
-        return int(t.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+        """Local midnight of today in `day_tz` (domain/days.py): the day the global limits and the fleet's "today"
+        count, the same day Play, Record and the Telegram daily summary use."""
+        return days.day_start(now, self.day_tz)
 
     def global_usage(self, now: int) -> dict:
         """Today's (local day, as Record and the daily summary) use across every agent session: `loss_day` = realized net loss plus the worst case of

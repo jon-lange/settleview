@@ -8,7 +8,7 @@
    older than the last payload applied is dropped, since the stream re-sends only fields that changed after it and the
    old values would stay on screen; stream frames arrive in order and always apply. The clock offset only moves forward
    within one connection.
-   The page sends the existing presence heartbeat (POST /api/trading/heartbeat) like Play.
+   The presence heartbeat (POST /api/trading/heartbeat) is the app's one (web/app.js), shared with Play.
    Trading: every action is a slide with a ticket (KD1). The numbers shown before a slide are a preview ticket from
    the same prepare route (sent once the inputs have been still for EDIT_MS, refreshed when it expires); the slide
    prepares a fresh, bound ticket on drag start and shows it in the dock while dragging, and approves THAT ticket on
@@ -133,15 +133,17 @@
       init: function () {
         var self = this, store = Alpine.store('app'), on = function () { return store.view === 'perps'; };
         if (load(OPEN_KEY) === '1' && store.view === 'play' && !location.hash.replace(/^#\/?/, '')) store.view = 'perps';
-        window.onView(this, 'perps', function () { self.connect(); self.heartbeat(); self.loadRead(); });
+        window.onView(this, 'perps', function () { self.connect(); self.loadRead(); });
         Alpine.effect(function () { if (store.view !== 'perps') self.disconnect(); });
         self.loadPc();
-        setInterval(function () { self.tick++; if (on()) { self.checkLive(); self.previewTick(); self.drawChart(); } }, 500);
-        setInterval(function () { if (on() && document.visibilityState === 'visible') self.heartbeat(); }, 30000);
+        setInterval(function () {  // a hidden page or another screen does not tick (B6#4)
+          if (!on() || document.visibilityState !== 'visible') return;
+          self.tick++; self.checkLive(); self.previewTick(); self.drawChart();
+        }, 500);
         setInterval(function () { if (on() && document.visibilityState === 'visible') self.loadRead(); }, READ_MS);
         document.addEventListener('visibilitychange', function () {
           if (document.visibilityState !== 'visible') { self.slideReset(); self.disconnect(); return; }
-          if (on()) { self.connect(); self.heartbeat(); self.loadRead(); }
+          if (on()) { self.connect(); self.loadRead(); }
         });
       },
       loadPc: function () {
@@ -149,7 +151,6 @@
         api.get('/api/access').then(function () { self.pc = true; }, function (e) { if (e && e.status === 403) self.pc = false; });
       },
       phone: function () { return this.pc === false; },
-      heartbeat: function () { api.post('/api/trading/heartbeat', { visible: document.visibilityState === 'visible' })['catch'](function () {}); },
       goVenue: function (x) {
         if (this.sliding || this.busy) return;
         save(OPEN_KEY, null);

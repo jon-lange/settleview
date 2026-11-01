@@ -60,7 +60,7 @@ from btc_signal_engine.adapters.http.copilot_routes import register_copilot_rout
 from btc_signal_engine.adapters.http.perp_routes import Inflight, PerpPublisher, register_perp_routes
 from btc_signal_engine.adapters.http.play_routes import register_play_routes
 from btc_signal_engine.adapters.http.record_routes import register_record_routes
-from btc_signal_engine.adapters.http.push import FeedHub, PushHub
+from btc_signal_engine.adapters.http.push import FeedHub, PushHub, TickStreams
 from btc_signal_engine.adapters.http.telegram_routes import register_preset_routes, register_telegram_routes
 from btc_signal_engine.adapters.http.trading_routes import register_trading_routes
 from btc_signal_engine.adapters.kalshi.auth import load_private_key
@@ -116,6 +116,7 @@ from btc_signal_engine.application.settlement import SettlementService
 from btc_signal_engine.application.trading import GateResult, TradingConfig, TradingService
 from btc_signal_engine.application.your_record import YourRecord
 from btc_signal_engine.bootstrap.config import Settings
+from btc_signal_engine.domain import days
 from btc_signal_engine.domain.coach.fair_value import HISTORY_MS, fair_from_index
 from btc_signal_engine.domain.markets import PERP_ENVS, MarketSpec, market, perp, phone_markets
 from btc_signal_engine.domain.models.events import Trade
@@ -387,9 +388,14 @@ class Runtime:
         # The phone strategies' per-trade / per-day limits: user-set in the app DB, default none / none, read at check
         # time by every phone service (application/play_limits.py).
         self.play_limits = PlayLimits(self.store)
-        # KD7: ONE daily total across every phone service's stakes and the perps collateral (UTC day). Every service's
+        # KD7: ONE daily total across every phone service's stakes and the perps collateral (the user's day). Every service's
         # per-day check reads it (play_limits.CommittedToday); the sources are added once the services exist.
         self.committed_today = CommittedToday()
+        # The user's day (domain/days.py): ONE zone for every "today" (the day limit, Play's day P&L, Record, the
+        # agents' global limits, the daily summary), from the process's TZ (compose sets it; unset = UTC). A name the
+        # zone database does not know stops the start here, never a silent other zone.
+        self.day_tz = days.zone(os.environ.get("TZ"))
+        log.info("days run midnight to midnight %s (TZ)", days.zone_name(self.day_tz))
         self.shadow_ex = ShadowExchange()  # shared by the shadow gateway and the shadow stream
         # One live feed (WebSocket primary) per environment any phone service is in, shared by them all.
         self.trading_streams: dict[str, object] = {}
@@ -453,7 +459,9 @@ class Runtime:
         self.play = PlayService(
             venues,
             evaluation_fn=lambda: self.coach.evaluation, index_fn=self.live_price, index_series_fn=self.index_prices)
+        self.play.day_tz = self.day_tz
         for svc in self.trading_services.values():
+            svc.day_tz = self.day_tz
             self.committed_today.add_source(svc.committed_by_env)
         self._build_perps()
         self._build_agent()
@@ -474,6 +482,7 @@ class Runtime:
         self.perp_clients: dict[str, MarginClient] = {}
         self.perp_streams: dict[str, MarginStream] = {}
         self.perps_hub = PushHub()
+        self.play_streams = TickStreams()  # Play's live view, one stream per open screen (GET /api/play/stream)
         self.perps_inflight = Inflight()
         self.perp_events: asyncio.Queue = asyncio.Queue()  # fills, orders and resyncs for the service, in order
         self._perp_stream: tuple[str | None, asyncio.Task | None] = (None, None)
@@ -509,6 +518,7 @@ class Runtime:
             limits_fn=self.play_limits.for_trading, committed_today_fn=self.committed_today.total,
             notify_fn=self._perps_changed, access_check=perps_access_check,
             now=self.clock.now_ms())
+        self.perps.day_tz = self.day_tz
         self.committed_today.add_source(self.perps.committed_by_env)
         self.perp_view = PerpView(self.perps, settings=warn, modes_unavailable=unavailable)
         self.perps_publisher = PerpPublisher(self.perp_view, self.perps_hub, self.clock.now_ms)
@@ -521,7 +531,7 @@ class Runtime:
         book = self.agent_sessions.rule_book if self.agent_sessions is not None else RuleBook(self.store)
         modes = {m.phone_strategy: svc.modes for m in phone_markets()
                  if (svc := self.phone_trading.get(m.key)) is not None}
-        self.copilot = Copilot(self.play, book, YourRecord(self.store, modes))
+        self.copilot = Copilot(self.play, book, YourRecord(self.store, modes, now_fn=self.clock.now_ms))
 
     # -- Agent mode -----------------------------------------------------------------------------------------------------
     def _agent_hooks(self) -> dict:
@@ -707,9 +717,9 @@ class Runtime:
                                     lights_fn=self._telegram_lights, settle_fn=self._telegram_settle_warnings,
                                     view_fn=self._telegram_view, configured=bool(token),
                                     recorders=self.recorder_watch,
-                                    bot_username=self.settings.telegram_bot_username)
+                                    bot_username=self.settings.telegram_bot_username, tz=self.day_tz)
         if self.agent_sessions is not None:  # "today" for global limits and the fleet = Record's day
-            self.agent_sessions.day_tz = self.remote.tz
+            self.agent_sessions.day_tz = self.day_tz
         self.telegram_bot: TelegramBot | None = TelegramBot(token, self.remote) if token else None
         if self.telegram_bot is None:
             log.info("telegram: no bot token (BTCFLOW_TELEGRAM_BOT_TOKEN); the bot is off")
@@ -812,6 +822,7 @@ class Runtime:
         while not server.should_exit:  # noqa: ASYNC110 - uvicorn's should_exit is a plain flag, there is no event to await
             await asyncio.sleep(0.2)
         await self.perps_hub.close()
+        await self.play_streams.close()
         if self.agent_feed is not None:
             await self.agent_feed.close()
 
@@ -1668,9 +1679,9 @@ class Runtime:
                                 on_control=self._on_control)
         register_perp_routes(app, self.perp_view, self.perps_hub, self.clock.now_ms,
                              notify=self.perps_publisher.notify, inflight=self.perps_inflight)
-        register_play_routes(app, self.play, self.clock.now_ms, limits=self.play_limits)
+        register_play_routes(app, self.play, self.clock.now_ms, limits=self.play_limits, streams=self.play_streams)
         register_copilot_routes(app, self.copilot, self.clock.now_ms)
-        register_record_routes(app, self.store, self.clock.now_ms, tz=self.remote.tz)  # the daily summary's zone
+        register_record_routes(app, self.store, self.clock.now_ms, tz=self.day_tz)  # the user's day (domain/days.py)
         if self.agent_sessions is not None:
             self.agent_key = register_agent_routes(
                 app, sessions=self.agent_sessions, tools=self.agent_tools, prompts=self.agent_prompts,
@@ -1784,6 +1795,7 @@ class Runtime:
             if self.agent_sessions is not None:
                 await self._agent_shutdown()  # before the services stop: an agent order in flight finishes first
             await self.perps_hub.close()  # end the Perps screen's streams so the web server can stop
+            await self.play_streams.close()  # and the Play screens'
             await self.perps_inflight.drain(PERPS_DRAIN_S)  # a perps approval's save-send-record step finishes first
             collector.close()
             for st in list(self.trading_streams.values()):

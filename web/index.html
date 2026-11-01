@@ -97,6 +97,8 @@
   </div>
   <p class="pl-lock" x-show="lockLine() &&(msg || '').indexOf(lockLine()) < 0" x-text="lockLine()" role="status"></p>
   <p class="error-box" x-show="error" x-text="'Could not load: ' + error" role="alert"></p>
+  <!-- the live stream is down (or not up yet): the numbers below are not live, so the slide is greyed and off -->
+  <p class="pl-stale-note" x-show="staleText()" x-text="staleText()" role="status"></p>
   <p class="pl-msg" x-show="msg" :class="msgCls" x-text="msg" role="status"></p>
   <p class="pl-note amber" x-show="cpErr && cpMode !== 'off'" x-text="cpErr" role="status"></p>
 
@@ -268,7 +270,7 @@
 
 
   <!-- ===== sticky bottom bar ===== -->
-  <div class="pl-bottom" x-show="ok()" role="region" aria-label="Order ticket">
+  <div class="pl-bottom" x-show="ok()" :class="stale() ? 'pl-stale' : ''" role="region" aria-label="Order ticket">
     <!-- one-tap retry after a "price moved" refusal of a buy: the live ask, 15 s, same tab / ticker / side / amount -->
     <div class="pl-retry" x-show="retryShow()" x-cloak role="group" aria-label="Retry the buy at the new price">
       <p class="pl-retry-head num" aria-live="polite" x-text="retryHead()"></p>
@@ -483,9 +485,10 @@
   <div class="pl-sheet" x-show="ticket" x-cloak role="dialog" aria-modal="true" aria-labelledby="pl-sheet-title">
     <h2 id="pl-sheet-title" x-text="sheetTitle()"></h2>
     <p class="pl-mode pl-real" x-show="real()">REAL MONEY</p>
+    <p class="pl-note amber pl-ticketwhy" x-show="ticketWhy" x-text="ticketWhy" role="alert"></p>
     <dl class="pl-rows"><template x-for="row in sheetRows()" :key="row[0]"><div><dt x-text="row[0]"></dt><dd x-text="row[1]"></dd></div></template></dl>
-    <p class="muted pl-note" x-text="'Expires in ' + ticketLeft() + ' s'"></p>
-    <button type="button" class="pl-btn pl-yes" @click="answer(true)" :disabled="busy || ticketLeft() === 0" x-text="confirmLabel()"></button>
+    <p class="muted pl-note" x-text="stale() ? 'Live prices stopped: confirm is off until they are back.' : 'Expires in ' + ticketLeft() + ' s'"></p>
+    <button type="button" class="pl-btn pl-yes" @click="answer(true)" :disabled="busy || ticketLeft() === 0 || stale()" x-text="confirmLabel()"></button>
     <button type="button" class="pl-btn" @click="answer(false)" :disabled="busy">Cancel</button>
   </div>
 </section>
@@ -512,7 +515,7 @@
           <div class="rc-agent"><small>Agent</small><b :class="tone(rcSum.agent.net)" x-text="signed(rcSum.agent.net)"></b><span x-text="plural(rcSum.agent.trades, 'trade')"></span></div>
           <div class="rc-api"><small>API</small><b x-text="money(rcSum.api.usd)"></b><span x-text="plural(rcSum.api.wakes, 'wake')"></span></div>
         </div>
-        <small class="rc-foot">Closed trades after every fee, counted on the day they closed (this PC's days). Perps keep their own record on the Perps screen.</small>
+        <small class="rc-foot">Closed trades after every fee, counted on the day they closed. <span x-text="dayLine(rcSum)"></span> Perps keep their own record on the Perps screen.</small>
       </div>
       <div class="nv-seg rc-by" role="radiogroup" aria-label="Group results">
         <template x-for="b in BYS" :key="b">
@@ -588,9 +591,10 @@
         <p class="pl-pick" x-show="pick" role="status"><span x-text="pickWhen()"></span><span :class="pickVenueKnown() ? '' : 'pl-warn'" x-text="pickVenue()"></span><span x-text="pickRest()"></span></p>
         <div class="pl-grid3">
           <div><small>You won</small><b x-text="pct(attStats().won)"></b></div>
-          <div><small>Price said</small><b x-text="pct(attStats().said)"></b></div>
+          <div><small>Break-even</small><b x-text="pct(attStats().said)"></b></div>
           <div><small>Edge</small><b :class="(attStats().edge || 0) >= 0 ? 'pl-up' : 'pl-down'" x-text="attStats().edge == null ? '—' : (attStats().edge > 0 ? '+' : '') + attStats().edge + ' pts'"></b></div>
         </div>
+        <p class="muted pl-note" x-text="beNote()"></p>
         <p class="muted pl-note" x-text="sb && sb.calls.note"></p>
       </div>
     </template>
@@ -1570,6 +1574,12 @@
      you) and a round Stop: one agent stops in one tap (R18); several ask "Stop all?" on screen first (the server
      asks nothing). Toasts sit above both. ===== -->
 <div class="nv-toast" x-data x-show="$store.app.toastText" x-cloak role="status" aria-live="polite" :class="$store.app.toastCls" x-text="$store.app.toastText"></div>
+<!-- signed out (any /api answer 401, B6#9): one clear prompt, never silent failures; web/app.js sets $store.app.auth -->
+<div class="nv-auth" x-data x-show="$store.app.auth" x-cloak role="alertdialog" aria-labelledby="nv-auth-t" aria-describedby="nv-auth-d">
+  <h2 id="nv-auth-t" x-text="$store.app.auth && $store.app.auth.title"></h2>
+  <p id="nv-auth-d" x-text="$store.app.auth && $store.app.auth.text"></p>
+  <a class="pl-btn pl-yes" :href="$store.app.auth ? $store.app.auth.href : '/login'" x-text="$store.app.auth && $store.app.auth.action"></a>
+</div>
 <nav id="tabbar" class="nv-tabbar" x-data aria-label="Sections">
   <div id="ag-acc" class="nv-acc num" x-show="$store.agent.accShow()" x-cloak role="region" aria-label="Agents" :class="$store.agent.needCount() ? 'is-amber' : ''">
     <template x-if="!$store.agent.stopAsk">

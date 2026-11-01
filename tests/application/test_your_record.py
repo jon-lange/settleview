@@ -93,3 +93,31 @@ def test_an_unknown_strategy_is_an_error(store):
 
 def test_stats_is_pure_and_counts_honestly():
     assert stats([])["against_btc"] == {"n": 0, "wins": 0, "net_usd": 0, "contracts": 0, "net_c": None}
+
+
+def test_a_result_that_lands_after_the_first_read_is_picked_up(store):
+    """Review B5#3: the first read of a trade before its official result was recorded was kept for good (an "unknown"
+    until a restart). Now an unfinished 15-minute trade is read again (at most every RETRY_MS) until it is final."""
+    from btc_signal_engine.application.your_record import RETRY_MS
+
+    clock = {"t": W_END + 60_000}
+    store.insert("trading_brackets", [bracket(1, side="UP", exit_reason="manual", proceeds=1.0)])
+    index(store, W_END - 400_000 - 2000, STRIKE - 30)
+    rec = YourRecord(store, STRATS, now_fn=lambda: clock["t"])
+    assert rec.stats("prod")["early_exits"]["n"] == 0  # no result recorded yet: not counted as an early exit
+    kalshi(store, result="no")
+    assert rec.stats("prod")["early_exits"]["n"] == 0  # read again only after RETRY_MS
+    clock["t"] += RETRY_MS
+    s = rec.stats("prod")
+    assert s["early_exits"]["n"] == 1 and s["against_btc"]["n"] == 1  # the result and the strike now count
+    assert "b1" in rec._seen  # final now: kept
+
+
+def test_an_unknown_becomes_final_after_the_cutoff_and_other_spans_are_final_at_once(store):
+    from btc_signal_engine.application.your_record import FINAL_AFTER_MS
+
+    clock = {"t": W_END + FINAL_AFTER_MS}
+    store.insert("trading_brackets", [bracket(1), bracket(2, strategy="you_poly5", env="pm_prod")])
+    rec = YourRecord(store, STRATS, now_fn=lambda: clock["t"])
+    assert rec.stats("prod")["unknown_gap"] == 2
+    assert set(rec._seen) == {"b1", "b2"} and not rec._pending

@@ -19,11 +19,18 @@ Buckets (pure, `stats`):
   for that close, 15-minute tabs only): `vs_hold_usd` = what holding each to settlement would have made minus what the
   sale made (positive = the early exits cost money).
 Each bucket: {n, wins, net_usd, contracts, net_c (net per contract in cents, None without contracts)}.
+
+Caching: a closed bracket's features are kept once they are final. A 15-minute trade whose official result or strike
+is not recorded yet (the market recorder writes it after the close) is read again, at most every RETRY_MS, until it
+is, or until FINAL_AFTER_MS after its close, when its unknowns are final (still counted as unknown, never guessed).
+Before 2026-11-01 the first read was kept for good, so a trade read before its result landed stayed "unknown" until
+a restart (review B5#3).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 
 from btc_signal_engine.application.agent_rules import MIN_LEFT_MS
 from btc_signal_engine.application.ports import Repository
@@ -35,6 +42,8 @@ BAND = (0.50, 0.75)
 INDEX_MAX_AGE_MS = 10_000
 BUCKETS = ("against_btc", "late", "band_50_75")
 EPS = 1e-9
+RETRY_MS = 60_000  # an unknown result / strike is read again at most this often...
+FINAL_AFTER_MS = 6 * 3_600_000  # ...until this long after the window closed; then the unknown is final
 
 
 def _bucket(trades: list[dict]) -> dict:
@@ -70,16 +79,19 @@ def stats(trades: Iterable[dict]) -> dict:
 
 
 class YourRecord:
-    """Reads the user's closed trades (see the module doc). Closed brackets do not change: each one's features are
-    read once and kept; only new closed brackets are read on later calls."""
+    """Reads the user's closed trades (see the module doc). A closed bracket's features are kept once final; one
+    still waiting for its official result is read again (module doc, "Caching")."""
 
-    def __init__(self, repo: Repository, strategy_modes: dict[str, dict[str, str]]) -> None:
+    def __init__(self, repo: Repository, strategy_modes: dict[str, dict[str, str]],
+                 now_fn: Callable[[], int] = lambda: int(time.time() * 1000)) -> None:
         """`strategy_modes`: phone strategy -> its TradingService.modes ({mode: env})."""
         for s in strategy_modes:
             by_phone_strategy(s)  # an unknown strategy is an error
         self.repo = repo
         self.modes = dict(strategy_modes)
-        self._seen: dict[str, dict] = {}  # bracket id -> its trade features
+        self.now_fn = now_fn
+        self._seen: dict[str, dict] = {}  # bracket id -> its trade features (final)
+        self._pending: dict[str, tuple[int, dict]] = {}  # bracket id -> (read at, features still missing a result)
 
     def envs(self, mode: str) -> list[tuple[str, str]]:
         """(strategy, env) pairs of `mode`; a mode no strategy has is an error."""
@@ -94,14 +106,38 @@ class YourRecord:
                                 filters=[("session_id", "is_null", True),
                                          ("strategy", "in", sorted({s for s, _ in pairs}))])
         out = []
+        now = self.now_fn()
         for b in rows:
             if (b.get("strategy"), b.get("env")) not in pairs or not float(b.get("filled") or 0) > 0:
                 continue
             t = self._seen.get(b["id"])
             if t is None:
-                t = self._seen[b["id"]] = self._features(b)
+                t = self._read(b, now)
             out.append(t)
         return out
+
+    def _read(self, b: dict, now: int) -> dict:
+        """The bracket's features: kept for good once final, else re-read at most every RETRY_MS."""
+        held = self._pending.get(b["id"])
+        if held is not None and now - held[0] < RETRY_MS:
+            return held[1]
+        t = self._features(b)
+        if self._final(b, t, now):
+            self._pending.pop(b["id"], None)
+            self._seen[b["id"]] = t
+        else:
+            self._pending[b["id"]] = (now, t)
+        return t
+
+    @staticmethod
+    def _final(b: dict, t: dict, now: int) -> bool:
+        """Can anything still arrive? Only a 15-minute trade's Kalshi result (and its strike, for the gap), and only
+        until FINAL_AFTER_MS after the close."""
+        if by_phone_strategy(b["strategy"]).span != "15m":
+            return True  # no recorded result or strike for other spans: unknown is final
+        if t["won_side"] is not None and t["gap"] is not None:
+            return True
+        return now - int(b["window_end"]) >= FINAL_AFTER_MS
 
     def stats(self, mode: str) -> dict:
         return stats(self.trades(mode))

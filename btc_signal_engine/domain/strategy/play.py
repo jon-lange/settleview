@@ -384,6 +384,15 @@ def calibration(trades: Sequence[dict]) -> dict:
             "unknown": sum(1 for x in f if x is None)}
 
 
+def break_even(t: dict) -> float | None:
+    """The win rate a trade needed to break even held to settlement: what each contract cost WITH the entry fee
+    (entry_cost / filled; a win pays $1 a contract, settlement charges no fee). None when its cost is not known."""
+    cost, n = t.get("entry_cost"), t.get("filled")
+    if cost is None or not n or float(n) <= 0:
+        return None
+    return float(cost) / float(n)
+
+
 def attempts(trades: Sequence[dict], last: int | None = None) -> dict:
     """The last `last` finished attempts (None = all), oldest first, with the cumulative P&L for the chart and each
     attempt's details; plus their record, P&L total and streak."""
@@ -396,16 +405,18 @@ def attempts(trades: Sequence[dict], last: int | None = None) -> dict:
         points.append({"i": i + 1, "id": t.get("id"), "ts": _ts(t), "side": t.get("side"),
                        "entry_avg": t.get("entry_avg"), "exit_avg": t.get("exit_avg"), "exit": t.get("exit"),
                        "pnl": round(float(t["pnl"]), 2), "cum": round(cum, 2), "result": _result(t["pnl"]),
+                       "break_even": None if break_even(t) is None else round(break_even(t), 4),
                        "venue": t.get("venue"), "ticker": t.get("ticker")})
     return {"n": len(done), "last": last, "record": record(done), "streak": streak(done), "points": points,
             "calibration": calibration(done)}
 
 
-def scoreboard(trades: Sequence[dict], now: int, *, luck_n: int = LUCK_N, last: int | None = None) -> dict:
-    """The gamified scoreboard from TradingService.trades() rows (any order)."""
+def scoreboard(trades: Sequence[dict], now: int, *, day_start: int, week_start: int, luck_n: int = LUCK_N,
+               last: int | None = None) -> dict:
+    """The gamified scoreboard from TradingService.trades() rows (any order). `day_start` / `week_start`: the user's
+    local midnight today and six days before (domain/days.py), the same days Record uses; nothing here assumes UTC.
+    Break-even is the price paid WITH the entry fee (`break_even`), never the bare price."""
     done = sorted((t for t in trades if t.get("pnl") is not None), key=_ts)
-    today = now - now % DAY_MS
-    week = now - 7 * DAY_MS
 
     def pnl_since(since: int) -> float:
         return round(sum(float(t["pnl"]) for t in done if _ts(t) >= since), 2)
@@ -413,24 +424,32 @@ def scoreboard(trades: Sequence[dict], now: int, *, luck_n: int = LUCK_N, last: 
     rec = record(done)
     decided = [t for t in done if _result(t["pnl"]) != "P"]
     prices = [float(t["entry_avg"]) for t in decided if t.get("entry_avg") is not None]
+    bes = [b for b in (break_even(t) for t in decided) if b is not None]
     n = len(decided)
     win_rate = rec["wins"] / n if n else None
     avg_price = sum(prices) / len(prices) if prices else None
-    edge = None if win_rate is None or avg_price is None else round(win_rate - avg_price, 4)
+    be = sum(bes) / len(bes) if bes else None
+    edge = None if win_rate is None or be is None else round(win_rate - be, 4)
     if n == 0:
         verdict = "No finished calls yet."
     else:
-        verdict = (f"You won {rec['wins']} of {n} ({win_rate * 100:.0f}%) paying {avg_price * 100:.0f}¢ on average "
-                   f"(break-even {avg_price * 100:.0f}%)." if avg_price is not None
-                   else f"You won {rec['wins']} of {n} ({win_rate * 100:.0f}%).")
+        verdict = f"You won {rec['wins']} of {n} ({win_rate * 100:.0f}%)"
+        if avg_price is not None and be is not None:
+            verdict += (f" paying {avg_price * 100:.0f}¢ on average, {be * 100:.1f}¢ with fees "
+                        f"(break-even {be * 100:.1f}%).")
+        else:
+            verdict += "."
+        if bes and len(bes) < n:
+            verdict += f" Break-even is from the {len(bes)} of {n} with a known cost."
         if n < luck_n:
             verdict += " " + LUCK_NOTE
     out = {"record": rec, "streak": streak(done),
-           "pnl": {"today": pnl_since(today), "week": pnl_since(week), "all": rec["pnl"]},
+           "pnl": {"today": pnl_since(day_start), "week": pnl_since(week_start), "all": rec["pnl"]},
            "open": sum(1 for t in trades if t.get("state") in ("sending", "unknown", "open", "stopping")),
            "settling": sum(1 for t in trades if t.get("state") == "settling"),  # window closed, result pending
            "calls": {"n": n, "win_rate": None if win_rate is None else round(win_rate, 4),
-                     "avg_price": None if avg_price is None else round(avg_price, 4), "edge": edge,
+                     "avg_price": None if avg_price is None else round(avg_price, 4),
+                     "break_even": None if be is None else round(be, 4), "break_even_n": len(bes), "edge": edge,
                      "mostly_luck": n < luck_n, "luck_n": luck_n, "verdict": verdict, "note": LUCK_NOTE},
            "recent": [{"id": t.get("id"), "side": t.get("side"), "ts": _ts(t), "pnl": round(float(t["pnl"]), 2),
                        "result": _result(t["pnl"]), "exit": t.get("exit"), "entry_avg": t.get("entry_avg")}

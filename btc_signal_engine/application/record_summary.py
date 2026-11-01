@@ -10,8 +10,9 @@ agent part per agent (a lasting identity, every run of it): its trades closed in
 in the span, and the net after that API. Perps are not here (their own record, from Kalshi's fills, is on
 the Perps screen), exactly as in the daily summary.
 
-Days are local: `tz` is the zone (None = this PC's own zone), as the daily summary uses. Ranges: "today" (since local
-midnight), "week" (today and the six local days before it), "all" (everything recorded).
+Days are local: `tz` is the user's day zone (domain/days.py; the app resolves it once at startup and every "today"
+uses it), and the summary names it (`day_tz`). Ranges: "today" (since local midnight), "week" (today and the six
+local days before it), "all" (everything recorded).
 
 "All" reads its rule links from a `RuleLinks` (the Record route keeps one): the journal's "rule" and "decision" rows
 read once, then only the new ones each time (ix_agent_journal_kind), instead of the whole journal on every request."""
@@ -20,15 +21,17 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterable
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime, tzinfo
 
 from btc_signal_engine.application.agent_sessions import AGENTS, SESSIONS, VENUE_LABELS, VENUES, AgentSessions
 from btc_signal_engine.application.ports import Repository
 from btc_signal_engine.application.rule_scores import BRACKETS, JOURNAL
+from btc_signal_engine.domain import days
 
 DAY_MS = 86_400_000
 RANGES = ("today", "week", "all")
 WEEK_DAYS = 7
+UTC_ZONE = days.zone(None)  # the stated default zone; the app passes the one it resolved at startup (bootstrap)
 PLAY_STRATEGIES = tuple(dict.fromkeys(VENUES.values()))  # every Play strategy an agent or you trade (you, you_poly...)
 
 
@@ -42,23 +45,17 @@ def closed_at(b: dict) -> int:
     return int(b.get("closed_ts") or b.get("exit_ts") or b.get("updated_ts") or 0)
 
 
-def local(ms: int, tz: tzinfo | None) -> datetime:
-    if tz is not None:
-        return datetime.fromtimestamp(ms / 1000, tz)
-    return datetime.fromtimestamp(ms / 1000).astimezone()
+def local(ms: int, tz: tzinfo) -> datetime:
+    return datetime.fromtimestamp(ms / 1000, tz)
 
 
-def local_day_start(now: int, tz: tzinfo | None, days_back: int = 0) -> int:
-    """Local midnight of today, or of `days_back` local days before today (DST-safe: by date, not 24 h steps)."""
-    d = local(now, tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    if days_back:
-        d = (d - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0)
-        if tz is None:
-            d = d.replace(tzinfo=None).astimezone()  # re-resolve the offset of that date
-    return int(d.timestamp() * 1000)
+def local_day_start(now: int, tz: tzinfo, days_back: int = 0) -> int:
+    """Local midnight of today in `tz`, or of `days_back` local days before today (domain/days.py: by date, so a
+    daylight-saving change never moves it an hour)."""
+    return days.day_start(now, tz, days_back)
 
 
-def range_start(now: int, range_: str, tz: tzinfo | None) -> int:
+def range_start(now: int, range_: str, tz: tzinfo) -> int:
     if range_ not in RANGES:
         raise ValueError(f"unknown range {range_!r} (known: {', '.join(RANGES)})")
     if range_ == "today":
@@ -193,7 +190,7 @@ def by_agent(repo: Repository, closed: list[dict], sessions: list[dict]) -> list
     return sorted(res, key=lambda x: (-x["net_after_api"], x["name"]))
 
 
-def summary(repo: Repository, now: int, range_: str, *, tz: tzinfo | None = None,
+def summary(repo: Repository, now: int, range_: str, *, tz: tzinfo = UTC_ZONE,
             strategies: Iterable[str] = PLAY_STRATEGIES, all_links: RuleLinks | None = None) -> dict:
     """The Record tab's card: net, trades and wins over the range; the split you / agent; the API cost of the agent
     sessions started in it; per agent (`by_agent`); and per rule (every rule that traded, plus each rule a session in the range ran with and
@@ -207,7 +204,7 @@ def summary(repo: Repository, now: int, range_: str, *, tz: tzinfo | None = None
         for r in ((s.get("limits") or {}).get("rules") or []):
             rules.setdefault(r, {"rule": r, "trades": 0, "wins": 0, "net": 0.0})
     usage = [s.get("usage") or {} for s in sessions]
-    return {"ok": True, "range": range_, "start_ms": start, "now_ms": now,
+    return {"ok": True, "range": range_, "start_ms": start, "now_ms": now, "day_tz": days.zone_name(tz),
             "net": day["net"], "trades": day["trades"], "wins": day["wins"],
             "you": _part([b for b in closed if not b.get("session_id")]),
             "agent": _part([b for b in closed if b.get("session_id")]),

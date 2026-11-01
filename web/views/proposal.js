@@ -174,14 +174,14 @@
       if (d.name === 'proposal_resolved' && v.id && !busy[v.id]) drop(v.id);
       load();
     }
-    function onVisible() { if (document.visibilityState === 'visible') load(); }
+    function onVisible() { if (document.visibilityState === 'visible') { tick(); load(); } }
     function onSelected() { Object.keys(cards).forEach(function (id) { if (!busy[id]) drop(id); }); load(); }
 
     window.addEventListener('agent-custom', onCustom);
     window.addEventListener('agent-selected', onSelected);
     document.addEventListener('visibilitychange', onVisible);
     pollT = setInterval(function () { if (document.visibilityState === 'visible') load(); }, POLL_MS);
-    tickT = setInterval(tick, TICK_MS);
+    tickT = setInterval(function () { if (document.visibilityState === 'visible') tick(); }, TICK_MS);  // hidden: no ticking
     load();
 
     return {

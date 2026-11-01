@@ -25,7 +25,7 @@ What stays even with no limits is not here: in production every phone entry must
 (TradingService's cash backstop) and every gateway keeps its hard order ceiling (a bug guard, see bootstrap).
 
 One daily total (KD7, perps plan 2026-10-29: "$20 a day" means $20 in total): `CommittedToday` adds up what every
-registered trading service has committed today (UTC day): event-contract stakes (TradingService.committed) and perps
+registered trading service has committed today (the user's day, domain/days.py): event-contract stakes (TradingService.committed) and perps
 collateral (PerpTradingService). The real-money environments count together (Kalshi prod, Polymarket US prod, Kalshi
 perps prod); each practice environment counts only with itself. Every service given `CommittedToday.total` as its
 `committed_today_fn` checks the per-day limit against that one figure.
@@ -67,7 +67,7 @@ def day_pool(env: str) -> str:
 
 
 class CommittedToday:
-    """KD7's one daily figure. Each source is `(now) -> {env: dollars committed today in that env}` (UTC day);
+    """KD7's one daily figure. Each source is `(now) -> {env: dollars committed today in that env}` (the user's day);
     `total(env, now)` sums every source over the envs in `env`'s pool. A source that fails raises: the caller refuses
     (never counted as zero)."""
 

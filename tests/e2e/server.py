@@ -35,7 +35,7 @@ from btc_signal_engine.adapters.http.coach_routes import register_coach_routes
 from btc_signal_engine.adapters.http.copilot_routes import register_copilot_routes
 from btc_signal_engine.adapters.http.perp_routes import register_perp_routes
 from btc_signal_engine.adapters.http.play_routes import register_play_routes
-from btc_signal_engine.adapters.http.push import FeedHub, PushHub
+from btc_signal_engine.adapters.http.push import FeedHub, PushHub, TickStreams
 from btc_signal_engine.adapters.http.record_routes import register_record_routes
 from btc_signal_engine.adapters.http.trading_routes import register_trading_routes
 from btc_signal_engine.application.agent_prompts import AgentPrompts
@@ -126,7 +126,8 @@ class AgentApp:
         register_coach_routes(app, CoachService(store, store, (60, 300)), now)
         register_trading_routes(app, {"you": r.svc}, now)
         register_perp_routes(app, PerpView(None, settings={"band": 0.01, "amber": 0.2, "red": 0.1}), PushHub(), now)
-        register_play_routes(app, r.play, now, limits=self.limits)
+        self.play_streams = TickStreams()  # Play's live view (GET /api/play/stream), closed with the server
+        register_play_routes(app, r.play, now, limits=self.limits, streams=self.play_streams)
         self.copilot = Copilot(r.play, r.ag.rule_book, YourRecord(store, {"you": r.svc.modes}))  # Ask Settleview
         register_copilot_routes(app, self.copilot, now)
         register_record_routes(app, store, now)  # the Record tab (the daily summary's numbers)
@@ -237,6 +238,7 @@ class LiveServer:
         if self._server is not None and self.loop is not None and self.loop.is_running():
             async def close():
                 await self.world.feed.close()
+                await self.world.play_streams.close()
                 self._server.should_exit = True
             asyncio.run_coroutine_threadsafe(close(), self.loop).result(5)
         self._thread.join(10)

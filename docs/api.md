@@ -35,11 +35,24 @@ ride) and no stop, then approve; the optional BTC stop is set after entry (`/api
   worst case and whether it fits)}; `exit`; `stake` {default, max, cap, cash_cap, sentence, value, fee_rate,
   whole_contracts, fee_rounding}; `limits`; `mode`; `positions` (bracket views with `advice`, `outlook`, `stop_level`,
   `entry_btc`); `cone` (the likely close range from the Coach's model); `balances`; `open_elsewhere`; `spans`;
-  `ready`, `reason`. A tab missing on this server answers `available: false` and a reason.
+  `ready`, `reason`. A tab missing on this server answers `available: false` and a reason. `limits` carries
+  `day_used` (today's committed dollars, one total across both venues and perps) and `day_tz` (the zone the day runs
+  in).
+- `GET /api/play/stream?venue=&span=&stake=` (text/event-stream; the Play screen's live view since 2026-11-01): the
+  `/api/play/now` payload pushed once a second. Frames: `event: view` with data `{"seq", "full", "view"}` — the first
+  frame and any frame whose top-level keys changed are the whole view (`full: true`, replace), later ones only the
+  changed top-level fields (`full: false`, merge); `event: stale` `{"seq", "reason"}` when a read fails (the screen
+  greys its slide and sends nothing until the next `view`). A healthy stream sends a frame every second; the screen
+  treats 4 s of silence as dead and reconnects (3 s). One stream per screen, tab and amount; more than 64 open streams
+  answer 503 `{"detail"}`. Same parameters and 422s as `/api/play/now`; the session is checked when it opens
+  (docs/solutions/2026-11-01-play-stream-stale-and-signed-out.md).
 - `GET /api/play/scoreboard?venue=&span=&mode=prod|shadow|sandbox|all&last=N&both=true`: `record`, `streak`, `pnl`
-  {today (UTC), week (rolling 7 days), all}, `calls` {n, win_rate, avg_price (= break-even), edge, mostly_luck (< 50
-  calls), verdict}, `attempts` {n, record, streak, points, calibration} for the last N, `recent`. Default mode: each
-  tab's current mode; `both` = every tab.
+  {today, week, all} (today = since local midnight, week = today and the six local days before, in the zone named by
+  `day_tz`, the same days as Record), `calls` {n, win_rate, avg_price (the bare price), break_even (what a contract
+  cost WITH the entry fee: entry_cost / filled, averaged per trade; null without a known cost), break_even_n (trades
+  with a known cost), edge (= win_rate − break_even), mostly_luck (< 50 calls), verdict}, `attempts` {n, record, streak,
+  points (each with `break_even`), calibration} for the last N (`last` omitted = all), `recent`, `day_tz`. Totals are
+  over every trade (no newest-500 cap since 2026-11-01). Default mode: each tab's current mode; `both` = every tab.
 - `GET /api/play/limits` → `{per_trade, per_day, error, balance_cap: {tab: {...}}, history}`; `POST /api/play/limits`
   body `{per_trade, per_day, confirm?}` (both required; null = no limit). Raising or removing a limit needs `confirm`
   exactly as the screen states it. Refusals are 200 `{"ok": false, "code": "invalid|confirm_required", "reason"}`.
@@ -56,8 +69,9 @@ ride) and no stop, then approve; the optional BTC stop is set after entry (`/api
   rule a session in the range ran with (0 trades); `by_agent` = each agent (all its runs) with a trade closed or a
   session started in the range, best net after API first (`api_usd`: its sessions started in the range). Every agent
   session counts, however many ran at once. Ranges: `today` (since local midnight), `week` (today and the six
-  local days before), `all` (everything). Days are the server's zone (the daily summary's). Perps are not included
-  (their record is `GET /api/perps/record`). `range` is required: missing or unknown is 422.
+  local days before), `all` (everything). Days run in one zone, `day_tz` (the app's `TZ`, default UTC;
+  docs/operations.md "Running in Docker: time zone"), the same day as Play, the day limit and the daily summary. Perps
+  are not included (their record is `GET /api/perps/record`). `range` is required: missing or unknown is 422.
 
 ## Coach (the evaluation behind Play)
 
@@ -103,12 +117,17 @@ whole send (up to 30 s, `send_deadline_s`). Try again once the other order is an
 - `POST /api/trading/prepare_exit` body `{"strategy", "bracket_id"}` → a `kind: "exit"` ticket: sell everything held
   at the current bid or better.
 - `POST /api/trading/approve` body `{"strategy", "token", "decision": "yes|no", "ticket": <the ticket as shown>}` →
-  `{"ok": true, "bracket"}` (or `declined`). Any change to a bound field refuses with `altered`.
+  `{"ok": true, "bracket"}` (or `declined`). Any change to a bound field refuses with `altered`. The Play slide sends
+  the ticket with the slide's own side, amount, order type and max price in those fields, and only after checking the
+  prepared ticket against what the slide showed (market, window, side, amount, order type, max price or a market buy's
+  worst case and count, the BTC stop; for a sell the position, count and floor): a ticket that differs is shown on the
+  confirm sheet with what changed, never approved from the slide.
 - `POST /api/trading/take_profit` body `{"strategy", "bracket_id", "price"}` (the auto-sell; 0.99 = ride) and
   `POST /api/trading/stop` body `{"strategy", "bracket_id", "level" | null}` (set, move or remove the BTC stop; no order
   is sent for it). The tap is the Yes.
 - `POST /api/trading/heartbeat` body `{"visible": true|false}` → `{"present", "last_seen", "timeout_s"}` (every
-  service).
+  service). The web app sends one (web/app.js) every 30 s while Play or Perps is on screen and the page is visible,
+  and when either comes into view; the screens send none of their own.
 - `POST /api/trading/kill` → `{"killed": true}` (persisted, shared: no new entries in any mode on any tab; open
   positions keep their exits); `POST /api/trading/resume` → `{"killed"}` (still `true` while the Coach pause is on).
 - `POST /api/trading/mode` body `{"strategy", "mode": "sandbox|shadow|prod", "confirm"?}`. `prod` needs `confirm`
@@ -125,7 +144,9 @@ listener, `BTCFLOW_PC_PORT`; without one, on a loopback client of the main port)
 Network position alone is never the PC (docs/operations.md, "Running in Docker: who counts as the PC"):
 
 - In the PC's place without the PC cookie: pages answer 401 with the "Pair this browser" page, `/api/*` answers 401
-  `{"detail", "code": "pair_required"}`.
+  `{"detail", "code": "pair_required"}`. A phone without a valid session gets 401 `{"detail": "Sign in first (PIN)."}`.
+  The web app turns any 401 into one prompt ("This browser is not paired" → /pair, or "You are signed out" → /login)
+  and closes Play's live stream (a stream's session is checked only when it opens).
 - External agents' tool routes (`/api/agent/tools`, `/api/agent/call/{tool}`, `/api/agent/events/wait`) are served on
   the agent listener (`BTCFLOW_AGENT_PORT`) only; elsewhere they answer 403 `{"ok": false, "code": "agent_port"}`. The
   agent listener answers 404 to every other path.

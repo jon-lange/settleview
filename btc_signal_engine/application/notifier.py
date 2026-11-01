@@ -467,15 +467,15 @@ class RemoteControl:
                  lights_fn: Callable[[int], list[dict]] | None = None,
                  settle_fn: Callable[[int], list[dict]] | None = None, configured: bool = False,
                  code_fn: Callable[[], str] | None = None, nonce_fn: Callable[[], str] | None = None,
-                 view_fn: Callable[[str, int], dict | None] | None = None, tz: tzinfo | None = None,
+                 view_fn: Callable[[str, int], dict | None] | None = None, tz: tzinfo = rec.UTC_ZONE,
                  recorders: RecorderWatch | None = None, bot_username: str | None = None) -> None:
         """`sessions` AgentSessions, `proposals` AgentProposals, `presets` AgentPresets, `actions` the launch route's
         paths: None when agent mode is off (the commands say so). `lights_fn(now)` -> [{market, market_label, lights:
         [{rule, state, line, side, ask}]}] (Ask Settleview's lights per Play market). `settle_fn(now)` -> the settle
         warnings [{id, ticker, minutes, venue_label?}]. `view_fn(market key, now)` -> {btc, strike, window_end} of
-        that market now, or None (the heads-ups and /status). `tz`: the zone of "local" times (HH:MM, the day);
-        None = this PC's own zone. `configured`: a bot token is set. `recorders`: the research recorders' freshness
-        (the data alert and the daily coverage line); None = not watched. `bot_username`: the bot's @username without
+        that market now, or None (the heads-ups and /status). `tz`: the zone of "local" times (HH:MM, the day): the
+        user's day zone (domain/days.py; bootstrap passes the one it resolved). `configured`: a bot token is set.
+        `recorders`: the research recorders' freshness (the data alert and the daily coverage line); None = not watched. `bot_username`: the bot's @username without
         the @ (BTCFLOW_TELEGRAM_BOT_USERNAME); None = not known yet: the transport fills it from getMe when it starts."""
         self.repo, self.now_fn = repo, now_fn
         self.sessions, self.proposals, self.presets, self.actions = sessions, proposals, presets, actions

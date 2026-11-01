@@ -100,8 +100,9 @@ x-service: &service
 x-database: &database
   BTCFLOW_DATABASE_URL: postgresql://settleview_app@postgres:5432/settleview
   BTCFLOW_DATABASE_PASSWORD_FILE: /run/secrets/pg_app_password
-  # Your local time zone (IANA name, e.g. America/Chicago): Record's "today", the fleet's day, global limits and the
-  # daily summary use the process's local day, and a container's default is UTC. Set TZ in `.env` next to this file.
+  # Your local time zone (IANA name, e.g. America/Chicago): every "today" (Play's day limit and P&L, Record, the fleet's
+  # day, global limits, the daily summary) runs midnight to midnight in it (domain/days.py); a container's default is
+  # UTC, and an unknown name stops the start. Set TZ in `.env` next to this file.
   TZ: ${TZ:-UTC}
 
 # OpenTelemetry for the app and the recorders (bootstrap/telemetry.py): inert while OTEL_EXPORTER_OTLP_ENDPOINT is empty

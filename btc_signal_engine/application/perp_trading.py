@@ -91,14 +91,15 @@ import secrets
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import UTC, datetime, tzinfo
 from decimal import Decimal
 from typing import Any, Protocol
 
 from btc_signal_engine.application.actor import actor
 from btc_signal_engine.application.ports import Repository
-from btc_signal_engine.application.trading import (BALANCE_MAX_AGE_MS, DAY_MS, OK, PROD_CONFIRM, SHARED_SETTINGS,
-                                                   GateResult, _money, _Steps)
+from btc_signal_engine.application.trading import (BALANCE_MAX_AGE_MS, OK, PROD_CONFIRM, SHARED_SETTINGS, GateResult,
+                                                   _money, _Steps)
+from btc_signal_engine.domain import days
 from btc_signal_engine.domain import perps as pm
 from btc_signal_engine.domain.markets import PERP_ENVS, PerpSpec, perp
 from btc_signal_engine.domain.order_resolution import (FIND_GIVE_UP_MS, PROOF_EVERY_MS, UNKNOWN, candidate_orders,
@@ -118,7 +119,7 @@ EPS = 1e-9
 VIEW_TTL_MS = 1_000  # view() reuses its kill switch and limits reads this long (~20 views a second, screen open)
 AT_RISK = "Your whole perps balance ({}) backs this position: a big enough move can lose all of it."
 LIMITS_TEXT = ("Per trade caps the collateral of one entry or add. Per day is one total across event-contract stakes "
-               "and perps collateral (UTC day). The per-window limit does not apply to perps.")
+               "and perps collateral (your day). The per-window limit does not apply to perps.")
 
 
 class MarginGateway(Protocol):
@@ -299,6 +300,8 @@ def ticket_hash(token: str, ticket: dict) -> str:
 
 
 class PerpTradingService:
+    day_tz: tzinfo = days.zone(None)  # the user's day zone (bootstrap sets the one it resolved; domain/days.py)
+
     def __init__(self, repo: Repository, gateways: dict[str, MarginGateway | None], config: PerpConfig, *,
                  quotes: dict[str, QuoteSource] | None = None, spec: PerpSpec | None = None,
                  limits_fn: Callable[[], dict] | None = None,
@@ -2102,9 +2105,9 @@ class PerpTradingService:
 
     # -- limits figure (KD7) ------------------------------------------------------------------------------------------
     def committed_by_env(self, now: int) -> dict[str, float]:
-        """Collateral committed today (UTC day) per env: each entry or add's collateral, in full while its outcome is
+        """Collateral committed today (the user's day, `day_tz`) per env: each entry or add's collateral, in full while its outcome is
         unknown, in proportion to what filled once known, nothing when nothing filled. A CommittedToday source."""
-        day0 = now - now % DAY_MS
+        day0 = days.day_start(now, self.day_tz)
         out = {e: 0.0 for e in PERP_ENVS}
         for o in self.repo.select(ORDERS, filters=[("created_ms", ">=", day0)]):
             if o["role"] not in ENTRY_ACTIONS or o.get("collateral") is None or o["env"] not in out:

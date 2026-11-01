@@ -213,7 +213,7 @@ def test_play_stake_block_states_the_limit_and_the_cash(store):
         v = play.now_view(NOW, "kalshi", span="15m")
         assert v["stake"]["max"] == 50.0 and v["stake"]["cap"] == 50.0
         assert v["stake"]["sentence"] == "Up to $50.00 a trade (your limit) · up to your $90.09 cash"
-        assert v["limits"] == {"per_trade": 50.0, "per_day": None, "day_used": 0.0, "error": None}
+        assert v["limits"] == {"per_trade": 50.0, "per_day": None, "day_used": 0.0, "day_tz": "UTC", "error": None}
         caps = play.balance_caps(NOW)
         assert caps["kalshi"]["applies"] and caps["kalshi"]["cash"] == 90.09 and caps["kalshi"]["mode"] == "prod"
     run(go())

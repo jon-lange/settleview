@@ -1,5 +1,6 @@
-"""The Play scoreboard over a long history: TradingService.trades() limits and orders in SQL and reads every listed
-manual exit's and settlement's audit in one query, with the same P&L and pnl_source as reading bracket by bracket."""
+"""The Play scoreboard over a long history: TradingService.trades() orders in SQL (every row for the scoreboard, the
+newest N when asked) and reads every listed manual exit's and settlement's audit in one query, with the same P&L and
+pnl_source as reading bracket by bracket."""
 
 from __future__ import annotations
 
@@ -53,7 +54,8 @@ def test_scoreboard_over_600_brackets_does_one_brackets_and_one_audit_query(stor
     pts = sb["attempts"]["points"]
     assert [p["id"] for p in pts] == [f"b{i:04d}" for i in range(N - 20, N)]
     assert [p["pnl"] for p in pts] == [round(_pnl(i), 2) for i in range(N - 20, N)]
-    assert sb["record"]["trades"] == 500  # the newest 500, as before
+    assert sb["record"]["trades"] == N  # every trade: no silent newest-500 cap on the totals (review B5#4)
+    assert sb["pnl"]["all"] == round(sum(_pnl(i) for i in range(N)), 2)
     rows = svc.trades(0, NOW, 500)
     assert [t["id"] for t in rows] == [f"b{i:04d}" for i in range(N - 1, N - 501, -1)]
     assert {t["id"]: t["pnl_source"] for t in rows} == {f"b{i:04d}": _source(i) for i in range(N - 500, N)}

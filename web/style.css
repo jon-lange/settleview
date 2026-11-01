@@ -993,3 +993,14 @@ details.rc-ag > summary::-webkit-details-marker{display:none}
 .rc-foot.red{color:var(--down)}
 button.rc-row{width:100%;border:0;border-radius:0;background:none;color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .rc-chev{color:var(--text-3)}
+
+/* ----- stale live prices (review P1, B6#2): the dock greys and the slide is off; one quiet line says since when ----- */
+.pl-stale-note{margin:6px 0;padding:8px 12px;border-radius:14px;background:var(--surface-2);border:1px solid var(--line);color:var(--text-2);font-size:13px}
+.pl-bottom.pl-stale .pl-sidepick,.pl-bottom.pl-stale .pl-slideinfo,.pl-bottom.pl-stale .pl-amts-n{opacity:.45;filter:grayscale(1)}
+.pl-bottom.pl-stale .pl-slide{opacity:.4;filter:grayscale(1)}
+.pl-ticketwhy{margin:0}
+/* ----- signed out (B6#9): one prompt over everything, with the way back in ----- */
+.nv-auth{position:fixed;inset:auto 0 0 0;z-index:60;margin:0 auto;max-width:480px;display:grid;gap:10px;padding:18px 16px calc(18px + env(safe-area-inset-bottom));background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:20px 20px 0 0;box-shadow:0 -8px 32px rgba(0,0,0,.25)}
+.nv-auth h2{margin:0;font-size:17px}
+.nv-auth p{margin:0;color:var(--text-2);font-size:14px}
+.nv-auth a.pl-btn{text-align:center;text-decoration:none}

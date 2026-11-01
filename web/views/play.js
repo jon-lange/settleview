@@ -8,10 +8,18 @@
    web/playchart.js, Odds / Levels toggles), compact target tiles, the call, the amount, your last N attempts and a
    sticky slide-to-buy bar. In a trade (board 14): the parameters bar, the same chart with entry / stop / danger band
    and the held side's bid with the auto-sell line, one HOLD / CONSIDER EXIT sentence, and a pinned slide-to-sell.
-   Data: GET /api/play/now?venue=&span= every 2 s (it carries the window's BTC series), /api/coach/series every 5 s while
-   the Kalshi odds pane shows, /api/play/scoreboard every 10 s. Orders only through the existing /api/trading/prepare,
-   /approve and /prepare_exit routes with the venue's strategy, after a deliberate slide; refusals are shown word for
-   word.
+   Data (review P1, B6#1-5): EventSource('/api/play/stream?venue=&span=&stake=') pushes /api/play/now's payload once a
+   second (the whole view first, then the changed fields; it carries the window's BTC series); a new tab or amount
+   reopens it. Liveness: a frame at least every STALE_MS, else (or on `event: stale`, a dropped stream, a hidden page)
+   the screen is STALE: a visible "Live prices stopped at ..." line, the slide greyed and off, and no approve is sent,
+   so old numbers are never traded as live. While the stream is down a GET /api/play/now (one at a time, newest wins:
+   `httpSeq` and server_now_ms) still refreshes what is shown, never the liveness. /api/coach/series every 5 s while
+   the Kalshi odds pane shows, /api/play/scoreboard only while an outcome is awaited (Record reads it itself); every
+   poll is visible-only with one request in flight. Orders only through the existing /api/trading/prepare, /approve and
+   /prepare_exit routes with the venue's strategy, after a deliberate slide; refusals are shown word for word. The
+   slide's ticket is checked against what the slide showed before it is approved (`ticketMismatch`): a ticket that
+   differs is shown on the confirm sheet instead, never approved unseen. The presence heartbeat is the app's one
+   (web/app.js).
    Play is the whole app (2026-10-29): it also carries the one kill switch (top right; state from GET /api/trading/status
    ?strategy=you, shared by every strategy, plus GET /api/coach/pause, every 5 s while the page is visible) and a
    settings sheet (the gear) with the PC-only phone access card (/api/access*, loaded only when the sheet opens).
@@ -55,6 +63,9 @@
   var TREND_MS = 60000, TREND_MIN_MS = 45000, TREND_CAP = 400, SPARK_GAP_MS = 15000, SPARK_W = 300, SPARK_H = 32;
   var SELL_SLIDE = 0.7, BUY_SLIDE = 0.9, SELL_SLIP = 0.02;  // a sell needs 70% of the track; its bid may slip 2c
   var RETRY_MS = 15000;  // a "price moved" retry card is good for 15 s
+  // The live stream: a frame comes every second; none for STALE_MS = stale (closed and reopened after RECONNECT_MS).
+  // A new amount reopens it once the amount has been still for STAKE_SETTLE_MS.
+  var STALE_MS = 4000, RECONNECT_MS = 3000, STAKE_SETTLE_MS = 500;
   // The entry tolerance: a stored valid value wins; nothing stored = the stated default (10c, shown as "default" in
   // the settings); a stored value that is not one of SLIPS is reported there as unrecognised (never silently swapped).
   function loadSlip() {
@@ -100,6 +111,13 @@
     return m ? (m[1] === '-' ? -1 : 1) * Number(m[2].replace(/,/g, '')) : null;
   }
   function usd0(x) { return usd(x).replace(/\.00$/, ''); }
+  // The one day every "today" uses (the server's day zone, domain/days.py), said by name; when this device is in
+  // another zone that is said too, so a "today" that is not your today is never a surprise (review B5#2).
+  function deviceZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (e) { return null; } }
+  function dayLine(tz) {
+    var mine = deviceZone();
+    return 'Days run midnight to midnight ' + tz + (mine && mine !== tz ? ' (this device is on ' + mine + '; the server\'s TZ sets the day)' : '') + '.';
+  }
   // A 422's FastAPI detail list, field by field ("per_trade: Input should be greater than 0").
   function errDetail(e) {
     var d = e && e.body && e.body.detail;
@@ -148,8 +166,10 @@
 
   window.playView = function () {
     var pc = null, oddsK = null, oddsP = null;  // the chart and the odds history: outside Alpine's reactivity
-    var trend = null;  // { key, pts: [[ms, mid_up | null]] }: every /api/play/now poll this window (null = stale quote)
+    var trend = null;  // { key, pts: [[ms, mid_up | null]] }: every live view (stream frame) this window (null = stale quote)
     var chance = null; // { id, pts: [[ms, chance_now | null]] }: the open position's outlook.chance_now from every poll
+    // The live stream (outside Alpine): the EventSource, the tab and amount it was opened for, the reconnect timer.
+    var es = null, esKey = '', reconnectT = null, keyChangedAt = 0, keySeen = '';
     var venue0 = loadVenue();
     return {
       venue: venue0, span: loadSpan(venue0),  // null = not chosen yet: the screen asks (nothing loads, no slide)
@@ -173,24 +193,37 @@
       kTrading: null, kCoach: null, kTradingErr: '', kCoachErr: '', killBusy: false, killMsg: '',
       // true on the PC itself, false on a phone (/api/access answers it 403), null = not known yet (nothing disabled).
       pc: null,
+      // The live stream's state: live = a frame within STALE_MS; everLive = it has been live on this tab; liveAt = the
+      // last live moment (the stale line's time); staleWhy = the server's `stale` reason. lastServerMs: the newest
+      // server_now_ms applied (an older HTTP answer is dropped). httpSeq / sbSeq / kSeq: the newest request of each read
+      // (a late answer to an older one is dropped); *Busy: one request in flight per poll.
+      live: false, everLive: false, liveAt: 0, lastMsg: 0, staleWhy: '', lastServerMs: null, offsetSet: false,
+      httpSeq: 0, sbSeq: 0, sbBusy: false, kSeq: 0, kBusy: false, oddsSeq: 0, oddsBusy: false, ticketWhy: '',
 
       init: function () {
-        var self = this, on = function () { return Alpine.store('app').view === 'play'; };
+        var self = this, store = Alpine.store('app'), on = function () { return store.view === 'play'; };
+        var visible = function () { return document.visibilityState === 'visible'; };
         if (CHIPS.indexOf(Number(this.stakeInput)) < 0) this.other = true;
-        window.onView(this, 'play', function () { self.load(); self.loadScore(); self.loadOdds(); self.heartbeat(); self.loadKill(); });
-        // Record shows this component's record view: read the scoreboard (and the window, once) on entry
-        window.onView(this, 'record', function () { self.loadScore(); if (self.venue && self.span && !self.v) self.load(); });
+        window.onView(this, 'play', function () { self.load(); self.loadOdds(); self.loadKill(); });
+        // Record shows this component's record view: read the scoreboard (and the window, once) on entry; no stream
+        window.onView(this, 'record', function () { self.loadScore(); if (self.venue && self.span && !self.v) self.refresh(); });
+        Alpine.effect(function () { if (store.view !== 'play') self.disconnect(); });
+        // Signed out (app.js): an open stream may outlive the session (it was checked when it opened); close it so
+        // nothing on screen is live and nothing can be sent (B6#9).
+        Alpine.effect(function () { if (store.auth) self.disconnect(); });
         self.loadPc();
-        setInterval(function () { if (on()) self.load(); }, 2000);
-        setInterval(function () { if (on() && self.oddsOn()) self.loadOdds(); }, 5000);  // the recorded Kalshi quotes' cadence
-        setInterval(function () { if (on()) self.loadScore(); }, 10000);
-        setInterval(function () { if (on() && document.visibilityState === 'visible') self.heartbeat(); }, 30000);
-        setInterval(function () { if (on() && document.visibilityState === 'visible') self.loadKill(); }, 5000);
-        setInterval(function () { self.tick++; self.retryExpire(); }, 1000);
-        // A phone waking up re-syncs the server clock before anything trusts the countdown.
+        // Hidden tabs and other screens do not tick (B6#4): every timer below is visible-only and Play-only.
+        setInterval(function () { if (on() && visible() && self.oddsOn()) self.loadOdds(); }, 5000);  // the recorded Kalshi quotes' cadence
+        setInterval(function () { if (on() && visible() && self.watchId) self.loadScore(true); }, 5000);  // an outcome is awaited
+        setInterval(function () { if (on() && visible() && !self.kBusy) self.loadKill(); }, 5000);
+        setInterval(function () {
+          if (!on() || !visible()) return;
+          self.tick++; self.retryExpire(); self.checkLive();
+        }, 1000);
+        // A phone waking up re-syncs the server clock (the stream's first frame) before anything trusts the countdown.
         document.addEventListener('visibilitychange', function () {
-          if (document.visibilityState !== 'visible') { self.synced = false; self.slideReset(); return; }
-          if (on()) { self.heartbeat(); self.load(); self.loadKill(); }
+          if (!visible()) { self.synced = false; self.slideReset(); self.disconnect(); return; }
+          if (on()) { self.load(); self.loadKill(); }
         });
       },
       loadPc: function () {
@@ -198,29 +231,139 @@
         api.get('/api/access').then(function () { self.pc = true; }, function (e) { if (e && e.status === 403) self.pc = false; });
       },
       phone: function () { return this.pc === false; },
-      heartbeat: function () { api.post('/api/trading/heartbeat', { visible: document.visibilityState === 'visible' })['catch'](function () {}); },
+      // Bring the window up to date: the live stream (opened, or reopened for a new tab or amount), and while it is not
+      // live one HTTP read of what to show.
       load: function () {
-        var self = this, venue = self.venue, span = self.span, t0 = Date.now();
-        if (!venue) return;                          // "Pick a venue": nothing loads until one is tapped
-        if (!span) { self.resolveSpan(); return; }   // "Pick 15 min or 5 min" (or learn the venue's spans first)
-        // The amount goes along so the server's plan payoffs (entry.UP / DOWN if_wins / if_loses) are for this amount.
+        if (!this.venue) return;                         // "Pick a venue": nothing loads until one is tapped
+        if (!this.span) { this.resolveSpan(); return; }  // "Pick 15 min or 5 min" (or learn the venue's spans first)
+        if (Alpine.store('app').view === 'play' && document.visibilityState === 'visible') this.connect();
+        if (!this.live) this.refresh();
+      },
+      // The stream's tab and amount (the amount goes along so the plan payoffs are for it).
+      streamKey: function () { var a = this.amount(); return this.venue + '|' + this.span + '|' + (a > 0 ? a : ''); },
+      connect: function () {
+        var self = this, key = self.streamKey(), venue = self.venue, span = self.span, amt = self.amount();
+        if (!venue || !span || Alpine.store('app').auth) return;  // signed out: app.js says so; nothing to reopen
+        if (es && esKey === key) return;
+        self.disconnect();
+        clearTimeout(reconnectT); reconnectT = null;
+        var qs = new URLSearchParams({ venue: venue, span: span });
+        if (amt > 0) qs.append('stake', amt);
+        var mine;
+        try { mine = es = new EventSource('/api/play/stream?' + qs); } catch (e) { self.error = 'Could not open the live prices: ' + errText(e); self.reconnect(); return; }
+        esKey = key; keySeen = key; self.offsetSet = false;
+        es.addEventListener('view', function (ev) {
+          if (mine !== es) return;  // a frame of a stream this screen already closed (another tab or amount)
+          var d;
+          try { d = JSON.parse(ev.data); } catch (e) { self.error = 'The live stream sent a view that is not JSON; it is ignored.'; return; }
+          if (!d || typeof d.view !== 'object' || !d.view) { self.error = 'The live stream sent a frame with no view; it is ignored.'; return; }
+          var r = d.full ? d.view : Object.assign({}, self.v || {}, d.view);
+          if (!d.full && !self.v) return;  // a change with nothing to change: the next whole frame comes after a reconnect
+          self.lastMsg = Date.now(); self.live = true; self.everLive = true; self.staleWhy = '';
+          self.apply(r, venue, span, null);
+        });
+        es.addEventListener('stale', function (ev) {
+          if (mine !== es) return;
+          var d = null;
+          try { d = JSON.parse(ev.data); } catch (e) { /* the reason is optional */ }
+          self.lastMsg = Date.now();
+          self.goStale((d && d.reason) || 'The server could not read the market.');
+        });
+        es.onerror = function () {
+          if (mine !== es) return;
+          self.goStale('');
+          self.probe();  // EventSource hides the status: one read tells a signed-out session (401) from a blip
+          if (es && es.readyState === 2) { es = null; esKey = ''; self.reconnect(); }  // CLOSED: the browser will not retry
+        };
+      },
+      disconnect: function () {
+        if (es) { es.close(); es = null; esKey = ''; }
+        clearTimeout(reconnectT); reconnectT = null;
+        if (this.live) this.goStale('');
+      },
+      reconnect: function () {
+        var self = this;
+        if (reconnectT) return;
+        reconnectT = setTimeout(function () {
+          reconnectT = null;
+          if (Alpine.store('app').view === 'play' && document.visibilityState === 'visible') self.connect();
+        }, RECONNECT_MS);
+      },
+      goStale: function (why) {
+        if (this.live) this.liveAt = this.lastMsg;
+        this.live = false; this.staleWhy = why || '';
+        if (this.sliding) { this.slideReset(); this.flash('Live prices stopped — slide again when they are back'); }
+      },
+      // Every second (visible, on Play): a quiet stream is dead (stale, closed, reopened); a new amount that has been
+      // still for STAKE_SETTLE_MS reopens the stream for it.
+      checkLive: function () {
+        if (!this.venue || !this.span) return;
+        if (this.live && Date.now() - this.lastMsg > STALE_MS) {
+          this.goStale('');
+          if (es) { es.close(); es = null; esKey = ''; }
+          this.reconnect();
+          return;
+        }
+        var key = this.streamKey();
+        if (key !== keySeen) { keySeen = key; keyChangedAt = Date.now(); return; }
+        if (es && esKey !== key && !this.sliding && !this.busy && Date.now() - keyChangedAt >= STAKE_SETTLE_MS) this.connect();
+        else if (!es && !reconnectT && !Alpine.store('app').auth) this.reconnect();
+      },
+      // One HTTP read of the view (the stream is down, or Record wants the window once): newest request only, never
+      // older than what is shown. It never makes the screen live.
+      refresh: function () {
+        var self = this, venue = self.venue, span = self.span, seq = ++self.httpSeq, t0 = Date.now();
+        if (!venue || !span) return;
         var amt = self.amount();
         api.get('/api/play/now', { venue: venue, span: span, stake: amt > 0 ? amt : null }).then(function (r) {
-          if (venue !== self.venue || span !== self.span || (r.span && r.span !== span)) return;  // a reply for another tab
-          if (r.spans) {
-            self.spansMap = r.spans;
-            var list = r.spans[venue] || [];
-            if (list.length && list.indexOf(span) < 0) { self.spanLost(span); return; }  // the remembered tab is gone
-          }
-          var t1 = Date.now(), was = self.v;
-          if (was && was.window.end !== r.window.end) { self.chosen = null; self.filled = null; }  // a new window: no carried-over side or fill
-          // Server clock offset, measured at the middle of the round trip.
-          self.v = r; self.error = ''; self.offset = (r.server_now_ms != null ? r.server_now_ms : r.now) - (t0 + t1) / 2; self.synced = true;
-          self.checkFrozen(); self.watchOutcome(was); self.tpCheck(); self.noteQuote(); self.noteTrend(); self.noteChance(); self.alertCheck();
-          self.$nextTick(function () { self.drawPtb(); });
-          if (r.mode && !self.modeForm.mode) self.modeForm.mode = r.mode.mode;
-          self.loadCopilot();
-        }, function (e) { self.error = errText(e); });
+          if (seq !== self.httpSeq || self.live) return;  // a newer read, or the stream is the source now
+          if (r && r.server_now_ms != null && self.lastServerMs != null && r.server_now_ms < self.lastServerMs) return;
+          self.apply(r, venue, span, (t0 + Date.now()) / 2);
+        }, function (e) { if (seq === self.httpSeq) self.error = errText(e); });
+      },
+      probe: function () {
+        var self = this;
+        if (!self.venue || !self.span) return;
+        api.get('/api/play/now', { venue: self.venue, span: self.span }, 4000).then(function () { /* reachable */ }, function (e) {
+          if (e && e.status !== 401) self.staleWhy = errText(e);
+        });
+      },
+      // Apply a whole view (a stream frame merged, or an HTTP answer). `mid`: an HTTP answer's round-trip middle
+      // (the clock offset is measured there); null for a stream frame (offset = now, moving only forward per stream).
+      apply: function (r, venue, span, mid) {
+        var self = this;
+        if (!r || venue !== self.venue || span !== self.span || (r.span && r.span !== span)) return;  // another tab's
+        if (r.spans) {
+          self.spansMap = r.spans;
+          var list = r.spans[venue] || [];
+          if (list.length && list.indexOf(span) < 0) { self.spanLost(span); return; }  // the remembered tab is gone
+        }
+        var was = self.v, srv = r.server_now_ms != null ? r.server_now_ms : r.now;
+        if (was && was.window && r.window && was.window.end !== r.window.end) { self.chosen = null; self.filled = null; }  // a new window
+        self.v = r; self.error = '';
+        if (srv != null) {
+          self.lastServerMs = srv;
+          var off = srv - (mid != null ? mid : Date.now());
+          if (mid != null) self.offset = off;  // an HTTP answer: measured at the round trip's middle
+          else if (!self.offsetSet || off > self.offset) { self.offset = off; self.offsetSet = true; }  // forward only per stream
+        }
+        self.synced = true;
+        self.checkFrozen(); self.watchOutcome(was); self.tpCheck(); self.noteQuote(); self.noteTrend(); self.noteChance(); self.alertCheck();
+        self.$nextTick(function () { self.drawPtb(); });
+        if (r.mode && !self.modeForm.mode) self.modeForm.mode = r.mode.mode;
+        // Ask Settleview is asked at most every 2 s (its own read), and at once for a new window
+        if (!was || !was.window || !r.window || was.window.end !== r.window.end || Date.now() - self.cpAt >= 2000) self.loadCopilot();
+      },
+      // ----- stale: the stream is not live. The slide is off and greyed, approvals are not sent, and one line says
+      // since when (B6#2). Before the first frame it says it is connecting. -----
+      stale: function () { return !!this.venue && !!this.span && !this.live; },
+      staleText: function () {
+        this.tick;
+        if (!this.stale() || !this.v) return '';
+        var why = this.staleWhy ? ' (' + this.staleWhy.replace(/\.$/, '') + ')' : '';
+        if (Alpine.store('app').auth) return 'Live prices are off: you are signed out.';
+        return this.everLive ? 'Live prices stopped at ' + fmt.time(this.liveAt) + why + '. Reconnecting; buying and selling are off until they are back.'
+          : 'Connecting to live prices' + why + '… buying and selling stay off until they answer.';
       },
       // No span chosen: learn the venue's spans (one discovery call), then a venue with a single span takes it (it is
       // the only choice); a venue with several waits for a tap on the tab row.
@@ -242,6 +385,7 @@
       },
       // The remembered span is no longer offered: say so and let the user pick (the stored choice is kept until then).
       spanLost: function (s) {
+        this.disconnect(); this.resetLive();
         this.spanGone = s; this.span = null;
         this.slideReset(); this.v = null; this.sb = null; this.pick = null; this.chosen = null; this.synced = false; this.tpSheet = false;
       },
@@ -261,12 +405,16 @@
       },
       // Nothing chosen yet (venue or length): the header countdown has no window to count, so it is hidden.
       choosing: function () { return this.needVenue() || !this.span; },
-      loadScore: function () {
+      // The scoreboard: the newest request wins (a setting changed mid-read sends a new one whose answer is the one
+      // kept); a poll does not start while one is in flight.
+      loadScore: function (poll) {
         var self = this, venue = self.venue, span = self.span;
-        if (!venue || !span) return;
+        if (!venue || !span || (poll && self.sbBusy)) return;
+        var seq = ++self.sbSeq;
+        self.sbBusy = true;
         api.get('/api/play/scoreboard', { venue: venue, span: span, last: self.last === 'all' ? null : self.last, both: self.both ? 'true' : null }).then(function (r) {
-          if (venue === self.venue && span === self.span) { self.sb = r; self.sbError = ''; self.findOutcome(); }
-        }, function (e) { self.sbError = errText(e); });
+          if (seq === self.sbSeq && venue === self.venue && span === self.span) { self.sb = r; self.sbError = ''; self.findOutcome(); }
+        }, function (e) { if (seq === self.sbSeq) self.sbError = errText(e); })['finally'](function () { if (seq === self.sbSeq) self.sbBusy = false; });
       },
       setVenue: function (x) {
         if (x === this.venue || this.ticket) return;
@@ -285,12 +433,18 @@
       // After a venue or tab switch: drop everything that belonged to the old market (a slide in progress or a frozen
       // quote included), then reload.
       switched: function () {
+        this.disconnect(); this.resetLive();
         this.slideReset(); this.pulse = '';
         this.v = null; this.sb = null; this.pick = null; this.msg = ''; this.modeForm.mode = ''; this.chosen = null;
         this.filled = null; this.cp = null; this.cpSeq++; this.ltTip = ''; this.cpChecked = null;
         this.watchId = null; this.outcome = null; this.synced = false; this.tpSheet = false; this.readout = ''; this.sigTip = '';
         this.retry = null;
-        this.load(); this.loadScore(); this.loadOdds();
+        this.load(); this.loadOdds();
+      },
+      // A new tab: nothing of the old tab's stream counts (its liveness, its clock, its newest server time).
+      resetLive: function () {
+        this.live = false; this.everLive = false; this.liveAt = 0; this.lastMsg = 0; this.staleWhy = ''; this.lastServerMs = null;
+        this.httpSeq++; this.sbSeq++; this.oddsSeq++;
       },
       // ----- tabs: the server's spans for a venue (one span = no tab row) and the open-position dots -----
       spans: function (x) { var m = this.spansMap; return (m && m[x || this.venue]) || []; },
@@ -436,13 +590,13 @@
       details: load(DETAILS_KEY) === '1',
       setDetails: function (open) { this.details = !!open; save(DETAILS_KEY, open ? '1' : '0'); },
 
-      // ----- Ask Settleview (GET /api/copilot/now with each /api/play/now poll, only while it is not Off). Every
+      // ----- Ask Settleview (GET /api/copilot/now with the live view, at most every 2 s, only while it is not Off). Every
       // sentence is the server's (code templates, no model). It never sends anything: Fill in ticket only sets the
       // side, max price and the rule's BTC stop on this screen's ticket; the slide still sends through prepare ->
       // approve. What was showing when an order went is recorded with it (POST /api/copilot/shown). -----
       cpMode: loadCp().mode, cpUnknown: loadCp().unknown, cpWarn: loadCpWarn().on, cpWarnUnknown: loadCpWarn().unknown,
       CP_MODES: CP_MODES, CP_NAMES: CP_NAMES, CP_WARNS: CP_WARNS, CP_WARN_NAMES: CP_WARN_NAMES,
-      cp: null, cpErr: '', cpSeq: 0, filled: null, ltTip: '',
+      cp: null, cpErr: '', cpSeq: 0, cpAt: 0, filled: null, ltTip: '',
       setCpMode: function (m) {
         if (CP_MODES.indexOf(m) < 0) { this.error = 'Unknown Ask Settleview mode "' + m + '".'; return; }
         this.cpMode = m; this.cpUnknown = null; save(CP_KEY, m);
@@ -467,6 +621,7 @@
       loadCopilot: function () {
         var self = this, venue = self.venue, span = self.span, mode = self.cpMode, seq = ++self.cpSeq;
         if (mode === 'off' || !venue || !span) { self.cp = null; self.cpErr = ''; return; }
+        self.cpAt = Date.now();
         var amt = self.amount();
         api.get('/api/copilot/now', { venue: venue, span: span, mode: mode, warn: self.cpWarn.length ? self.cpWarn.join(',') : 'none',
           stake: amt > 0 ? amt : null }).then(function (r) {
@@ -555,7 +710,7 @@
       },
 
       // ----- the market trend on the verdict card: UP% now, its change over ~1 min (the window's quotes feed the 1-min change; the call card has no sparkline since 2026-10-29).
-      // Data: the market's mid_up from each 2 s /api/play/now poll (market.fresh false = a gap), plus, on Kalshi while
+      // Data: the market's mid_up from each live view (stream frame) (market.fresh false = a gap), plus, on Kalshi while
       // the odds pane has loaded them, the recorded Kalshi quotes from earlier in this window. Real quotes only. -----
       noteTrend: function () {
         var v = this.v, m = v && v.market, key = this.oddsKey();
@@ -760,7 +915,7 @@
         if (s !== this.sideNow()) this.cpChecked = null;
         this.chosen = s;
       },
-      slideOk: function () { return this.synced && (this.pos() ? this.canExit() : !!this.sideNow() && this.canBuy(this.sideNow())); },
+      slideOk: function () { return this.synced && this.live && (this.pos() ? this.canExit() : !!this.sideNow() && this.canBuy(this.sideNow())); },
       slideReset: function () { this.sliding = false; this.slideX = 0; this.frozen = null; },
       // The quote is frozen for the drag: a poll that moves the side's price cap snaps the slider
       // back, so nothing is ever sent at a cap the user did not see (the server's IOC cap stays the backstop).
@@ -831,6 +986,7 @@
       slideText: function () {
         if (this.busy) return 'Sending…';
         if (this.pulse) return this.pulse;
+        if (this.stale()) return this.everLive ? 'Live prices stopped' : 'Connecting to live prices…';
         if (!this.synced) return 'Syncing the clock…';
         var p = this.pos();
         if (p) {
@@ -851,7 +1007,9 @@
       // The slider's second line. Buy: the market length first (a 5-min buy can never be mistaken for a 15-min one),
       // the price cap, and the server's payoff if it wins. Sell: contracts @ the bid, and what selling gives up.
       slideSub: function () {
-        if (this.busy || this.pulse || !this.synced) return '';
+        if (this.busy || this.pulse) return '';
+        if (this.stale()) return 'Buying and selling are off until they are back';
+        if (!this.synced) return '';
         var p = this.pos();
         if (p) {
           if (!this.canExit()) return '';
@@ -867,10 +1025,22 @@
           (this.filledFor(s) ? ' · filled in' : '') + (mk ? ' · ' + mk : '');
       },
       slideAria: function () { var t = this.slideSub(); return this.slideText() + (t ? ' (' + t + ')' : '') + '. Drag right to confirm.'; },
-      // The slide was the Yes: approve the server's ticket straight away.
+      // The slide was the Yes, for what the slide showed: the server's ticket is checked against it first. A ticket
+      // that differs (the price ran, a different count, another market...) is NOT approved: it opens on the confirm
+      // sheet with what changed (B6#3). A matching one is approved with the slide's own values in the bound fields, so
+      // the server's ticket hash checks exactly what was on screen. Nothing is approved while the prices are stale.
       sendNow: function (t) {
-        var self = this;
-        return api.post('/api/trading/approve', { strategy: t.strategy, token: t.token, decision: 'yes', ticket: t.data }).then(function (r) {
+        var self = this, why = self.ticketMismatch(t);
+        if (!self.live) {
+          self.say('Live prices stopped before the order went: nothing was sent. Slide again when they are back.', 'red');
+          return Promise.resolve();
+        }
+        if (why) {
+          self.ticket = t; self.ticketWhy = 'This order is not what the slide showed: ' + why + '. Check it, then confirm or cancel.';
+          Alpine.store('app').announce(self.ticketWhy);
+          return Promise.resolve();
+        }
+        return api.post('/api/trading/approve', { strategy: t.strategy, token: t.token, decision: 'yes', ticket: self.shownTicket(t) }).then(function (r) {
           if (!r.ok && t.kind === 'exit' && self.alreadyClosed(r)) return;  // exitNow's finally reloads at once
           if (!r.ok) { if (t.kind === 'entry') self.buyRefused(r, t.meta); else self.say('Refused: ' + r.reason, 'red'); return; }
           if (t.kind === 'entry') { self.retry = null; self.filled = null; self.cpChecked = null; if (r.bracket && r.bracket.id) self.cpRecord(t, r.bracket.id); }
@@ -900,10 +1070,53 @@
         try { if (navigator.vibrate) navigator.vibrate(30); } catch (err) { /* no haptics */ }
         return true;
       },
+      // What the slide showed, against the prepared ticket: '' when they match, else what differs (in words).
+      ticketMismatch: function (t) {
+        var d = (t && t.data) || {}, m = (t && t.meta) || {}, num = function (x) { return x == null ? null : Number(x); };
+        var near = function (a, b, tol) { return a != null && b != null && Math.abs(a - b) <= tol; };
+        if (t.strategy !== this.strategy()) return 'it is for another market';
+        if (t.kind === 'exit') {
+          var p = t.pos || {};
+          if (d.kind !== 'exit' || d.bracket_id !== p.id) return 'it sells another position';
+          if (d.side !== p.side) return 'it sells the other side';
+          if (!(num(d.contracts) > 0) || num(d.contracts) > (p.held || 0) + 1e-6) return 'it sells ' + d.contracts + ' contracts, not the ' + p.held + ' you hold';
+          if (t.bid != null && !(num(d.limit_price) >= t.bid - SELL_SLIP - 1e-9)) return 'its floor is ' + c(d.limit_price) + ', under the ' + c(t.bid) + ' bid shown';
+          return '';
+        }
+        if (d.kind !== 'entry') return 'it is not a buy';
+        if (d.ticker !== m.ticker || num(d.window_end) !== num(m.windowEnd)) return 'it is for another window (' + d.ticker + ')';
+        if (d.side !== m.side) return 'it buys ' + sideName(d.side) + ', not ' + sideName(m.side);
+        if (!near(num(d.stake), m.stake, 0.005)) return 'its amount is ' + usd(d.stake) + ', not ' + usd(m.stake);
+        if ((d.price_mode || 'limit') !== m.mode) return 'it is a ' + (d.price_mode || 'limit') + ' order, not ' + m.mode;
+        if (m.mode === 'limit' && !near(num(d.limit_price), m.cap, 1e-6)) return 'its max price is ' + c(d.limit_price) + ', not ' + c(m.cap);
+        if (m.mode === 'market') {
+          var wc = d.worst_case || {};
+          if (m.worst != null && !(num(wc.cost) <= m.worst + 0.005)) return 'at worst it costs ' + usd(wc.cost) + ', more than the ' + usd(m.worst) + ' shown';
+          if (m.n != null && !(num(d.contracts) <= m.n + 0.005)) return 'it buys ' + d.contracts + ' contracts, more than the ' + (Math.round(m.n * 100) / 100) + ' shown';
+        }
+        var stops = [['stop_index_below', m.stopBelow], ['stop_index_above', m.stopAbove]];
+        for (var i = 0; i < stops.length; i++) {
+          var got = num(d[stops[i][0]]), want = num(stops[i][1]);
+          if ((got == null) !== (want == null) || (got != null && !near(got, want, 0.005))) return 'its BTC stop is not the one shown';
+        }
+        return '';
+      },
+      // The ticket as approved from the slide: the server's ticket with the slide's own values in the fields it showed
+      // (the server's hash then binds the approval to what was on screen; any difference is refused there too).
+      shownTicket: function (t) {
+        var d = Object.assign({}, t.data), m = t.meta || {};
+        if (t.kind === 'entry') {
+          d.side = m.side; d.ticker = m.ticker; d.stake = m.stake; d.price_mode = m.mode;
+          if (m.mode === 'limit') d.limit_price = m.cap;
+        } else if (t.pos) {
+          d.bracket_id = t.pos.id; d.side = t.pos.side;
+        }
+        return d;
+      },
       strategy: function () { return this.v && this.v.strategy; },
       canBuy: function (s) {
         var p = this.preview(s);
-        return !!(this.ok() && this.v.ready && !this.tooLate() && this.side(s).buyable && this.amount() > 0 && !this.busy && !this.ticket && p && p.fits);
+        return !!(this.live && this.ok() && this.v.ready && !this.tooLate() && this.side(s).buyable && this.amount() > 0 && !this.busy && !this.ticket && p && p.fits);
       },
       primary: function (s) { var a = this.call().action; return (a === 'ENTER UP' && s === 'UP') || (a === 'ENTER DOWN' && s === 'DOWN'); },
       buyLabel: function (s) { return 'BUY ' + arrows(s) + ' ' + c(this.side(s).ask); },
@@ -917,13 +1130,15 @@
         if (!self.canBuy(s) || (mode === 'limit' && cap == null)) return;
         if (!v.strategy) { self.say('Refused here: this market has no strategy to trade it, so nothing was sent.', 'red'); return; }
         self.saveStake(); self.busy = true; self.msg = '';
+        var pv = self.preview(s);
         var meta = { side: s, mode: mode, cap: cap, stake: self.amount(), ticker: v.window.ticker, windowEnd: v.window.end, tab: tabKey(self.venue, self.span),
-          shown: self.cpSnapshot(s) };
+          shown: self.cpSnapshot(s), worst: pv && pv.worst != null ? pv.worst : null, n: pv ? pv.n : null,
+          stopBelow: fill ? fill.stop_index_below : e.stop_index_below, stopAbove: fill ? fill.stop_index_above : e.stop_index_above };
         var body = {
           strategy: v.strategy, ticker: v.window.ticker, side: s, stake: self.amount(), price_mode: mode,
           take_profit: e.take_profit,
           // a filled-in ticket carries the rule's BTC stop (shown on the Filled in line); otherwise none, as before
-          stop_index_below: fill ? fill.stop_index_below : e.stop_index_below, stop_index_above: fill ? fill.stop_index_above : e.stop_index_above,
+          stop_index_below: meta.stopBelow, stop_index_above: meta.stopAbove,
           window_end: v.window.end, fair_up: v.call.fair_up
         };
         if (mode === 'limit') body.max_price = cap;  // a market buy sends no max_price (the server sets its limit: ask + market protection)
@@ -967,6 +1182,7 @@
         var r = this.retry;
         if (!r || this.retryGone()) return 'gone';
         if (this.busy) return 'Sending…';
+        if (this.stale()) return 'Live prices stopped: no buys until they are back.';
         if (this.tooLate()) return 'Entry is closed for this window.';
         if (!this.v.ready || this.side(r.side).ask == null) return 'No live price right now.';
         if (!this.canBuy(r.side) || this.capFor(r.side) == null) return 'Buy unavailable right now.';
@@ -1002,11 +1218,13 @@
         var self = this, strat = self.strategy();
         if (self.busy || self.ticket || !p) return;
         if (!strat) { self.say('Refused here: this market has no strategy to trade it, so nothing was sent.', 'red'); return; }
+        if (!self.live) { self.say('Live prices stopped: nothing was sent. Sell again when they are back.', 'red'); return; }
+        var bid = self.frozen && self.frozen.exit && self.frozen.id === p.id ? self.frozen.bid : (p.advice ? p.advice.bid : null);
         self.busy = true; self.msg = '';
         api.post('/api/trading/prepare_exit', { strategy: strat, bracket_id: p.id }).then(function (r) {
           if (!r.ok && self.alreadyClosed(r)) { if (!direct) { self.load(); self.loadScore(); } return; }  // direct: the finally reloads
           if (!r.ok) { self.say('Refused: ' + r.reason, 'red'); return; }
-          var t = { kind: 'exit', strategy: strat, data: r.ticket, token: r.token, got: Date.now(), pos: p };
+          var t = { kind: 'exit', strategy: strat, data: r.ticket, token: r.token, got: Date.now(), pos: p, bid: bid };
           if (direct) return self.sendNow(t);
           self.ticket = t;
         }, function (err) { self.say('Refused: ' + errText(err), 'red'); })['finally'](function () {
@@ -1021,6 +1239,7 @@
       answer: function (yes) {
         var self = this, t = self.ticket;
         if (!t || self.busy) return;
+        if (yes && !self.live) { self.say('Live prices stopped: nothing was sent. Confirm again when they are back, or cancel.', 'red'); return; }
         self.busy = true;
         api.post('/api/trading/approve', { strategy: t.strategy, token: t.token, decision: yes ? 'yes' : 'no', ticket: t.data }).then(function (r) {
           if (!yes) { self.say('Cancelled. Nothing was sent.', ''); return; }
@@ -1031,7 +1250,7 @@
           self.say(t.kind === 'exit' ? 'Sell sent.' : 'Order sent' + (r.bracket && r.bracket.state === 'open' ? ': you are in.' : '.'), 'green');
         }, function (err) {
           self.say('Could not confirm what happened: ' + errText(err) + ' Check your position.', 'red');
-        })['finally'](function () { self.ticket = null; self.busy = false; self.load(); self.loadScore(); });
+        })['finally'](function () { self.ticket = null; self.ticketWhy = ''; self.busy = false; self.load(); self.loadScore(); });
       },
       sheetTitle: function () { var t = this.ticket; return !t ? '' : t.kind === 'exit' ? 'Sell your position?' : 'Buy ' + sideName(t.data.side) + '?'; },
       sheetRows: function () {
@@ -1294,11 +1513,11 @@
       outcomeText: function () { var o = this.outcome; return o ? o.word + ' ' + (o.word === 'EVEN' ? usd(0) : sUsd(o.pnl)) : ''; },
       outcomeSub: function () { var o = this.outcome; return o ? arrows(o.side) + ' · tap to close' : ''; },
       closeOutcome: function () { clearTimeout(this.outcomeTimer); this.outcome = null; },
-      canExit: function () { var p = this.pos(); return !!(p && p.state === 'open' && p.held > 0 && p.advice && p.advice.bid != null && !this.busy && !this.ticket); },
+      canExit: function () { var p = this.pos(); return !!(this.live && p && p.state === 'open' && p.held > 0 && p.advice && p.advice.bid != null && !this.busy && !this.ticket); },
 
       // ----- the live "price to beat" chart (web/playchart.js on Lightweight Charts): BTC since the window opened
       // against the strike, x fixed from open to close. Data: /api/play/now's btc_series (per-second index thinned to
-      // <= 300 points) + the live price, redrawn on every 2 s poll. The chart object lives outside Alpine (closure). -----
+      // <= 300 points) + the live price, redrawn on every stream frame (1 s). The chart object lives outside Alpine (closure). -----
       odds: load(ODDS_KEY) === '1', levels: load(LEVELS_KEY) === '1', readout: '', sigTip: '', closeX: null, oddsEmpty: true,
       near: function () { var e = this.v && this.v.exit; return e && e.near_stop_usd != null ? e.near_stop_usd : null; },
       gap: function () { var b = this.v && this.v.btc; return b && b.gap != null ? b.gap : null; },
@@ -1388,16 +1607,19 @@
 
       // ----- the odds pane: before entry (opt-in) the venue's Up mid; in a trade (always on) the held side's bid with
       // the auto-sell line. Kalshi: the recorded Kalshi quotes (/api/coach/series, every 5 s while shown) + the live
-      // quote. Polymarket: the live Polymarket quote from each 2 s poll since this screen opened (nothing earlier is
+      // quote. Polymarket: the live Polymarket quote from each stream frame since this screen opened (nothing earlier is
       // recorded). Each is labelled with the venue whose data it is. -----
       loadOdds: function () {
         var self = this;
-        if (!self.oddsOn() || self.venue !== 'kalshi' || !self.span) return;
+        if (!self.oddsOn() || self.venue !== 'kalshi' || !self.span || self.oddsBusy) return;
+        var seq = ++self.oddsSeq;
+        self.oddsBusy = true;
         api.get('/api/coach/series', { window: 'current' }, 8000).then(function (s) {
+          if (seq !== self.oddsSeq || self.venue !== 'kalshi') return;  // another tab since: not this one's history
           oddsK = { boundary: s.boundary, pts: (s.points || []).filter(function (q) { return q.yes_bid != null; })
             .map(function (q) { return [q.ts, { yes_bid: q.yes_bid, yes_ask: q.yes_ask, no_bid: q.no_bid, no_ask: q.no_ask }]; }) };
           self.drawPtb();
-        }, function () { /* the pane keeps the live points */ });
+        }, function () { /* the pane keeps the live points */ })['finally'](function () { self.oddsBusy = false; });
       },
       // Every poll: the venue's own quote, kept for this window (Polymarket's only history; Kalshi's live tail).
       noteQuote: function () {
@@ -1499,11 +1721,23 @@
 
       // ----- your last N -----
       att: function () { return (this.sb && this.sb.attempts) || null; },
+      // You won vs break-even over these attempts: break-even is what each contract cost WITH the entry fee (the
+      // server's points[].break_even; review B5#1), never the bare price. Attempts with no known cost are left out of
+      // it, and the count says so.
       attStats: function () {
-        var a = this.att(), pts = (a && a.points) || [], w = 0, l = 0, sum = 0, n = 0;
-        pts.forEach(function (p) { if (p.result === 'W') w++; else if (p.result === 'L') l++; if (p.result !== 'P' && p.entry_avg != null) { sum += p.entry_avg; n++; } });
-        var won = w + l ? w / (w + l) : null, said = n ? sum / n : null;
-        return { won: won, said: said, edge: won == null || said == null ? null : Math.round((won - said) * 100) };
+        var a = this.att(), pts = (a && a.points) || [], w = 0, l = 0, sum = 0, n = 0, decided = 0;
+        pts.forEach(function (p) {
+          if (p.result === 'W') w++; else if (p.result === 'L') l++;
+          if (p.result !== 'P') { decided++; if (p.break_even != null) { sum += p.break_even; n++; } }
+        });
+        var won = w + l ? w / (w + l) : null, be = n ? sum / n : null;
+        return { won: won, said: be, edge: won == null || be == null ? null : Math.round((won - be) * 100), n: n, of: decided };
+      },
+      beNote: function () {
+        var s = this.attStats();
+        if (!s.of) return '';
+        if (!s.n) return 'Break-even unknown: none of these has a recorded cost.';
+        return 'Break-even = what you paid a contract, fees included' + (s.n < s.of ? ' (from ' + s.n + ' of ' + s.of + ' with a known cost)' : '') + '.';
       },
       streakText: function () {
         var k = this.att() && this.att().streak;
@@ -1578,16 +1812,22 @@
 
       // ----- the kill switch (moved here from the retired Coach; same two calls, same confirm on Resume only) -----
       // The trading switch is shared by every strategy's service, so "you" reads it for all of them.
+      // Both reads as one: the newest pair wins (a toggle's re-read is never undone by an older poll's answer), and a
+      // poll does not start while a pair is in flight.
       loadKill: function () {
-        var self = this;
-        api.get('/api/trading/status', { strategy: 'you' }, 4000).then(function (s) {
+        var self = this, seq = ++self.kSeq;
+        self.kBusy = true;
+        var a = api.get('/api/trading/status', { strategy: 'you' }, 4000).then(function (s) {
+          if (seq !== self.kSeq) return;
           if (s && typeof s.killed === 'boolean') { self.kTrading = s.killed; self.kTradingErr = ''; }
           else { self.kTrading = null; self.kTradingErr = (s && s.reason) || 'the server sent no kill switch state'; }
-        }, function (e) { self.kTrading = null; self.kTradingErr = errText(e); });
-        api.get('/api/coach/pause', null, 4000).then(function (p) {
+        }, function (e) { if (seq === self.kSeq) { self.kTrading = null; self.kTradingErr = errText(e); } });
+        var b = api.get('/api/coach/pause', null, 4000).then(function (p) {
+          if (seq !== self.kSeq) return;
           if (p && typeof p.paused === 'boolean') { self.kCoach = p.paused; self.kCoachErr = ''; }
           else { self.kCoach = null; self.kCoachErr = 'the server sent no pause state'; }
-        }, function (e) { self.kCoach = null; self.kCoachErr = errText(e); });
+        }, function (e) { if (seq === self.kSeq) { self.kCoach = null; self.kCoachErr = errText(e); } });
+        Promise.all([a, b])['finally'](function () { if (seq === self.kSeq) self.kBusy = false; });
       },
       killed: function () { var m = this.mode(); return this.kTrading === true || this.kCoach === true || !!(m && m.killed); },
       // Quiet round KILL until engaged; engaged it is a red pill: "Killed" (a phone cannot resume) or "Resume".
@@ -1745,6 +1985,7 @@
       money: function (x) { return x == null || isNaN(x) ? '—' : (x > 0 && x < 0.01 ? '$' + x.toFixed(4) : usd(x)); },
       tone: function (x) { return x == null || Math.abs(x) < 0.005 ? '' : x > 0 ? 'pl-up' : 'pl-down'; },
       plural: function (n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); },
+      dayLine: function (x) { return x && x.day_tz ? dayLine(x.day_tz) : 'Days: the server did not say which zone.'; },
       tradesLine: function (x) { return this.plural(x.trades, 'trade') + ' · ' + x.wins + ' won'; }
     };
   };
@@ -1841,7 +2082,8 @@
         var lim = v && v.limits;
         if (!v) return '';
         if (!lim || lim.day_used == null) return 'Used today (one total across both venues and perps): not known (the server sent no day total).';
-        return 'Used today (one total across both venues and perps): ' + usd(lim.day_used) + (lim.per_day != null ? ' of ' + usd(lim.per_day) : '');
+        return 'Used today (one total across both venues and perps): ' + usd(lim.day_used) + (lim.per_day != null ? ' of ' + usd(lim.per_day) : '') +
+          (lim.day_tz ? '. ' + dayLine(lim.day_tz) : '');
       },
       lmValue: function (no, raw, name) {
         if (no) return { v: null };

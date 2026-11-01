@@ -127,7 +127,7 @@ and without that flag is refused, as before.
 
 Units: prices are dollars per contract on the bracket's own side (YES for UP, NO for DOWN); counts are contracts
 to 0.01; times are UTC ms. Exposure counts what an approval may spend (contracts x limit + taker fee) until the
-fill is known, then the actual entry cost incl. fees; days are UTC days. Persistence goes through the Repository
+fill is known, then the actual entry cost incl. fees; days are the user's days (`day_tz`, domain/days.py). Persistence goes through the Repository
 port (tables trading_brackets, trading_orders, trading_audit, trading_settings).
 """
 
@@ -144,11 +144,13 @@ import uuid
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
+from datetime import tzinfo
 from typing import Any, Protocol
 
 from btc_signal_engine.application.actor import actor, agent_session
 from btc_signal_engine.application.ports import Repository, TradingStream
 from btc_signal_engine.domain.coach.money import position_for_stake
+from btc_signal_engine.domain import days
 from btc_signal_engine.domain.coach.rules import EPS
 from btc_signal_engine.domain.markets import market, phone_markets
 from btc_signal_engine.domain.order_resolution import (FIND_GIVE_UP_MS, NOT_FILLED, PROOF_EVERY_MS, UNKNOWN, decide,
@@ -473,6 +475,13 @@ class OrderGate:
 
 
 class TradingService:
+    # The user's day zone for "today" (the day limit, Play's day total): bootstrap sets the one it resolved at startup
+    # (domain/days.py), the same one Record and the daily summary use.
+    day_tz: tzinfo = days.zone(None)
+
+    def day_start(self, now: int) -> int:
+        return days.day_start(now, self.day_tz)
+
     def __init__(self, repo: Repository, gateways: dict[str, TradingGateway | None], config: TradingConfig, *,
                  strategy: str, paused_fn: Callable[[], bool] | None = None,
                  notify_fn: Callable[[dict], None] | None = None,
@@ -848,16 +857,19 @@ class TradingService:
         return list(rows.values())
 
     def exposure(self, env: str, now: int, ticker: str | None = None) -> dict:
-        """Committed dollars today and in one window: the market `ticker`'s, or (no ticker) the KXBTC15M window
-        containing `now` (windows are clock-aligned and divide a day, so a UTC day always holds whole windows)."""
-        day = self._env_brackets(env, now - now % DAY_MS)
-        live = [b for b in self.live_brackets() if b["env"] == env]
+        """Committed dollars today (the user's day, `day_tz`: domain/days.py) and in one window: the market `ticker`'s,
+        or (no ticker) the window containing `now`. A window can start before local midnight (a zone a half hour off
+        UTC, a 1 h window), so its brackets are read from the earlier of the two starts."""
+        day0 = self.day_start(now)
         w = self.config.window_ms
         window_end = now - now % w + w
+        rows = self._env_brackets(env, min(day0, window_end - w))
+        day = [b for b in rows if b["created_ts"] >= day0]
+        live = [b for b in self.live_brackets() if b["env"] == env]
         in_window = (lambda b: b["ticker"] == ticker) if ticker else (
             lambda b: b.get("window_end") is not None and window_end - w < b["window_end"] <= window_end)
         return {"day": round(sum(self.committed(b) for b in day), 4),
-                "window": round(sum(self.committed(b) for b in day if in_window(b)), 4),
+                "window": round(sum(self.committed(b) for b in rows if in_window(b)), 4),
                 "window_end": None if ticker else window_end,
                 "open_positions": len(live) + len(self._external[env]["positions"])}
 
@@ -949,7 +961,8 @@ class TradingService:
         return OK
 
     def committed_by_env(self, now: int) -> dict[str, float]:
-        """Dollars this service has committed today (UTC day) in each of its envs: a CommittedToday source (KD7)."""
+        """Dollars this service has committed today (the user's day) in each of its envs: a CommittedToday source
+        (KD7)."""
         return {env: self.exposure(env, now)["day"] for env in self.gateways}
 
     def _market_caps(self, ticket: dict, lim: dict) -> GateResult:
@@ -2508,13 +2521,21 @@ class TradingService:
                         "attached": st is not None}
         return out
 
-    def trades(self, since: int, now: int, limit: int = 100) -> list[dict]:
+    def trades(self, since: int, now: int, limit: int | None = 100, *, ids: Iterable[str] | None = None) -> list[dict]:
         """This strategy's brackets created since `since` (newest first): entry, exit and P&L once closed (None while
-        open or before any fill), for the Play scoreboard. The newest `limit` come from SQL (not the whole history),
-        and every listed manual exit's audit rows come from one more query."""
-        rows = {r["id"]: r for r in self._select(BRACKETS, filters=[("created_ts", ">=", since)],
-                                                 order_by=["-created_ts"], limit=limit)}
-        rows.update({v["id"]: v for v in self._watched() if v["created_ts"] >= since})
+        open or before any fill), for the Play scoreboard. The newest `limit` come from SQL (None = every one: the
+        scoreboard's totals are over the whole record, never a silent newest-N), only those in `ids` when given, and
+        every listed manual exit's audit rows come from one more query. `entry_cost` (with the entry fee) is the
+        break-even's source."""
+        filters: list = [("created_ts", ">=", since)]
+        if ids is not None:
+            ids = list(ids)
+            if not ids:
+                return []
+            filters.append(("id", "in", ids))
+        rows = {r["id"]: r for r in self._select(BRACKETS, filters=filters, order_by=["-created_ts"], limit=limit)}
+        rows.update({v["id"]: v for v in self._watched()
+                     if v["created_ts"] >= since and (ids is None or v["id"] in ids)})
         out = []
         for b in sorted(rows.values(), key=lambda r: r["created_ts"], reverse=True)[:limit]:
             closed = b["state"] == "closed"
@@ -2522,8 +2543,8 @@ class TradingService:
                          - (b.get("entry_cost") or 0.0), 4) if closed and (b.get("filled") or 0) > 0 else None)
             out.append({"id": b["id"], "env": b["env"], "ticker": b["ticker"], "side": b["side"], "state": b["state"],
                         "created_ts": b["created_ts"], "window_end": b["window_end"], "filled": b.get("filled") or 0.0,
-                        "entry_avg": b.get("entry_avg"), "take_profit": b.get("take_profit"),
-                        "stop_index_below": b.get("stop_index_below"), "stop_index_above": b.get("stop_index_above"),
+                        "entry_avg": b.get("entry_avg"), "entry_cost": b.get("entry_cost"),
+                        "take_profit": b.get("take_profit"), "stop_index_below": b.get("stop_index_below"), "stop_index_above": b.get("stop_index_above"),
                         "exit": b.get("exit_reason"), "exit_avg": b.get("exit_avg"), "exit_ts": b.get("exit_ts"),
                         "fair_up": b.get("fair_up"), "pnl": pnl, "pnl_source": None})
         sources = self._pnl_sources([t["id"] for t in out if t["pnl"] is not None and t["exit"] == "manual"],
