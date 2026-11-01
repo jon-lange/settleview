@@ -5,7 +5,7 @@ examples for a host without Docker only: each starts the portable supervisor (`p
 btc_signal_engine.supervise`), which runs the app and the research recorders and restarts them, from a Python
 environment that has Settleview installed (`pip install .`; the paths in the files are examples). Nothing else lives
 in these files; the runbook is in [docs/operations.md](../docs/operations.md). Development never needs any of this:
-it runs in the dev container (`scripts/dev.py`).
+it runs in the dev container (`.devcontainer/`, `deploy/dev/`).
 
 | Host | File | Install |
 |---|---|---|

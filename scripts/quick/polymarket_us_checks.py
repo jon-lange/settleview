@@ -6,7 +6,7 @@
 3. Cross-venue settlement: Polymarket 15m priceToBeat / settlementPrice / result vs Kalshi KXBTC15M floor_strike /
    expiration_value / result (data/btcflow.db kalshi_markets), joined on window start = Kalshi open_ts.
 
-    python scripts/dev.py script scripts/quick/polymarket_us_checks.py
+    docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/polymarket_us_checks.py
 """
 
 from __future__ import annotations

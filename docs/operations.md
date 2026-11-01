@@ -892,81 +892,90 @@ texts are normalized (`$1` for each value).
 ## Development and tests (the dev container)
 
 Production runs in Linux containers, and so does everything a developer runs: the tests, the quality gates, research
-scripts and experiments, the evals and the README screenshots, on every host. There is no host virtualenv.
-`scripts/dev.py` (standard library only) drives `deploy/dev/compose.yaml`; the host needs Docker and any Python 3
-(`python3 scripts/dev.py ...`), or only uv (`uv run --no-project python scripts/dev.py ...`: uv's own interpreter, no
-project environment created). The image (`deploy/dev/Dockerfile`) is the
-production base (`python:3.13.18-slim-trixie`, the same digest as the root Dockerfile), uv, every extra of
-`pyproject.toml` (`dev`, `postgres`, `otel`) at its pins, and Playwright's Chromium with its system libraries; the
-checkout is bind-mounted at `/app`, so an edit needs no rebuild. Every command first runs `docker compose build`
-(cached: a no-op unless `pyproject.toml` or the dev Dockerfile changed).
+scripts and experiments, the evals and the README screenshots, on every host. There is no host virtualenv and no
+wrapper script; the dev container is two standard files:
+
+- `.devcontainer/devcontainer.json` (the [Dev Containers spec](https://containers.dev/)): VS Code "Reopen in
+  Container", GitHub Codespaces, and headless with the official CLI,
+  [`@devcontainers/cli`](https://github.com/devcontainers/cli) (`devcontainer up --workspace-folder .`, then
+  `devcontainer exec --workspace-folder . <cmd>`). CI's `test` job runs the suite in it with the official
+  `devcontainers/ci` action. It uses the `dev` service below (`dockerComposeFile`), keeps it running, maps the image's
+  `dev` user to the host user on Linux (`updateRemoteUserUID`) and forwards no port.
+- `deploy/dev/compose.yaml` (plain Docker Compose): the services, mounts and profiles; also the no-tooling way in,
+  with Docker alone. The image (`deploy/dev/Dockerfile`) is the production base (`python:3.13.18-slim-trixie`, the
+  same digest as the root Dockerfile), uv, every extra of `pyproject.toml` (`dev`, `postgres`, `otel`) from the hashed
+  `uv.lock`, and Playwright's Chromium with its system libraries; the checkout is bind-mounted at `/app`, so an edit
+  needs no rebuild. Every `run` builds first (`pull_policy: build`: a no-op from the layer cache unless the lock or
+  the Dockerfile changed). `PYTEST_ADDOPTS=-p no:cacheprovider` keeps `.pytest_cache` out of the checkout.
+
+Inside the dev container (a VS Code / Codespaces terminal, or `devcontainer exec --workspace-folder . ...`) the
+commands are the plain ones: `pytest [args]`, `lint-imports --no-cache`, `python -m evals ...`. With Docker alone:
 
 ```bash
-python scripts/dev.py test [pytest args]     # the suite; e2e in Chromium (SETTLEVIEW_E2E_BROWSER_CHANNEL=chromium)
-python scripts/dev.py postgres-tests         # `-m postgres` on a throwaway Postgres 17, none may skip (CI's rule)
-python scripts/dev.py postgres-tests --full  # ... then the whole suite with the store on that Postgres
-python scripts/dev.py quality [args]         # scripts/quality.py: ruff + lint-imports in the container, the rest
-                                             # (hadolint, shellcheck, trivy) in their own containers from the host
-python scripts/dev.py experiments ARGS...    # scripts/experiments.py (run, grid, report, selftest), data read-only
-python scripts/dev.py script PATH [ARGS...]  # any research script (scripts/*.py, scripts/quick/*.py), the same way
-python scripts/dev.py evals test | run PIPELINE | graders | export ... | review ...   # the agent evals (evals/)
-python scripts/dev.py shell | run CMD...     # a shell, or any command, in the container
-python scripts/dev.py down                   # remove the dev project's containers, network and uv cache volume
+docker compose -f deploy/dev/compose.yaml run --rm dev pytest [args]              # the suite; e2e in Chromium
+docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest -m postgres -rs  # profile postgres; none may skip
+docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest                  # the whole suite on that Postgres
+docker compose -f deploy/dev/compose.yaml --profile postgres down                 # ... then remove that Postgres
+docker compose -f deploy/dev/compose.yaml run --rm research python scripts/experiments.py report  # research, below
+docker compose -f deploy/dev/compose.yaml run --rm dev bash                       # a shell, or any command
+docker compose -f deploy/dev/compose.yaml --profile "*" down --volumes            # remove the whole dev project
 ```
 
-Isolation from the live stack: the compose project is `settleview-dev` (passed with `-p` on every call, and any
-`COMPOSE_*` or `BTCFLOW_*` variable in the shell is dropped first), its network and volume (`settleview-dev_uv-cache`)
-are its own, and no service publishes a port. The test Postgres keeps its data on tmpfs, has a dev-only password and
-is removed after the run. On Linux and macOS the container runs as the host user, so anything it writes into the
-checkout (e2e screenshots under `tests/e2e/.artifacts/`) is yours. The image has the docker CLI and compose plugin
-for `tests/deploy/test_compose.py` (`docker compose config` only); no Docker socket is mounted.
+On Linux add `--user "$(id -u):$(id -g)"` after `run`, so files written into the checkout (e2e screenshots under
+`tests/e2e/.artifacts/`) are yours; Docker Desktop (Windows, macOS) maps ownership itself. `-T` after `run` when no
+terminal is attached (a script, an agent).
 
-A second checkout (a git worktree) used at the same time sets `SETTLEVIEW_DEV_PROJECT=settleview-dev-<name>`: its
-own compose project, so two `postgres-tests` runs never share, or remove, each other's Postgres (any other name is
-refused; never `settleview`). The checkout's `data/` (git-ignored, recorded data) is mounted read-only in every dev
-container, so no test, shell or command run there can change it. No dependency carries a platform marker: the
-container is the one environment.
+Isolation from the live stack: the compose project is `settleview-dev` (the file's top-level `name:`), so its
+containers, network and volume (`settleview-dev_uv-cache`) are its own, and no service publishes a port. The test
+Postgres keeps its data on tmpfs, has a dev-only password, and `down` removes it. The image has the docker CLI and
+compose plugin for `tests/deploy/test_compose.py` (`docker compose config` only); no Docker socket is mounted. A
+second checkout (a git worktree) used at the same time takes its own project the standard way, `-p
+settleview-dev-<name>` (or `COMPOSE_PROJECT_NAME=settleview-dev-<name>`), so two Postgres runs never share or remove
+each other's server. Never `settleview`, and never set `COMPOSE_PROJECT_NAME` globally in a shell that also runs the
+live stack. The checkout's `data/` (git-ignored, recorded data) is mounted read-only in every service, so no test,
+shell or command run there can change it. No dependency carries a platform marker: the container is the one
+environment.
 
-**Research scripts and experiments** (`dev.py experiments`, `dev.py script`) run in the `research` service: `dev`
-with different mounts, so a script can write only its outputs. `data/` is git-ignored and exists only on the
-machine that recorded it; `--data DIR` (before the command) or `SETTLEVIEW_DEV_DATA` names it, default
-`<checkout>/data` (from a worktree: `python scripts/dev.py --data ../btc-flow-engine/data experiments report`).
+**Research scripts and experiments** run in the `research` service (profile `research`): `dev` with different
+mounts, so a script can write only its outputs. `data/` is git-ignored and exists only on the machine that recorded
+it; `SETTLEVIEW_DEV_DATA=<absolute path>` (compose variable interpolation) names another checkout's, default
+`<checkout>/data` (from a worktree: `SETTLEVIEW_DEV_DATA="$PWD/../btc-flow-engine/data" docker compose -f
+deploy/dev/compose.yaml run --rm research python scripts/experiments.py report`).
 
 | In the container | Mode | Why |
 |---|---|---|
 | `/app` (the checkout) | read-only | a research run cannot change code, tests or settings |
 | `/app/docs/research/` | read-write | write-ups and tables |
 | `/app/data/` (`btcflow.db`, backups, logs) | read-only | the app's data is only ever read |
-| `/app/data/research/` | read-write | new output files (CSV, JSON, Markdown, caches) and the `experiments_results.csv` append |
-| every `*.db` in `data/research/` (with its `-wal`, `-shm`, `-journal`) | read-only | the research databases are only ever read |
+| `/app/data/research/` | read-write | new output files (CSV, JSON, Markdown, caches), the `experiments_results.csv` append, and a fetch or backfill into its own database |
 
-The scripts still open every database with SQLite `mode=ro` (the rule); the mounts are a second, independent guard. A
-script that tries to write an existing database fails with "Read-only file system"; a script that creates a new
-database file under `data/research/` (a fetch or backfill into a new file) can. Each file is mounted by name at the
-start of the run, so a database created during a run stays writable until the next one. The live stack keeps its data
-in Postgres and its own volumes, never in a checkout's `data/`.
+The scripts open every database they only read with SQLite `mode=ro` (the rule); the read-only `data/` mount is a
+second, independent guard for the app's data. The live stack keeps its data in Postgres and its own volumes, never in
+a checkout's `data/`.
 
-**Evals** (`dev.py evals`): `evals test` runs `pytest tests/evals` (what CI runs); `evals run|graders|grade ...` is
-`python -m evals ...`; `evals export ...` and `evals review ...` are `python -m evals.export|review ...`. The checkout
-is read-write (results go to `evals/results/`, packs to `evals/review/`, both git-ignored) and `data/` is mounted
-read-only, so `--source data/btcflow.db` works. A live run's key: `ANTHROPIC_API_KEY` in the host's environment is
-passed through by name, and `--api-key-file F` is mounted read-only into the container for that run.
+**Evals**: `pytest tests/evals` (what CI runs), `python -m evals run|graders|grade ...`, `python -m evals.export
+...`, `python -m evals.review ...`, in the dev container. The checkout is read-write (results go to `evals/results/`,
+packs to `evals/review/`, both git-ignored) and `data/` is read-only, so `--source data/btcflow.db` works. A live run
+uses the `evals` service (profile `evals`), which passes `ANTHROPIC_API_KEY` from the host's environment by name; a
+key file is mounted read-only for that run with the standard flag:
+`docker compose -f deploy/dev/compose.yaml run --rm -v <file>:/run/secrets/anthropic_api_key:ro evals python -m evals
+run ... --live --api-key-file /run/secrets/anthropic_api_key`.
 
 **README screenshots** (`docs/images/`) come from the dev container only: `tests/e2e/test_design_pass.py` and
 `tests/e2e/test_fleet_ui.py` write them on every full run, so a screen change is re-captured with
-`python scripts/dev.py test tests/e2e/test_design_pass.py tests/e2e/test_fleet_ui.py` and the images committed with it.
+`pytest tests/e2e/test_design_pass.py tests/e2e/test_fleet_ui.py` there and the images committed with it.
 Images from another browser or OS (fonts and anti-aliasing differ) are not committed.
 
 ## Quality gates (Ruff, Trivy, Hadolint, ShellCheck)
 
 One command runs every gate, locally on any OS and in CI (`.github/workflows/ci.yml`, jobs `lint` and `trivy`, which
-call the same script). Locally the default is the dev container (`scripts/dev.py`, "Development and tests" above),
-which runs Ruff and lint-imports inside it and the container tools from the host's Docker:
+call the same script). Locally, Ruff and lint-imports run in the dev container ("Development and tests" above) and the
+container tools (Hadolint, ShellCheck, Trivy) from the host's Docker, as CI runs them:
 
 ```bash
-python scripts/dev.py quality              # everything, as below; any scripts/quality.py arguments after it
-python scripts/dev.py quality --only ruff  # or imports, hadolint, shellcheck, trivy-image, trivy-config, trivy-fs, trivy
-python scripts/dev.py quality --only trivy --image settleview:local    # scan an image you already built
+docker compose -f deploy/dev/compose.yaml run --rm dev python scripts/quality.py --only ruff,imports   # in the container
+python scripts/quality.py --only hadolint,shellcheck,trivy   # from the host (Docker and any Python 3, or `uv run --no-project`)
+python scripts/quality.py --only trivy --image settleview:local    # scan an image you already built
 # one platform of a registry image, read from the registry (TRIVY_USERNAME / TRIVY_PASSWORD when private), plus its
 # CycloneDX SBOM: what the release workflow runs on the pushed digest
 python scripts/quality.py --only trivy-image --image ghcr.io/jon-lange/settleview@sha256:... --platform linux/arm64 --sbom sbom.cdx.json
@@ -1020,8 +1029,8 @@ also runs `uv lock --check`. uv is pinned at 0.13.1 everywhere (the Dockerfiles 
 version). To change a dependency, edit its pin in pyproject.toml and re-lock in the dev container:
 
 ```bash
-python scripts/dev.py run sh -c "UV_CACHE_DIR=/tmp/uv uv lock"                        # after a pin change
-python scripts/dev.py run sh -c "UV_CACHE_DIR=/tmp/uv uv lock --upgrade-package NAME==X.Y"  # move a transitive one
+docker compose -f deploy/dev/compose.yaml run --rm dev sh -c "UV_CACHE_DIR=/tmp/uv uv lock"   # after a pin change
+docker compose -f deploy/dev/compose.yaml run --rm dev sh -c "UV_CACHE_DIR=/tmp/uv uv lock --upgrade-package NAME==X.Y"
 ```
 
 `uv lock` keeps every version already in the lock unless told otherwise, so an unpinned transitive dependency does
@@ -1261,7 +1270,8 @@ of the release tooling:
 ```bash
 python deploy/postgres/make_secrets.py deploy/staging/secrets       # once: staging's own passwords (git-ignored)
 docker compose -p settleview-staging --env-file deploy/staging/staging.env   -f compose.yaml -f deploy/staging/compose.staging.yaml up -d --wait
-python scripts/dev.py smoke --project settleview-staging            # the smoke suite (read-only)
+docker compose -f deploy/dev/compose.yaml build dev                 # the image the smoke suite runs in
+python scripts/smoke.py --project settleview-staging                # the smoke suite (read-only)
 docker compose -p settleview-staging -f compose.yaml -f deploy/staging/compose.staging.yaml down --volumes
 ```
 
@@ -1287,7 +1297,7 @@ the sidecar itself never runs in staging.
 - The smoke suite checks it again on the running stack: no production key file mounted, trading switched off, the
   production mode not ready.
 
-**The smoke suite** (`tests/smoke`, pytest + Playwright; `python scripts/dev.py smoke --project <project>`) checks a
+**The smoke suite** (`tests/smoke`, pytest + Playwright; `python scripts/smoke.py --project <project>`, in the dev image) checks a
 running stack **read-only**, so it runs against production too: the migrate job exited 0; every service healthy; no
 OTLP export error in the last 30 minutes of the app's and recorders' logs (when an exporter is configured); on staging,
 no production key; `/api/health` on the phone and PC listeners; each trading service's status (on staging: production

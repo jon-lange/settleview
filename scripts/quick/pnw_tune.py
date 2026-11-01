@@ -1,8 +1,8 @@
 """PNW cushion threshold tuning (pre-registered in docs/research/pnw-tuning.md). Read-only on the databases.
 
-  python scripts/dev.py script scripts/quick/pnw_tune.py sweep     # 1,600 configs -> experiments_results.csv; prints
+  docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/pnw_tune.py sweep     # 1,600 configs -> experiments_results.csv; prints
                                                                # TRAIN-only tables; freezes <= 3 candidates
-  python scripts/dev.py script scripts/quick/pnw_tune.py holdout   # frozen candidates + live setting, holdout once
+  docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/pnw_tune.py holdout   # frozen candidates + live setting, holdout once
 
 `sweep` scores every config with the harness (scripts/experiments.py evaluate, minute resolution, slips 0/1/2c) and
 appends all rows, so every config counts in the Bonferroni line. It only prints / saves train numbers.

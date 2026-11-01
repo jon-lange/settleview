@@ -1,0 +1,33 @@
+// The dev container, by the Dev Containers spec (https://containers.dev/implementors/json_reference/): VS Code
+// ("Reopen in Container"), GitHub Codespaces, and headless with the official CLI (@devcontainers/cli):
+//   devcontainer up --workspace-folder .
+//   devcontainer exec --workspace-folder . pytest
+// CI runs the suite in it with devcontainers/ci (.github/workflows/ci.yml). It is deploy/dev/compose.yaml's `dev`
+// service (compose project `settleview-dev`, never the live `settleview`; no published port; data/ read-only); the
+// same file runs without any of this tooling: `docker compose -f deploy/dev/compose.yaml run --rm dev pytest`.
+{
+  "name": "Settleview dev",
+  "dockerComposeFile": ["../deploy/dev/compose.yaml"],
+  "service": "dev",
+  "runServices": ["dev"],
+  "workspaceFolder": "/app",
+  "shutdownAction": "stopCompose",
+  // The service's own command runs the suite once and exits; a dev container must stay up.
+  "overrideCommand": true,
+  // The image's non-root user; on Linux its uid/gid are changed to the host user's, so files written into the
+  // checkout (e2e screenshots) are yours.
+  "remoteUser": "dev",
+  "containerUser": "dev",
+  "updateRemoteUserUID": true,
+  // No port is forwarded: tests start their own servers inside the container.
+  "otherPortsAttributes": { "onAutoForward": "ignore" },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "charliermarsh.ruff"],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true
+      }
+    }
+  }
+}

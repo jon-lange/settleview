@@ -18,7 +18,7 @@ concurrency:
 jobs:
   # Quality gates (scripts/quality.py runs the same checks locally, with the same pinned tools and flags).
   # The `.venv` in these jobs is the runner's own throwaway environment (uv, Python 3.13 on Linux); locally nothing
-  # makes one: `python scripts/dev.py test | postgres-tests | quality` run the same commands in the dev container.
+  # makes one: the same commands run in the dev container (.devcontainer/, deploy/dev/; the `test` job runs there).
   lint:
     name: Lint (Ruff, Hadolint, ShellCheck)
     runs-on: ubuntu-latest
@@ -109,58 +109,31 @@ jobs:
           category: trivy-fs
 
   test:
-    name: Tests and import contracts (Python 3.13, Linux)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The whole suite in the dev container developers use (.devcontainer/devcontainer.json -> deploy/dev/compose.yaml:
+    # the production base image, every extra from the hashed uv.lock, Playwright's Chromium, so the e2e tests run too),
+    # through the official Dev Containers action (it runs @devcontainers/cli: `devcontainer up`, then `exec`).
     # The tests build their own data (fixtures, fakes, in-memory exchanges): no keys, no network, no data/ folder.
     # No BTCFLOW_* settings and no .env exist here, so every Settings() sees its defaults.
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
+    name: Tests and import contracts (the dev container, Python 3.13, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+      # Import contracts (lint-imports); the OpenTelemetry tests, none may be skipped (the scrubbing tests fail if a
+      # token, key, cookie, signature or query secret reaches an exporter; the GenAI one runs the bundled Claude Code
+      # CLI against a local fake API); then the whole suite.
+      - name: Tests in the dev container (devcontainers/ci)
+        uses: devcontainers/ci@513af61f4de4f75d37e4438f184ba4358f0fc1ca  # v0.3.1900000450
         with:
-          version: "0.13.1"  # the uv the Dockerfiles pin
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-
-      - name: Create the Python 3.13 environment
-        run: uv venv --python 3.13 .venv
-
-      # Hash-checked: the pins and sha256 hashes come from uv.lock (`uv export --locked` fails if it no longer matches
-      # pyproject.toml), installed with --require-hashes and without resolving anything; then the project itself, without
-      # dependencies or build isolation (its build backend, setuptools, is a locked dependency already installed).
-      # ta-lib (the Python wrapper) needs the TA-Lib C library. Recent ta-lib releases ship manylinux wheels with the
-      # library bundled, so the first install normally just works. If pip has to build from source instead, install
-      # the C library from the official TA-Lib release and try again.
-      # The `otel` extra too: the OpenTelemetry tests (tests/telemetry) run here and in the Postgres job.
-      - name: Install the project and dev tools
-        run: |
-          uv export --locked --extra dev --extra otel --no-emit-project --format requirements.txt -o /tmp/requirements.txt
-          if ! uv pip install --python .venv --require-hashes --no-deps -r /tmp/requirements.txt; then
-            echo "::warning::Install failed (likely no ta-lib wheel); installing the TA-Lib C library and retrying"
-            curl -fsSL -o /tmp/ta-lib.deb https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib_0.6.4_amd64.deb
-            sudo apt-get install -y /tmp/ta-lib.deb
-            uv pip install --python .venv --require-hashes --no-deps -r /tmp/requirements.txt
-          fi
-          uv pip install --python .venv --no-deps --no-build-isolation -e .
-
-      - name: Import contracts (lint-imports)
-        run: .venv/bin/python scripts/quality.py --only imports
-
-      # The scrubbing tests fail if a token, key, cookie, signature or query secret reaches an exporter; none may be
-      # skipped (the GenAI one runs the bundled Claude Code CLI against a local fake API).
-      - name: OpenTelemetry tests (none may be skipped)
-        run: |
-          .venv/bin/python -m pytest -p no:cacheprovider tests/telemetry -rs | tee /tmp/otel.txt
-          if grep -q "SKIPPED" /tmp/otel.txt; then echo "OpenTelemetry tests were skipped"; exit 1; fi
-
-      - name: Tests (pytest)
-        run: .venv/bin/python -m pytest -p no:cacheprovider
+          push: never
+          runCmd: |
+            set -e
+            python scripts/quality.py --only imports
+            pytest tests/telemetry -rs > /tmp/otel.txt 2>&1 || { cat /tmp/otel.txt; exit 1; }
+            cat /tmp/otel.txt
+            if grep -q SKIPPED /tmp/otel.txt; then echo "OpenTelemetry tests were skipped"; exit 1; fi
+            pytest
 
   postgres:
     # The whole suite again with the store on Postgres 17 (tests/conftest.py: every test that uses `store` runs there),
@@ -255,18 +228,6 @@ jobs:
         run: |
           if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=.venv/Scripts/python.exe; fi
           "$PY" -m pytest -p no:cacheprovider tests/bootstrap/test_process_supervisor.py tests/bootstrap/test_ops_stop.py tests/recorders tests/test_config.py tests/application/test_recorder_health.py
-
-  devbox:
-    # The dev container developers run the tests in (scripts/dev.py, deploy/dev/): it builds, and its entry point runs
-    # pytest in it. A small subset only; the jobs above run the whole suite.
-    name: Dev container (scripts/dev.py builds and runs pytest)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-
-      - name: Build the dev container and run the config and architecture tests in it
-        run: python3 scripts/dev.py test tests/test_config.py tests/architecture
 
   image:
     name: Docker image (linux/amd64 + linux/arm64) and compose services (no push, no keys)
@@ -406,7 +367,7 @@ jobs:
       - name: Build the image and the dev image
         run: |
           docker build --build-arg GIT_SHA="${{ github.sha }}" -t settleview:ci .
-          python3 scripts/dev.py build
+          docker compose -f deploy/dev/compose.yaml build dev
 
       - name: Staging up (offline), waiting for every healthcheck
         run: |

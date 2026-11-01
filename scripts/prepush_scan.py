@@ -23,8 +23,9 @@ Local patterns are never committed; they come from this machine:
 A line with `prepush-scan: allow` passes the generic path, gmail and token-shape checks (for placeholders in docs and
 synthetic tests). It never passes a private key block or a local pattern.
 
-SETTLEVIEW_PREPUSH_TRIVY=1 also runs the repository secret scan (`python scripts/dev.py quality --only trivy-fs`,
-Trivy in its pinned container; it scans the working tree, not the pushed commits). Off by default: it takes a while.
+SETTLEVIEW_PREPUSH_TRIVY=1 also runs the repository secret scan (`python scripts/quality.py --only trivy-fs`:
+Trivy in its pinned container, from the host's Docker; it scans the working tree, not the pushed
+commits). Off by default: it takes a while.
 
 Manual use: `python scripts/prepush_scan.py --range origin/main..HEAD` scans a range without pushing.
 A finding names the file and line and a masked excerpt; a matched value is never printed in full.
@@ -298,7 +299,7 @@ def scan_commits(shas: list[str], extra, archived: set[str]) -> list[Finding]:
 def run_trivy() -> int:
     top = git("rev-parse", "--show-toplevel").strip()
     print("pre-push: SETTLEVIEW_PREPUSH_TRIVY=1: running the Trivy secret scan (trivy-fs)", file=sys.stderr)
-    return subprocess.run([sys.executable, "scripts/dev.py", "quality", "--only", "trivy-fs"],  # noqa: S603
+    return subprocess.run([sys.executable, "scripts/quality.py", "--only", "trivy-fs"],  # noqa: S603
                           cwd=top).returncode
 
 

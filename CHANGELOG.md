@@ -6,8 +6,9 @@ All notable user-visible changes to Settleview. The format follows [Keep a Chang
 
 ### Added
 - Staging: `deploy/staging/compose.staging.yaml` runs the production image as its own project (`settleview-staging`, loopback ports 18000-18002) with no real-money path: `BTCFLOW_STAGING` refuses every production credential and switch and no production gateway is built; Shadow, and Kalshi demo with a demo key. `deploy/staging/compose.offline.yaml` cuts it off the internet.
-- The smoke suite (`python scripts/dev.py smoke --project <project>`, tests/smoke): read-only pytest + Playwright checks of a running stack (health, migrate job, services, OTLP errors, Play's stream, the agent API, the four screens), safe against production.
+- The smoke suite (`python scripts/smoke.py --project <project>`, tests/smoke): read-only pytest + Playwright checks of a running stack (health, migrate job, services, OTLP errors, Play's stream, the agent API, the four screens), safe against production.
 - The deploy gate (`python scripts/deploy.py --sha <sha> [--image ref@sha256:...]`): refuses while an agent session is live, runs the image on staging with the smoke suite first, then migrates, deploys and smoke-tests production, and prints the rollback (redeploy the previous release). compose.yaml's image is `SETTLEVIEW_IMAGE` (default `settleview:local`).
+- The dev container follows the Dev Containers spec (`.devcontainer/devcontainer.json` on `deploy/dev/compose.yaml`): VS Code, GitHub Codespaces and the official `devcontainer` CLI open it, CI runs the test suite in it (devcontainers/ci), and plain `docker compose -f deploy/dev/compose.yaml run --rm dev pytest` works with Docker alone. The custom `scripts/dev.py` wrapper is gone; research and evals mounts are compose services (`research`, `evals`), the test Postgres is the `postgres` profile.
 
 ### Fixed
 - Telegram: changing an alert or the daily summary's time no longer unmutes every muted agent. `/api/telegram/mute` answers `not_found` for any id while agent mode is off (there are no sessions to mute).

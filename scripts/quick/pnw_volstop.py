@@ -1,9 +1,9 @@
 """PNW exit study 4: volatility-scaled VS(z) / probability P(p) / hybrid H(z) index stops vs live `bstop-10`
 (pre-registered in docs/research/pnw-tuning.md, "Exit study 4"). Read-only on the databases.
 
-  python scripts/dev.py script scripts/quick/pnw_volstop.py train     # checks, both views, append to
+  docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/pnw_volstop.py train     # checks, both views, append to
                                                                   # experiments_results.csv, TRAIN tables, freeze picks
-  python scripts/dev.py script scripts/quick/pnw_volstop.py holdout   # frozen picks + bstop-10 + hold, holdout once
+  docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/pnw_volstop.py holdout   # frozen picks + bstop-10 + hold, holdout once
 
 View S (primary, all windows): stop checked every second on the 1 s-lagged index; sale at the held side's minute
 candle-close bid at the first minute mark >= trigger + 1 s. View T (435 full tapes): sale at the tape-proxy bid like

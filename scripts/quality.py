@@ -7,7 +7,7 @@
 
 Tools (exit code non-zero when any of them fails; each one's own output is shown as is):
   ruff          `ruff check .` (pyproject.toml [tool.ruff]); from this Python's environment (the dev container's, or
-                CI's), else PATH. Locally: `python scripts/dev.py quality` runs it in the dev container
+                CI's), else PATH. Locally it runs in the dev container (docs/operations.md, "Quality gates")
   imports       `lint-imports` (.importlinter: the layer contracts); from this Python's environment (the project
                 installed: the dev container), else PATH
   hadolint      the Dockerfiles (the app image's and deploy/dev/'s), in the official hadolint container
@@ -89,7 +89,8 @@ def ruff_cmd() -> list[str] | None:
 def check_ruff(_a) -> int:
     cmd = ruff_cmd()
     if cmd is None:
-        say("ruff is not installed here: run `python scripts/dev.py quality` (the dev container has the pinned one)")
+        say("ruff is not installed here: run it in the dev container "
+            "(`docker compose -f deploy/dev/compose.yaml run --rm dev python scripts/quality.py --only ruff`)")
         return 1
     os.chdir(ROOT)
     return run([*cmd, "check", "."])
@@ -101,13 +102,14 @@ def check_imports(_a) -> int:
     found = [p for p in (here / "lint-imports", here / "lint-imports.exe") if p.is_file()]
     exe = str(found[0]) if found else shutil.which("lint-imports")
     if exe is None:
-        say("lint-imports is not installed here: run `python scripts/dev.py quality --only imports` (the dev container)")
+        say("lint-imports is not installed here: run it in the dev container "
+            "(`docker compose -f deploy/dev/compose.yaml run --rm dev lint-imports --no-cache`)")
         return 1
     os.chdir(ROOT)
     return run([exe, "--no-cache"])
 
 
-DOCKERFILES = ["Dockerfile", "deploy/dev/Dockerfile"]  # the app image; the dev container (scripts/dev.py)
+DOCKERFILES = ["Dockerfile", "deploy/dev/Dockerfile"]  # the app image; the dev container (deploy/dev/compose.yaml)
 
 
 def check_hadolint(_a) -> int:

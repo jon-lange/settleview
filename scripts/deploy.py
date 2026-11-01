@@ -17,9 +17,10 @@ In order, stopping at the first failure:
      no agent session is live (running or paused) on production, since an app restart ends them. That is asked of
      production's Postgres as settleview_research (read-only by permission), inside its own container.
   2. The image: `docker build --build-arg GIT_SHA=<sha> -t settleview:<sha12> .`, or `cosign verify` of the --image
-     reference (tag@digest; signed by this repository's release workflow) and `docker compose pull`.
+     reference (tag@digest; signed by this repository's release workflow) and `docker compose pull`; and the dev image
+     the smoke suite runs in (`docker compose -f deploy/dev/compose.yaml build dev`).
   3. Staging (deploy/staging/compose.staging.yaml: no real-money path) `up -d --wait` on that image, then the smoke
-     suite against it (scripts/dev.py smoke). A failure stops here: production is not touched.
+     suite against it (scripts/smoke.py). A failure stops here: production is not touched.
   4. Production: the agent-session check again, a database dump (the backup service, `--once`), the migrate job of the
      new image, `docker compose up -d --wait` with SETTLEVIEW_IMAGE=<image>, the smoke suite (read-only: GETs only).
      The image is tagged settleview:local too, so a plain `docker compose up -d` later keeps it (`.env` is the
@@ -55,6 +56,7 @@ STAGING_ENV = "deploy/staging/staging.env"
 STAGING_SECRETS = "deploy/staging/secrets"
 OFFLINE_FILE = "deploy/staging/compose.offline.yaml"
 LOCAL_TAG = "settleview:local"
+DEV_COMPOSE = "deploy/dev/compose.yaml"  # the dev image: the smoke suite (pytest + Playwright) runs in it
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"  # GitHub Actions' keyless signing (cosign)
 # Live sessions end at an app restart (application/agent_sessions.py LIVE).
 SESSIONS_SQL = "select count(*) from app.agent_sessions where state in ('running', 'paused')"
@@ -134,8 +136,11 @@ class Plan:
         return self.compose(project, "up", "-d", "--wait", "--wait-timeout", str(self.wait_s), "--no-build",
                             "--pull", "never", "--remove-orphans")
 
+    def dev_image(self) -> list[str]:
+        return ["docker", "compose", "-f", DEV_COMPOSE, "build", "dev"]
+
     def smoke(self, project: str) -> list[str]:
-        return [sys.executable, "scripts/dev.py", "smoke", "--project", project]
+        return [sys.executable, "scripts/smoke.py", "--project", project]
 
 
 class Deployer:
@@ -248,6 +253,7 @@ class Deployer:
             self.check_sessions()
             self.note_rollback()
             self.image()
+            self.must(p.dev_image(), "the smoke suite's image (docker compose build dev)", timeout=3600)
             self.must([sys.executable, "deploy/postgres/make_secrets.py", STAGING_SECRETS], "staging secrets",
                       capture=True)
             self.must(p.up(p.staging_project), "staging up", timeout=p.wait_s + 600)
@@ -292,7 +298,7 @@ class Deployer:
         image = ([f"docker build --build-arg GIT_SHA={p.sha} -t {p.target_image} .", pull_others] if p.image is None else
                  [f"cosign verify --certificate-oidc-issuer {OIDC_ISSUER} --certificate-identity-regexp "
                   rf"'^https://github\.com/<origin>/\.github/workflows/release\.yml@refs/...' {p.image}",
-                  " ".join(p.compose(p.staging_project, "pull", "--quiet"))])
+                  " ".join(p.compose(p.staging_project, "pull", "--quiet"))]) + [" ".join(p.dev_image())]
         env = f"SETTLEVIEW_IMAGE={p.target_image} "
         return [f"check: the checkout is at {p.sha[:12]}, clean" + ("" if p.allow_unpublished else
                                                                     ", and the commit is on origin/main"),

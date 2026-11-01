@@ -1,9 +1,9 @@
 """Discord "call it at ~54c, cash at 80c" study (pre-registered in docs/research/coinflip-tp80.md). Read-only on
 the databases.
 
-  python scripts/dev.py script scripts/quick/coinflip_tp80.py train    # all configs, both views -> experiments_results.csv,
+  docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/coinflip_tp80.py train    # all configs, both views -> experiments_results.csv,
                                                                    # TRAIN table, freeze <= 2 picks
-  python scripts/dev.py script scripts/quick/coinflip_tp80.py holdout  # frozen picks + references, holdout once
+  docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/coinflip_tp80.py holdout  # frozen picks + references, holdout once
 """
 from __future__ import annotations
 

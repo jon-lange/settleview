@@ -15,7 +15,7 @@ Phase `orders` places demo orders and runs only with `orders --users-go-ahead` (
 explicit in-session go-ahead, even for demo).
 
 Safety: every request is checked against the demo hosts before it is sent. Credentials come from the app's .env through
-Settings and are never printed. Run: python scripts/dev.py script scripts/quick/perps_demo_checks.py [reads]
+Settings and are never printed. Run: docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/perps_demo_checks.py [reads]
 """
 
 from __future__ import annotations

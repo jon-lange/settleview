@@ -1,8 +1,8 @@
 """Run the deploy gate's smoke suite (tests/smoke, pytest + Playwright) against a running stack, READ-ONLY, so it runs
 against staging and, right after a deploy, against production (docs/operations.md, "Staging and the deploy gate").
 
-    python scripts/dev.py smoke --project settleview-staging     # the usual way (builds the dev image first)
-    python scripts/smoke.py --project settleview-staging          # the same, the dev image already built
+    docker compose -f deploy/dev/compose.yaml build dev     # the dev image the suite runs in (cached)
+    python scripts/smoke.py --project settleview-staging
 
 Standard library only. On the host it only asks Docker: `docker ps` and `docker inspect` of the project's containers
 and `docker logs --since 30m` of the app and the recorders, written to a temporary folder. Then the suite runs in the
@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEV_IMAGE = "settleview-dev:local"  # deploy/dev/compose.yaml's image (scripts/dev.py builds it)
+DEV_IMAGE = "settleview-dev:local"  # deploy/dev/compose.yaml's image (`docker compose ... build dev`)
 APP_UID = "10001:10001"  # the app's user (Dockerfile): the PC secret file is readable by it only
 LOG_WINDOW = "30m"
 

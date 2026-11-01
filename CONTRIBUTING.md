@@ -9,15 +9,26 @@ research honesty rules.
 ## Development setup
 
 Production runs in Linux containers, and so does all development (tests, quality gates, research scripts, evals),
-on any host (Windows, macOS, Linux; any CPU). There is no virtualenv to create. You need
-[Docker](https://docs.docker.com/get-docker/) and any Python 3 to start the dev container (`scripts/dev.py` uses the
-standard library only), or just [uv](https://docs.astral.sh/uv/):
+on any host (Windows, macOS, Linux; any CPU). There is no virtualenv to create and no wrapper script: the dev
+container follows the [Dev Containers spec](https://containers.dev/) (`.devcontainer/devcontainer.json`) on top of
+plain Docker Compose (`deploy/dev/compose.yaml`). You need [Docker](https://docs.docker.com/get-docker/) and one of:
 
-```bash
-python scripts/dev.py test                          # builds the dev container the first time, then runs the suite
-uv run --no-project python scripts/dev.py test      # the same with uv's Python (no project environment is created)
-python scripts/dev.py shell                         # a shell in the container, for anything else
-```
+- VS Code with the Dev Containers extension: "Reopen in Container"; or GitHub Codespaces;
+- the official CLI ([`@devcontainers/cli`](https://github.com/devcontainers/cli)), headless:
+
+  ```bash
+  devcontainer up --workspace-folder .
+  devcontainer exec --workspace-folder . pytest
+  ```
+
+- nothing else (Docker Compose alone):
+
+  ```bash
+  docker compose -f deploy/dev/compose.yaml run --rm dev pytest        # builds the image the first time
+  docker compose -f deploy/dev/compose.yaml run --rm dev bash          # a shell in the container, for anything else
+  ```
+
+  On Linux add `--user "$(id -u):$(id -g)"` after `run`, so files written into the checkout are yours.
 
 Install the pre-push hook once per clone:
 
@@ -37,10 +48,13 @@ patterns file and the opt-in Trivy scan: [docs/PUBLISHING.md](docs/PUBLISHING.md
 All of these must pass (each runs in Linux containers, as CI does):
 
 ```bash
-python scripts/dev.py test             # the test suite (e2e and the import contracts in .importlinter included)
-python scripts/dev.py postgres-tests   # the Postgres tests, on a throwaway Postgres 17
-python scripts/dev.py quality          # Ruff, import contracts, Hadolint, ShellCheck and Trivy, as CI runs them
+pytest                                     # in the dev container: the suite (e2e and the import contracts included)
+docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest -m postgres -rs   # Postgres tests (throwaway 17)
+docker compose -f deploy/dev/compose.yaml --profile postgres down                  # ... then remove that Postgres
 ```
+
+and the quality gates (Ruff, import contracts, Hadolint, ShellCheck and Trivy, as CI runs them):
+[docs/operations.md, "Quality gates"](docs/operations.md#quality-gates-ruff-trivy-hadolint-shellcheck).
 
 - Keep the layers: `domain/` is pure (no I/O), `application/` talks to the outside only through ports,
   `adapters/` do the I/O, and `bootstrap/` wires everything. Only `adapters/` may import the venue SDKs.

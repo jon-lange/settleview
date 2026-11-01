@@ -13,7 +13,7 @@ KXBTC15M demo market with at least 4 minutes left, 1 contract per order, at most
 
 Safety: refuses to run for anything but the demo host (checked before the first request, and every aiohttp request
 is checked against the demo host before it is sent). Credentials come from the app's .env through Settings and are
-never printed. Run: python scripts/dev.py script scripts/quick/kalshi_sdk_demo_check.py
+never printed. Run: docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/kalshi_sdk_demo_check.py
 """
 
 from __future__ import annotations

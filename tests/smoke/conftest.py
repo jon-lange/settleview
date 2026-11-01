@@ -1,6 +1,6 @@
 """The deploy gate's smoke suite (pytest + Playwright, the same tools as tests/e2e) against a RUNNING stack, read-only.
 
-scripts/smoke.py (`python scripts/dev.py smoke --project <compose project>`) starts it in the dev image, in a
+scripts/smoke.py (`python scripts/smoke.py --project <compose project>`) starts it in the dev image, in a
 throwaway container that shares the app container's network namespace, so `localhost:<port>` is the app's own
 listeners and the Host check passes as on this PC. It mounts, read-only: the app's data volume at /data (the PC
 secret, to sign a cookie: adapters/pc_credentials.cookie_from_secret_file, nothing written) and /smoke, the stack as
@@ -26,7 +26,7 @@ SMOKE_DIR = os.environ.get("SETTLEVIEW_SMOKE_DIR")
 def pytest_collection_modifyitems(config, items):
     if SMOKE_DIR:
         return
-    skip = pytest.mark.skip(reason="the smoke suite runs against a live stack: python scripts/dev.py smoke --project P")
+    skip = pytest.mark.skip(reason="the smoke suite runs against a live stack: python scripts/smoke.py --project P")
     for item in items:
         if "tests/smoke/" in item.nodeid.replace("\\", "/"):
             item.add_marker(skip)

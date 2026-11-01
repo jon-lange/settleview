@@ -57,7 +57,7 @@ class Fake:
             return R(0, f"{self.sessions.pop(0)}\n")
         if cmd[:2] == ["docker", "inspect"]:
             return R(0, f"{OLD_SHA} {self.running_image}\n")
-        if "smoke" in cmd:
+        if "scripts/smoke.py" in cmd:
             return R(1 if cmd[-1] in self.smoke_fail else 0)
         if any(w in cmd for w in self.fail):
             return R(1, "", "failed")
@@ -86,14 +86,16 @@ def test_the_whole_gate_in_order_staging_before_production():
     assert d.deploy() == 0, said
     build = f.index("docker", "build")
     stg_up = f.index("-p", "settleview-staging", "up")
-    stg_smoke = f.index("smoke", "settleview-staging")
+    stg_smoke = f.index("scripts/smoke.py", "settleview-staging")
     dump = f.index("-p", "settleview", "exec", "backup")
     migrate = f.index("-p", "settleview", "run", "--rm", "migrate")
     prod_up = f.index("-p", "settleview", "up")
-    prod_smoke = f.index("smoke", "settleview")
+    prod_smoke = f.index("scripts/smoke.py", "settleview")
     local = f.index("docker", "tag", "settleview:aaaaaaaaaaaa", "settleview:local")
     pull = f.index("-p", "settleview-staging", "pull", "--quiet", "--ignore-buildable")  # postgres etc., not the build
     assert build < pull < stg_up < stg_smoke < dump < migrate < prod_up < prod_smoke < local
+    dev_image = f.index("-f", "deploy/dev/compose.yaml", "build", "dev")  # the image the smoke suite runs in
+    assert build < dev_image < stg_smoke
     assert f.calls[build][-4:] == ["GIT_SHA=" + SHA, "-t", "settleview:aaaaaaaaaaaa", "."]
     for i in (stg_up, migrate, prod_up):  # every stack step runs exactly the built image
         assert f.envs[i]["SETTLEVIEW_IMAGE"] == "settleview:aaaaaaaaaaaa"
@@ -167,7 +169,7 @@ def test_a_registry_image_by_digest_is_cosign_verified_then_pulled():
     assert verify[verify.index("--certificate-identity-regexp") + 1] == \
         r"^https://github\.com/owner/settleview/\.github/workflows/release\.yml@refs/(tags/v[0-9]+\.[0-9]+\.[0-9]+|heads/main)$"
     assert f.index("cosign", "verify") < f.index("pull") < f.index("-p", "settleview-staging", "up")
-    assert not f.ran("docker", "build") and f.envs[f.index("-p", "settleview", "up")]["SETTLEVIEW_IMAGE"] == DIGEST
+    assert not [c for c in f.calls if c[:2] == ["docker", "build"]] and f.envs[f.index("-p", "settleview", "up")]["SETTLEVIEW_IMAGE"] == DIGEST
     assert any("--image ghcr.io/owner/settleview@sha256:" + "e" * 64 in s for s in said)  # the rollback, by digest
 
 
@@ -218,5 +220,5 @@ def test_dry_run_prints_the_commands_and_runs_nothing(capsys):
     assert dg.main(["--sha", SHA, "--dry-run"], run=f) == 0
     out = capsys.readouterr().out
     assert not f.calls
-    assert out.index("-p settleview-staging") < out.index("smoke --project settleview-staging") < out.index(
+    assert out.index("-p settleview-staging") < out.index("scripts/smoke.py --project settleview-staging") < out.index(
         "run --rm migrate") < out.index("-p settleview -f compose.yaml up -d --wait")

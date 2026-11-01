@@ -2,7 +2,7 @@
 Up/Down window at the ask (limit, IOC), then sell them back at the bid (limit, IOC), and report balances, order
 results and positions before/after. Hard cap $1.50 per order. Keys from the live app's .env, never printed.
 
-    python scripts/dev.py script scripts/quick/pm_penny_test.py
+    docker compose -f deploy/dev/compose.yaml run --rm research python scripts/quick/pm_penny_test.py
 """
 
 from __future__ import annotations

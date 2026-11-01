@@ -59,7 +59,7 @@ A placeholder in docs or tests (an example profile path, a made-up address) may 
 line; that passes the path, gmail and token-shape checks only, never a private key block or a local pattern. Tests
 build such values by concatenation instead where they can (`tests/test_prepush_scan.py`).
 
-Options: `SETTLEVIEW_PREPUSH_TRIVY=1` also runs the repository secret scan (`python scripts/dev.py quality --only
+Options: `SETTLEVIEW_PREPUSH_TRIVY=1` also runs the repository secret scan (`python scripts/quality.py --only
 trivy-fs`: Trivy in its pinned container over the working tree, not the pushed commits; off by default because it
 takes a while). `python scripts/prepush_scan.py --range origin/main..HEAD` scans a range without pushing. The
 history already on GitHub contains reviewed placeholders and dummy test tokens (the `.env.example` and

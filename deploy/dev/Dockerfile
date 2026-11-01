@@ -1,11 +1,11 @@
 # Settleview's dev container: the Linux environment the tests and the quality gates run in by default, on any host
-# (scripts/dev.py; deploy/dev/compose.yaml). Production runs this same Linux base (the root Dockerfile), so a
-# developer's CPU or OS never decides which wheels the code is tested against.
+# (.devcontainer/devcontainer.json, deploy/dev/compose.yaml). Production runs this same Linux base (the root
+# Dockerfile), so a developer's CPU or OS never decides which wheels the code is tested against.
 #
 # The source is NOT copied: deploy/dev/compose.yaml bind-mounts the checkout at /app, so an edit needs no rebuild. The
 # image holds the dependencies of uv.lock (every extra: dev, postgres, otel) and Playwright's Chromium for the
-# e2e tests; it is rebuilt only when pyproject.toml, uv.lock or this file changes (`python scripts/dev.py build`; every dev.py
-# command runs the build first, a no-op from the layer cache).
+# e2e tests; it is rebuilt only when pyproject.toml, uv.lock or this file changes
+# (`docker compose -f deploy/dev/compose.yaml build dev`; a no-op from the layer cache otherwise).
 #
 # Base: the root Dockerfile's image, pinned by the same multi-arch digest (refresh both together).
 FROM python:3.13.18-slim-trixie@sha256:76baad6037690d6e8c4397fbcaef17bca6f19eecef822b708fe8fa3417d30bb5
@@ -13,7 +13,7 @@ FROM python:3.13.18-slim-trixie@sha256:76baad6037690d6e8c4397fbcaef17bca6f19eece
 # uv, pinned by version (2026-10-14, older than two weeks when adopted) and multi-arch digest.
 COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 /uv /usr/local/bin/uv
 
-# PLAYWRIGHT_BROWSERS_PATH: Chromium lives in the image, readable by any user dev.py runs as.
+# PLAYWRIGHT_BROWSERS_PATH: Chromium lives in the image, readable by any user the container runs as.
 # UV_CACHE_DIR: the dev project's named volume (compose.yaml), world-writable, so a `uv pip install` in the
 # container is quick and survives it. HOME: writable whatever uid the container runs as.
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -54,8 +54,8 @@ COPY web/vendor ./web/vendor
 COPY btc_signal_engine/__init__.py ./btc_signal_engine/__init__.py
 RUN uv pip install --no-deps -e .
 
-# A non-root default; scripts/dev.py runs the container as the host user on Linux / macOS, so files it writes into
-# the checkout (e2e screenshots) belong to that user.
+# A non-root default. On Linux the Dev Containers tools change its uid to the host user's (updateRemoteUserUID), and
+# the plain compose path takes `--user "$(id -u):$(id -g)"`, so files written into the checkout belong to that user.
 USER dev
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "-m", "pytest", "-p", "no:cacheprovider"]

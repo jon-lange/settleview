@@ -5,7 +5,8 @@
 #   python deploy/postgres/make_secrets.py deploy/staging/secrets      # once: staging's own passwords (git-ignored)
 #   docker compose -p settleview-staging --env-file deploy/staging/staging.env \
 #     -f compose.yaml -f deploy/staging/compose.staging.yaml up -d --wait
-#   python scripts/dev.py smoke --project settleview-staging            # the read-only smoke suite
+#   docker compose -f deploy/dev/compose.yaml build dev                 # the image the smoke suite runs in
+#   python scripts/smoke.py --project settleview-staging                # the read-only smoke suite
 #   docker compose -p settleview-staging -f compose.yaml -f deploy/staging/compose.staging.yaml down --volumes
 #
 # scripts/deploy.py runs exactly this before every production deploy. Ports on this PC's loopback only: 18000 (the

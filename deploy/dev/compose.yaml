@@ -1,23 +1,46 @@
-# The dev container: tests and the quality gates in Linux, on any host. Run it through scripts/dev.py
-# (`python scripts/dev.py test`, `... quality`, `... postgres-tests`); the commands it runs are printed, so this file
-# can also be used directly:
-#   docker compose -p settleview-dev -f deploy/dev/compose.yaml run --rm dev python -m pytest -p no:cacheprovider
+# The dev container: tests, quality gates, research scripts and evals in Linux, on any host. Two standard ways in:
+#   - the Dev Containers spec (.devcontainer/devcontainer.json uses this file): VS Code "Reopen in Container",
+#     GitHub Codespaces, or headless with the official CLI (`devcontainer up --workspace-folder .`, then
+#     `devcontainer exec --workspace-folder . pytest`); CI runs the suite the same way (devcontainers/ci);
+#   - plain Docker Compose, no other tooling (docs/operations.md, "Development and tests"):
+#       docker compose -f deploy/dev/compose.yaml run --rm dev pytest [args]
+#       docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest -m postgres -rs    # profile postgres
+#       docker compose -f deploy/dev/compose.yaml run --rm research python scripts/experiments.py report
+#       docker compose -f deploy/dev/compose.yaml --profile "*" down --volumes
+#     (Linux: add `--user "$(id -u):$(id -g)"` after `run` so files written into the checkout are yours; Docker
+#     Desktop maps ownership itself, and the Dev Containers tools map the image's `dev` user to your uid.)
 #
-# Its own project (settleview-dev): it never shares a container, network, volume or port with the live stack (project
-# `settleview`, the root compose.yaml). Nothing here publishes a port; nothing reads `.env` or secrets/.
+# Its own compose project, `settleview-dev` (the `name:` below): never the live stack (project `settleview`, the root
+# compose.yaml), so no container, network, volume or port is shared. A second checkout running at the same time gives
+# itself another project the standard way: `-p settleview-dev-<name>` or COMPOSE_PROJECT_NAME=settleview-dev-<name>
+# (never `settleview`). Nothing here publishes a port; nothing reads `.env` or secrets/.
 #
-#   dev       Python 3.13 (the production base), the project's dependencies, Playwright's Chromium;
-#             the checkout bind-mounted at /app (edits need no rebuild)
+#   dev       Python 3.13 (the production base), every extra of pyproject.toml, Playwright's Chromium; the checkout
+#             read-write at /app (edits need no rebuild), data/ READ-ONLY
 #   postgres  profile `postgres`: a throwaway Postgres 17 (the version compose.yaml runs) on tmpfs; gone at `down`
 #   dev-pg    profile `postgres`: `dev` with BTCFLOW_TEST_DATABASE_URL pointing at it
-#   research  profile `research`: `dev` with the checkout READ-ONLY and docs/research/ writable, for research scripts
-#             and experiments (`dev.py script`, `dev.py experiments`); dev.py adds the data/ mounts per run (data/ is
-#             git-ignored and host-specific): data/ read-only, data/research/ writable, its SQLite files read-only
+#   research  profile `research`: research scripts and experiments; the checkout READ-ONLY, docs/research/ writable,
+#             data/ READ-ONLY, data/research/ writable for new outputs (the scripts open every database mode=ro)
+#   evals     profile `evals`: `dev` with ANTHROPIC_API_KEY passed through by name (a live eval run only)
+#
+# data/ is git-ignored and exists only on the machine that recorded it. SETTLEVIEW_DEV_DATA (an absolute path) points
+# the mounts at another checkout's data/ (a worktree has none); default: this checkout's data/ (made empty if absent).
 
 name: settleview-dev
 
+x-data: &data
+  type: bind
+  source: ${SETTLEVIEW_DEV_DATA:-../../data}
+  target: /app/data
+  read_only: true
+
+x-env: &env
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTEST_ADDOPTS: "-p no:cacheprovider"  # no .pytest_cache in the checkout (or in a read-only one)
+
 x-dev: &dev
   image: settleview-dev:local
+  pull_policy: build  # every `run` / `up` builds first: a no-op from the layer cache unless uv.lock etc. changed
   build:
     context: ../..
     dockerfile: deploy/dev/Dockerfile
@@ -26,10 +49,10 @@ x-dev: &dev
     - type: bind
       source: ../..
       target: /app
+    - *data
     - uv-cache:/cache/uv
   shm_size: 1gb  # Chromium's shared memory (Docker's default 64 MB crashes tabs)
-  environment:
-    PYTHONDONTWRITEBYTECODE: "1"
+  environment: *env
 
 services:
   dev:
@@ -55,7 +78,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      PYTHONDONTWRITEBYTECODE: "1"
+      <<: *env
       BTCFLOW_TEST_DATABASE_URL: postgresql://postgres:dev-only-not-a-secret@postgres:5432/postgres
 
   research:
@@ -69,6 +92,18 @@ services:
       - type: bind
         source: ../../docs/research
         target: /app/docs/research
+      - *data
+      - type: bind
+        source: ${SETTLEVIEW_DEV_DATA:-../../data}/research
+        target: /app/data/research
+      - uv-cache:/cache/uv
+
+  evals:
+    <<: *dev
+    profiles: [evals]
+    environment:
+      <<: *env
+      ANTHROPIC_API_KEY:  # by name from the host's environment: unset there, unset here (the fake model needs none)
 
 volumes:
   uv-cache:

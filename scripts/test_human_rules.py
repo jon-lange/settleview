@@ -6,7 +6,7 @@ data/btcflow.db, both opened read-only (mode=ro). Orders nothing. Writes only un
   human_rules_entries.csv   one row per rule entry
   human_rules_results.md    the results tables pasted into the doc
 
-Run from the repo root:  python scripts/dev.py script scripts/test_human_rules.py
+Run from the repo root:  docker compose -f deploy/dev/compose.yaml run --rm research python scripts/test_human_rules.py
 """
 from __future__ import annotations
 
