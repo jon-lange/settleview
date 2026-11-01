@@ -9,7 +9,6 @@ import asyncio
 import pytest
 from polymarket_us.errors import WebSocketError
 
-from btc_signal_engine.adapters import retry
 from btc_signal_engine.adapters.polymarket_us.market_data import (CONN_LIVE_MS, MAX_SUBS_PER_CONN, PolymarketMarketData,
                                                                   PolymarketMarketStream)
 from btc_signal_engine.adapters.polymarket_us.markets import current_slugs, slug_for, window_of
@@ -103,10 +102,10 @@ class Rig:
 
 
 @pytest.fixture(autouse=True)
-def top_of_the_jitter(monkeypatch):
-    """Reconnect waits are full-jitter draws (adapters/retry.py); at the top of each draw they are the backoff
-    ceilings (1, 2, 4 ... s), which these tests check exactly (tests/test_retry.py checks the jitter itself)."""
-    monkeypatch.setattr(retry, "_uniform", lambda: 1.0)
+def top_of_the_jitter(jitter_top):
+    """Reconnect waits are full-jitter draws (tenacity, adapters/backoff.py); at the top of each draw they are the
+    backoff ceilings (1, 2, 4 ... s), which these tests check exactly (tests/test_venue_retries.py checks the jitter
+    itself)."""
 
 
 def run(coro):

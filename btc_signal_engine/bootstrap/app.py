@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
+from tenacity import AsyncRetrying, RetryCallState, retry_if_exception, stop_after_attempt
 
 from btc_signal_engine.bootstrap import telemetry
 from btc_signal_engine.bootstrap.logs import (
@@ -72,7 +73,7 @@ from btc_signal_engine.adapters.kalshi.portfolio import portfolio_from_settings
 from btc_signal_engine.adapters.kalshi.shadow import ShadowExchange, ShadowStream, shadow_trading
 from btc_signal_engine.adapters.kalshi.stream import market_stream_from_settings, stream_from_settings
 from btc_signal_engine.adapters.kalshi.trading import trading_from_settings
-from btc_signal_engine.adapters.retry import full_jitter
+from btc_signal_engine.adapters.backoff import jittered
 from btc_signal_engine.adapters.polymarket_us.client import sdk_client
 from btc_signal_engine.adapters.polymarket_us.market_data import PolymarketMarketData, PolymarketMarketStream
 from btc_signal_engine.adapters.polymarket_us.markets import SERIES as PM_SERIES, MarketTerms, slug_for
@@ -323,24 +324,28 @@ def _feed_trimmed(n: int) -> dict:
 async def startup_read(what: str, read: Callable[[], Any], *, attempts: int = STARTUP_READ_ATTEMPTS,
                        backoff_s: float = STARTUP_READ_BACKOFF_S) -> Any:
     """`read()`, a read-only store call (safe to repeat), retried on a transient database error with doubling, fully
-    jittered waits (adapters/retry.py). A non-transient error, or the last failure, is raised after an error line
-    naming the read: never a silent default."""
+    jittered waits (tenacity, adapters/backoff.py). A non-transient error, or the last failure, is raised after an
+    error line naming the read: never a silent default."""
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
-    for attempt in range(1, attempts + 1):
-        try:
-            return read()
-        except Exception as exc:
-            first = (str(exc).strip().splitlines() or [""])[0][:300]
-            if not is_transient(exc) or attempt == attempts:
-                log.error("startup: %s failed (%s: %s) after %d attempt(s); the start stops here", what,
-                          type(exc).__name__, first, attempt)
-                raise
-            wait = full_jitter(attempt - 1, backoff_s, backoff_s * 2 ** (attempts - 1))  # adapters/retry.py
-            log.warning("startup: %s failed (%s: %s), attempt %d of %d; retrying in %.0f s", what,
-                        type(exc).__name__, first, attempt, attempts, wait)
-            await asyncio.sleep(wait)
-    raise AssertionError("unreachable")
+
+    def first_line(exc: BaseException | None) -> str:
+        return (str(exc).strip().splitlines() or [""])[0][:300]
+
+    def warn(state: RetryCallState) -> None:
+        exc = state.outcome.exception() if state.outcome is not None else None
+        log.warning("startup: %s failed (%s: %s), attempt %d of %d; retrying in %.0f s", what,
+                    type(exc).__name__, first_line(exc), state.attempt_number, attempts, state.upcoming_sleep)
+
+    retrying = AsyncRetrying(stop=stop_after_attempt(attempts), retry=retry_if_exception(is_transient),
+                             wait=jittered(backoff_s, backoff_s * 2 ** (attempts - 1)), sleep=asyncio.sleep,
+                             before_sleep=warn, reraise=True)
+    try:
+        return await retrying(read)
+    except Exception as exc:
+        log.error("startup: %s failed (%s: %s) after %d attempt(s); the start stops here", what,
+                  type(exc).__name__, first_line(exc), retrying.statistics.get("attempt_number", 1))
+        raise
 
 
 class Runtime:

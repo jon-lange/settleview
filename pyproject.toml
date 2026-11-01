@@ -38,6 +38,7 @@ dependencies = [
   "sse-starlette==3.5.0",  # pulled by mcp; pinned for the same reason
   "python-telegram-bot==22.8",  # U11 Telegram bot (user-approved 2026-10-30): async, long polling only; runs on httpx 0.28
   "opentelemetry-api==1.45.1",  # pulled by fastapi, anthropic and mcp; pinned (the SDK and exporters are the `otel` extra)
+  "tenacity==9.2.1",  # retry and reconnect loops (adapters/backoff.py; owner-approved 2026-11-01; 9.2.1 of 2026-10-07 is the newest release older than two weeks); pure Python, no dependencies
   "urllib3==2.8.0",  # pulled by kalshi_python_async and requests; pinned at the release that fixes CVE-2026-97687/97689
   "setuptools==84.1.0",  # pulled by ccxt at run time; pinned (>= 78.1.1 for CVE-2025-47273; 84.2.x is under two weeks old)
 ]

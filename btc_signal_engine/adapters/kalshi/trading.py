@@ -46,12 +46,14 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from tenacity import (AsyncRetrying, RetryCallState, retry_if_exception_type, retry_if_result,
+                      stop_after_attempt)
 
 from btc_signal_engine.adapters.kalshi.auth import (DEMO_HOST, PROD_HOST, KalshiSigner, PrivateKey, load_private_key,
                                                     now_ms)
 from btc_signal_engine.adapters.kalshi.backend import Backend, HttpxBackend, SdkBackend, TransportFailure
 from btc_signal_engine.adapters.kalshi.client import book_top
-from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
+from btc_signal_engine.adapters.backoff import busy, failure, last_response, wait_venue
 from btc_signal_engine.domain.markets import allowed_series
 from btc_signal_engine.domain.timestamps import iso_to_ms
 from btc_signal_engine.domain.order_resolution import TS_SLACK_MS, candidate_orders, definitive_status
@@ -230,33 +232,32 @@ class KalshiTrading:
     # -- requests ---------------------------------------------------------------------------------
     async def _send(self, op: str, *args: Any, **kw: Any) -> Any:
         """One backend operation (e.g. "create_order"), retried on a transport error, 429 or 5xx with the SAME
-        arguments. Returns the response (status_code, text, json(), raise_for_status())."""
-        last: Exception | None = None
-        call = getattr(self._backend, op)
-        for attempt in range(_RETRY):
-            try:
-                resp = await call(*args, **kw)
-            except (httpx.TransportError, TransportFailure) as exc:  # same body (same client_order_id): no double order
-                last = exc
+        arguments (same body, same client_order_id: never a second order), at most _RETRY sends, waiting
+        `wait_venue` (full jitter; a 429 at least its Retry-After). Returns the response (status_code, text, json(),
+        raise_for_status()); after the last send, its transport error or its HTTP error is raised."""
+        def note(state: RetryCallState, wait: float | None = None) -> None:
+            exc, resp = failure(state), last_response(state)
+            then = f"retry {state.attempt_number} in {wait:.2f} s" if wait is not None else "giving up"
+            if exc is not None:
                 cause = exc.__cause__ or exc  # TransportFailure wraps aiohttp's error: name the real one
-                log.warning("%s transport error (%s: %s: %s); retry %d", op, type(exc).__name__,
-                            type(cause).__name__, str(cause)[:200], attempt + 1)
-                if attempt + 1 < _RETRY:
-                    await self._sleep(retry_delay(attempt))
-                continue
-            if resp.status_code == 429 or resp.status_code >= 500:
-                try:
-                    resp.raise_for_status()
-                except Exception as exc:
-                    last = exc
-                if attempt + 1 < _RETRY:  # full jitter; a 429 waits at least its Retry-After (adapters/retry.py)
-                    wait = retry_delay(attempt, status=resp.status_code,
-                                       retry_after=retry_after_s(header(getattr(resp, "headers", None))))
-                    log.warning("%s HTTP %d; retry %d in %.2f s", op, resp.status_code, attempt + 1, wait)
-                    await self._sleep(wait)
-                continue
-            return resp
-        raise last if last else RuntimeError("request failed")
+                log.warning("%s transport error (%s: %s: %s); %s", op, type(exc).__name__, type(cause).__name__,
+                            str(cause)[:200], then)
+            else:
+                log.warning("%s HTTP %d; %s", op, resp.status_code, then)
+
+        def give_up(state: RetryCallState) -> Any:
+            note(state)
+            exc = failure(state)
+            if exc is not None:
+                raise exc
+            last_response(state).raise_for_status()
+            raise RuntimeError("request failed")
+
+        return await AsyncRetrying(
+            stop=stop_after_attempt(_RETRY), wait=wait_venue(), sleep=self._sleep,
+            retry=retry_if_exception_type((httpx.TransportError, TransportFailure)) | retry_if_result(busy),
+            before_sleep=lambda state: note(state, state.upcoming_sleep), retry_error_callback=give_up,
+        )(getattr(self._backend, op), *args, **kw)
 
     async def place_limit(self, *, ticker: str, side: str, action: str, count: float, price: float,
                           client_order_id: str, tif: str = "immediate_or_cancel", post_only: bool = False,

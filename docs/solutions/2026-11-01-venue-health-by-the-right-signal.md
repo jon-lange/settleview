@@ -33,11 +33,14 @@ with the reason, and it stays a problem until a later session has held every sub
 **Problem.** Every loop had its own fixed schedule and none had jitter: after a blip, every pool socket and both Kalshi
 streams reconnected at the same instants; a 429 was retried after 0.2 s whatever the venue said.
 
-**Fix.** `adapters/retry.py`: full jitter for reconnects and request retries, a 429's `Retry-After` as the floor
+**Fix.** Full jitter (first a hand-rolled `adapters/retry.py`, the same day moved onto tenacity:
+`adapters/backoff.py`) for reconnects and request retries, a 429's `Retry-After` as the floor
 (capped at 10 s on order paths). It only decides how long to wait; whether a request may be re-sent stays with the
 client (Kalshi: our loop only, same body and `client_order_id`; Polymarket creates: never).
 
-**How to avoid.** New loops take `Backoff` / `retry_delay`; tests that need exact waits patch `retry._uniform`.
+**How to avoid.** New loops use tenacity (`AsyncRetrying` with `wait_venue` or `jittered`; a reconnect supervisor:
+`reconnecting` + `start_over`), never a hand-rolled loop; tests that need exact waits use the `jitter_top` /
+`jitter_bottom` fixtures, which replace tenacity's random waits.
 
 ## 4. The PIN lockout keyed on the Docker gateway (B1#9)
 

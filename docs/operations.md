@@ -104,7 +104,8 @@ lag a placement, whether Polymarket US activity trades are always quoted in YES 
 
 ## Venue retries, reconnects and bounds
 
-One policy for every venue path (`adapters/retry.py`, 2026-11-01): exponential backoff with **full jitter** (a uniform
+One policy for every venue path, on [tenacity](https://tenacity.readthedocs.io) (`adapters/backoff.py`, 2026-11-01:
+no hand-rolled retry loop): exponential backoff with **full jitter** (tenacity's `wait_random_exponential`, a uniform
 draw between 0 and the current ceiling), so the Polymarket pool's sockets, both Kalshi streams, the perps stream and
 the Coinbase feed never reconnect in lockstep after a network blip. Reconnects: 1 s doubling to 30 s (Coinbase 1.5 s),
 reset after a connection that lasted a minute. Request retries (Kalshi REST, perps REST: transport error, 429, 5xx;
@@ -118,6 +119,15 @@ taking writes (its flush interval doubling to 5 s), the startup reads (2 s doubl
 subscription (1 s doubling to 30 s, per market). Not jittered on purpose: order-visibility polls after a create (0.5 s
 steps), the quotes recorder's book-silence wait (5 s doubling to 120 s), the migration lock wait and the supervisor's
 restart delay (single process, minutes apart).
+
+The loops are tenacity's: request retries are `AsyncRetrying` with `stop_after_attempt` (Kalshi and perps orders: 3
+sends; reads: 8), `retry_if_exception_type` (transport errors) or `retry_if_result` (429 / 5xx), and `wait_venue`, a
+tenacity custom wait that adds the Retry-After floor; after the last send the loop gives up at once (it does not
+wait again before raising). Reconnect supervisors are `AsyncRetrying` with no stop but the owner's close
+(`reconnecting`), restarting the attempt count after a connection that lasted (`start_over`). Where no loop runs (a
+refused subscription's retry time, the writer's cadence, the Coinbase feed's generator) the same tenacity wait gives
+attempt n's draw (`wait_at`). Tests make the draws exact with the `jitter_top` / `jitter_bottom` fixtures
+(tests/conftest.py), which replace tenacity's random waits with their window's top or bottom.
 
 Bounds: the Kalshi and perps WebSockets accept frames up to 8 MB, the Coinbase ws-feed up to 16 MB (a level2 snapshot
 is a few MB); the Polymarket SDK keeps its websockets default (1 MB). The Coinbase transport-to-consumer queue holds at

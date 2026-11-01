@@ -35,7 +35,7 @@ from telegram.error import BadRequest, InvalidToken, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from telegram.request import BaseRequest
 
-from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.adapters.backoff import jittered, reconnecting, start_over
 from btc_signal_engine.application.notifier import BOT_COMMANDS, Inbound, Keyboard, RemoteControl, Tap
 
 log = logging.getLogger(__name__)
@@ -260,28 +260,27 @@ class TelegramBot:
 
     async def run(self) -> None:
         """The supervised loop: start (retrying with backoff), pump, and stop when cancelled. Never returns."""
-        backoff = Backoff(self.backoff_s, self.backoff_max_s)  # full jitter (adapters/retry.py)
-        while True:
-            try:
-                await self.start()
-                backoff.reset()
-                while self.app is not None and self.app.updater.running:
-                    try:
-                        await self.control.pump()
-                    except Exception:  # an alert failing never stops the bot (commands keep working)
-                        log.warning("telegram: the alert pump failed", exc_info=True)
-                    await asyncio.sleep(self.pump_s)
-                log.warning("telegram: polling stopped; restarting")
-            except asyncio.CancelledError:
-                await asyncio.shield(self.stop())
-                raise
-            except InvalidToken:
-                log.error("telegram: Telegram refused the bot token (BTCFLOW_TELEGRAM_BOT_TOKEN); the bot stays off "
-                          "until the token is fixed and the app restarted")
+        async for attempt in reconnecting(jittered(self.backoff_s, self.backoff_max_s), closed=lambda: False,
+                                          sleep=asyncio.sleep):  # tenacity (adapters/backoff.py), full jitter
+            with attempt:
+                try:
+                    await self.start()
+                    start_over(attempt)
+                    while self.app is not None and self.app.updater.running:
+                        try:
+                            await self.control.pump()
+                        except Exception:  # an alert failing never stops the bot (commands keep working)
+                            log.warning("telegram: the alert pump failed", exc_info=True)
+                        await asyncio.sleep(self.pump_s)
+                    log.warning("telegram: polling stopped; restarting")
+                except asyncio.CancelledError:
+                    await asyncio.shield(self.stop())
+                    raise
+                except InvalidToken:
+                    log.error("telegram: Telegram refused the bot token (BTCFLOW_TELEGRAM_BOT_TOKEN); the bot stays "
+                              "off until the token is fixed and the app restarted")
+                    await self.stop()
+                    await asyncio.Event().wait()  # off for good (cancellation still ends it)
+                except Exception as e:
+                    log.warning("telegram: unreachable or failed (%s); retrying with backoff", type(e).__name__)
                 await self.stop()
-                await asyncio.Event().wait()  # off for good (cancellation still ends it)
-            except Exception as e:
-                log.warning("telegram: unreachable or failed (%s); retrying within %.0f s", type(e).__name__,
-                            backoff.ceiling)
-            await self.stop()
-            await asyncio.sleep(backoff.next())

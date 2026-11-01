@@ -11,7 +11,7 @@ Two interchangeable transports share the same normalization helpers:
 
 `CoinbaseStream.events()` yields deduped `Trade`s as they arrive and, once per completed
 second, the aggregator's `BookSecond` and `IndexSecond` rows. It reconnects with backoff
-(1.5s doubling to 30s, full jitter: adapters/retry.py) and after 15s of socket silence, recording gaps via
+(1.5s doubling to 30s, full jitter: tenacity, adapters/backoff.py) and after 15s of socket silence, recording gaps via
 `GapRecorder`.
 
 Bounds (review fix plan 2026-10-31, B3#11): the transport hands updates to the consumer through a queue of at most
@@ -35,7 +35,7 @@ from typing import Any
 from btc_signal_engine.adapters import telemetry
 from btc_signal_engine.adapters.coinbase.aggregator import BookMetrics, SecondAggregator, book_metrics
 from btc_signal_engine.adapters.coinbase.gaps import GapRecorder
-from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.adapters.backoff import jittered, wait_at
 from btc_signal_engine.application.ports import Clock
 from btc_signal_engine.domain.models.events import BookSecond, IndexSecond, Trade
 from btc_signal_engine.domain.timestamps import iso_to_ms
@@ -235,7 +235,7 @@ class CoinbaseStream:
         self._closed = True
 
     async def events(self) -> AsyncIterator[Trade | BookSecond | IndexSecond]:
-        backoff = Backoff(self._backoff0, self._backoff_max)
+        backoff, quiet_connects = jittered(self._backoff0, self._backoff_max), 0  # since the last message
         while not self._closed:
             queue: asyncio.Queue[Update] = asyncio.Queue(maxsize=self._queue_max)
             task = asyncio.create_task(self._transport(self._putter(queue)))
@@ -250,7 +250,7 @@ class CoinbaseStream:
                     now = self._clock.now_ms()
                     if got:
                         self._gaps.on_message(now)
-                        backoff.reset()
+                        quiet_connects = 0
                         if isinstance(update, Trade):
                             if self._agg.add_trade(update):
                                 self._gaps.on_trade(update)
@@ -272,6 +272,7 @@ class CoinbaseStream:
                     log.warning("coinbase transport failed: %r", exc)
             if self._closed:
                 break
-            wait = backoff.next()
+            quiet_connects += 1
+            wait = wait_at(backoff, quiet_connects)
             log.info("coinbase reconnecting in %.1fs", wait)
             await self._sleep(wait)

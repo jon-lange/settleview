@@ -64,7 +64,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from btc_signal_engine.adapters.kalshi.stream import _ws_connect
-from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.adapters.backoff import failure, jittered, reconnecting, start_over
 from btc_signal_engine.domain.book_freshness import unservable_reason
 from btc_signal_engine.domain.markets import PerpSpec
 
@@ -566,25 +566,30 @@ class MarginStream:
                 await ws.close()
 
     async def run(self) -> None:
-        backoff = Backoff(self._backoff0, self._backoff_max)  # full jitter (adapters/retry.py)
-        while not self._closed:
-            self._opened_ms: int | None = None
-            reason = "closed"
-            try:
-                await self._session()
-            except asyncio.CancelledError:
-                await self._teardown("closed")
-                raise
-            except MarginStreamError as exc:
-                reason = str(exc)
-                log.warning("margin %s stream: %s; reconnecting within %.1fs", self.env, exc, backoff.ceiling)
-            except Exception as exc:  # never log headers or key material
-                reason = type(exc).__name__
-                log.warning("margin %s stream dropped (%s); reconnecting within %.1fs", self.env, reason,
-                            backoff.ceiling)
-            await self._teardown(reason)
-            if self._closed:
-                break
-            if self._opened_ms is not None and self._clock() - self._opened_ms >= RESET_AFTER_MS:
-                backoff.reset()  # it ran a while: start the backoff over
-            await self._sleep(backoff.next())
+        """Reconnect forever (tenacity, adapters/backoff.py): full jitter, starting over after a session that lasted
+        RESET_AFTER_MS."""
+        def dropped(state: Any) -> None:  # never log headers or key material
+            exc = failure(state)
+            if isinstance(exc, MarginStreamError):
+                log.warning("margin %s stream: %s; reconnecting in %.1fs", self.env, exc, state.upcoming_sleep)
+            else:
+                log.warning("margin %s stream %s; reconnecting in %.1fs", self.env,
+                            "closed" if exc is None else f"dropped ({type(exc).__name__})", state.upcoming_sleep)
+
+        async for attempt in reconnecting(jittered(self._backoff0, self._backoff_max), closed=lambda: self._closed,
+                                          sleep=self._sleep, before_sleep=dropped):
+            with attempt:
+                self._opened_ms: int | None = None
+                try:
+                    await self._session()
+                except asyncio.CancelledError:
+                    await self._teardown("closed")
+                    raise
+                except Exception as exc:  # never log headers or key material
+                    await self._teardown(str(exc) if isinstance(exc, MarginStreamError) else type(exc).__name__)
+                    raise
+                else:
+                    await self._teardown("closed")
+                finally:
+                    if self._opened_ms is not None and self._clock() - self._opened_ms >= RESET_AFTER_MS:
+                        start_over(attempt)  # it ran a while: start the backoff over

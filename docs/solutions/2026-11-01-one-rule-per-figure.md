@@ -30,7 +30,7 @@ writes, and a few reconnect loops still doubling without jitter.
 **Fix.** `domain/brackets.py` (net, totals, stop by side), `domain/fmt.py` + `web/app.js` `fmt.*` (money, cents,
 side), `domain/timestamps.py`, `adapters/kalshi/auth.KalshiSigner` (Kalshi link, trading, margin, market-data WS),
 `application/settings_store.py` (one upsert), `agent_sessions.market_of_strategy`, `adapters/retry.resend_while_busy`
-and `Backoff` for the Telegram bot, the database writer's outage, startup reads and a refused Polymarket
+and `Backoff` (both on tenacity since 2026-11-01: `adapters/backoff.py`) for the Telegram bot, the database writer's outage, startup reads and a refused Polymarket
 subscription. Characterization tests (`tests/domain/test_bracket_net.py`, `test_fmt.py`, `test_timestamps.py`) keep
 verbatim copies of the old code and prove which figures changed and why.
 

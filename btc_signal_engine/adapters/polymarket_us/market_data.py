@@ -47,7 +47,7 @@ trading service watches, puts each new market on a connection with room (opening
 markets no longer wanted (the next window was subscribed a whole window ahead, so a roll never leaves a gap), and
 closes a connection once it carries nothing. Each connection reconnects on its own with exponential backoff (1 s
 doubling to 30 s, full jitter so the pool's sockets never reconnect in lockstep, reset after a minute connected;
-adapters/retry.py) and only its own markets go stale meanwhile.
+tenacity, adapters/backoff.py) and only its own markets go stale meanwhile.
 
 A refused subscription is never left looking live: a server error naming one of our request ids marks that market
 unsubscribed on its connection (quote None, trades_since None, listed under health()["unsubscribed"]), its other
@@ -69,7 +69,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from btc_signal_engine.adapters.polymarket_us.markets import current_slugs, is_series, num, window_of
-from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.adapters.backoff import failure, jittered, reconnecting, start_over, wait_at
 from btc_signal_engine.domain.timestamps import iso_to_ms_or_none
 from btc_signal_engine.domain.book_freshness import (CONN_LIVE_MS, QUIET_MAX_MS,  # noqa: F401 - TRADE_GRACE_MS: re-exported
                                                     TRADE_GRACE_MS, unservable_reason)
@@ -508,7 +508,7 @@ class PolymarketMarketStream:
         self._extra: dict[str, set[str]] = {}
         self._conns: dict[str, _Conn] = {}
         self._tasks: set[asyncio.Task] = set()
-        self._retry: dict[str, tuple[int, Backoff]] = {}  # market -> (not before local ms, its backoff)
+        self._retry: dict[str, tuple[int, int]] = {}  # market -> (not before local ms, refusals so far)
         self._closed = False
         self._cid = 0
         self._n = 0
@@ -596,27 +596,30 @@ class PolymarketMarketStream:
 
     # -- one connection ------------------------------------------------------------------------------
     async def _run_conn(self, c: _Conn) -> None:
-        backoff = Backoff(*self._backoff)
+        """One pool socket, reconnected (tenacity, adapters/backoff.py) until it or the pool closes."""
+        def stopped(state: Any) -> None:  # the error text never carries key material
+            c.reconnects += 1
+            self.reconnects += 1
+            exc = failure(state)
+            if exc is not None:
+                log.warning("polymarket markets websocket %s stopped (%s: %s); reconnecting in %.0f s",
+                            c.id, type(exc).__name__, str(exc)[:120], state.upcoming_sleep)
+
         try:
-            while not (self._closed or c.closing):
-                started = self._clock()
-                try:
-                    await self._conn_once(c)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # reconnect after any failure; the error text never carries key material
-                    log.warning("polymarket markets websocket %s stopped (%s: %s); reconnecting within %.0f s",
-                                c.id, type(exc).__name__, str(exc)[:120], backoff.ceiling)
-                    # A socket that never opened is registered only now (down): opening a new pool socket does not
-                    # flag the whole feed stale while it connects, but one that fails does.
-                    self.cache.set_connected(False, c.id)
-                if self._closed or c.closing:
-                    break
-                c.reconnects += 1
-                self.reconnects += 1
-                if self._clock() - started > 60_000:
-                    backoff.reset()
-                await self._sleep(backoff.next())
+            async for attempt in reconnecting(jittered(*self._backoff), closed=lambda: self._closed or c.closing,
+                                              sleep=self._sleep, before_sleep=stopped):
+                with attempt:
+                    started = self._clock()
+                    try:
+                        await self._conn_once(c)
+                    except Exception:  # reconnect after any failure
+                        # A socket that never opened is registered only now (down): opening a new pool socket does
+                        # not flag the whole feed stale while it connects, but one that fails does.
+                        self.cache.set_connected(False, c.id)
+                        raise
+                    finally:
+                        if self._clock() - started > 60_000:
+                            start_over(attempt)
         finally:
             self.cache.drop_conn(c.id)
 
@@ -732,9 +735,9 @@ class PolymarketMarketStream:
         c.unsub.extend(r for r in rids if r != refused_rid)
         c.target.discard(slug)
         self.cache.mark_unsubscribed(slug, c.id)
-        backoff = self._retry[slug][1] if slug in self._retry else Backoff(*self._backoff)
-        delay = backoff.next()  # full jitter, doubling per refusal (adapters/retry.py)
-        self._retry[slug] = (self._clock() + int(delay * 1000), backoff)
+        refusals = self._retry[slug][1] + 1 if slug in self._retry else 1
+        delay = wait_at(jittered(*self._backoff), refusals)  # full jitter, doubling per refusal (adapters/backoff.py)
+        self._retry[slug] = (self._clock() + int(delay * 1000), refusals)
         self.refused += 1
         log.warning("polymarket markets websocket %s: subscription for %s refused (%s); marked unsubscribed (no "
                     "quote), retrying in %.0f s", c.id, slug, why, delay)

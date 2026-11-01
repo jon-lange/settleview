@@ -23,7 +23,7 @@ import httpx
 from btc_signal_engine.adapters.kalshi.auth import KalshiAuth, load_private_key
 from btc_signal_engine.adapters.kalshi.backend import Backend, HttpxBackend, SdkBackend
 from btc_signal_engine.domain.timestamps import iso_to_ms
-from btc_signal_engine.adapters.retry import resend_while_busy
+from btc_signal_engine.adapters.backoff import resend_while_busy
 
 log = logging.getLogger(__name__)
 

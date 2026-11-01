@@ -50,7 +50,7 @@ from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, Opera
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from btc_signal_engine.adapters import telemetry
-from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.adapters.backoff import jittered, wait_at
 from btc_signal_engine.adapters.sqlite.store import SqliteStore
 from btc_signal_engine.domain.models.events import BookSecond, IndexSecond, Trade
 
@@ -316,18 +316,18 @@ class BufferedStore:
         writes; `beat`
         (the supervisor's heartbeat) is called after every flush. On cancellation, at most the in-flight batch is
         lost."""
-        outage = Backoff(self._interval, max(self._interval, MAX_BACKOFF_S))  # full jitter (adapters/retry.py)
-        delay = self._interval
+        outage = jittered(self._interval, max(self._interval, MAX_BACKOFF_S))  # full jitter (adapters/backoff.py)
+        delay, failed_flushes = self._interval, 0
         while not self._closed:
             await asyncio.sleep(delay)
             await self.flush()
             if beat is not None:
                 beat()
             if self._outage_since is None:
-                outage.reset()
-                delay = self._interval
+                delay, failed_flushes = self._interval, 0
             else:
-                delay = outage.next()
+                failed_flushes += 1
+                delay = wait_at(outage, failed_flushes)
 
     def close(self) -> None:
         self._closed = True

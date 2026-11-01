@@ -9,7 +9,6 @@ from pathlib import Path
 import httpx
 
 from btc_signal_engine.adapters.kalshi.backfill import backfill_kalshi
-from btc_signal_engine.adapters import retry
 from btc_signal_engine.adapters.kalshi.client import KalshiClient
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -61,8 +60,7 @@ def test_settled_page_stores_strike_expiration_and_result_for_each_finalized_mar
     assert len(store.select("kalshi_markets")) == 3
 
 
-def test_kalshi_429_and_5xx_back_off_and_retry_the_same_page(store, monkeypatch):
-    monkeypatch.setattr(retry, "_uniform", lambda: 1.0)  # the top of the jitter: the full 1 s first backoff
+def test_kalshi_429_and_5xx_back_off_and_retry_the_same_page(store, jitter_top):  # the full 1 s first backoff
     for status in (429, 503):
         handler, requests = _paged(fail_first=status)
         sleeps: list[float] = []
@@ -72,8 +70,7 @@ def test_kalshi_429_and_5xx_back_off_and_retry_the_same_page(store, monkeypatch)
         assert len(store.select("kalshi_markets")) == 3
 
 
-def test_a_kalshi_429_waits_at_least_its_retry_after(store, monkeypatch):
-    monkeypatch.setattr(retry, "_uniform", lambda: 0.0)  # no jitter on top: the wait is the venue's own
+def test_a_kalshi_429_waits_at_least_its_retry_after(store, jitter_bottom):  # no jitter on top: the venue's own
     handler, requests = _paged(fail_first=429, headers={"Retry-After": "7"})
     sleeps: list[float] = []
     asyncio.run(backfill_kalshi(store, _client(handler, sleeps)))

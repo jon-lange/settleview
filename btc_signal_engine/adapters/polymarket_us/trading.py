@@ -90,7 +90,7 @@ from polymarket_us import (APIConnectionError, APIStatusError, AuthenticationErr
 
 from btc_signal_engine.adapters.polymarket_us.markets import (LIVE_SPANS, is_series, num, result_reader, span_of,
                                                               window_of)
-from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
+from btc_signal_engine.adapters.backoff import header, rate_limit_pause, retry_after_s
 from btc_signal_engine.domain.order_resolution import TS_SLACK_MS, definitive_status
 from btc_signal_engine.domain.timestamps import iso_to_ms_or_none
 
@@ -356,7 +356,7 @@ class PolymarketTrading:
             return await fn(*a)
         except RateLimitError as exc:  # every caller pauses: the Retry-After (1 s without one) plus jitter
             wait = retry_after_s(header(getattr(getattr(exc, "response", None), "headers", None)))
-            self._limiter.backoff(retry_delay(0, status=429, retry_after=1.0 if wait is None else wait))
+            self._limiter.backoff(rate_limit_pause(wait))
             raise
 
     # -- orders -----------------------------------------------------------------------------------

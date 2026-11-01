@@ -18,7 +18,7 @@ polling stays the backup (TradingService re-polls on its own cadence and on ever
   polls on its fast cadence (TradingService). Entries never depend on this state: every ticket prices from the
   market data's own servable check. Any change emits a `health` event; every (re)connect emits `resync` so the
   service polls once for what it missed. Reconnects with exponential backoff (1 s doubling to 30 s, full jitter:
-  adapters/retry.py).
+  tenacity, adapters/backoff.py).
 * A refused private subscription is not a healthy feed (review fix plan 2026-10-31, B3#7). The server answers a
   refused subscribe asynchronously, with an error message naming our request id (`pmpriv<n>`; the SDK emits it as a
   `WebSocketError`, which alone is not a dead socket). Such a refusal ends the session (`PrivateSubscriptionRefused`)
@@ -38,7 +38,7 @@ from typing import Any
 from btc_signal_engine.adapters.polymarket_us.market_data import ws_error_is_fatal, PolymarketMarketData, PolymarketMarketStream
 from btc_signal_engine.adapters.polymarket_us.markets import is_series, num
 from btc_signal_engine.adapters.polymarket_us.trading import FILL_TYPES, PolymarketTrading, normalize_order
-from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.adapters.backoff import failure, jittered, reconnecting, start_over
 
 log = logging.getLogger(__name__)
 
@@ -214,25 +214,33 @@ class PolymarketTradingStream:
 
     # -- connection -----------------------------------------------------------------------------------
     async def run(self) -> None:
-        backoff = Backoff(*self._backoff)
-        while not self._closed:
-            started = self._clock()
-            try:
-                await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except PrivateSubscriptionRefused as exc:
-                log.warning("polymarket private websocket: %s; reconnecting within %.0f s", exc, backoff.ceiling)
-            except Exception as exc:
-                log.warning("polymarket private websocket stopped (%s); reconnecting within %.0f s",
-                            type(exc).__name__, backoff.ceiling)
-            self._connected = False
-            self._health_changed()
-            if self._closed:
-                break
-            if self._clock() - started > 60_000:
-                backoff.reset()
-            await self._sleep(backoff.next())
+        """Reconnect forever (tenacity, adapters/backoff.py): full jitter, starting over after a minute connected."""
+        def stopped(state: Any) -> None:
+            exc = failure(state)
+            if isinstance(exc, PrivateSubscriptionRefused):
+                log.warning("polymarket private websocket: %s; reconnecting in %.0f s", exc, state.upcoming_sleep)
+            else:
+                log.warning("polymarket private websocket stopped (%s); reconnecting in %.0f s",
+                            type(exc).__name__ if exc is not None else "closed", state.upcoming_sleep)
+
+        async for attempt in reconnecting(jittered(*self._backoff), closed=lambda: self._closed, sleep=self._sleep,
+                                          before_sleep=stopped):
+            with attempt:
+                started = self._clock()
+                try:
+                    await self.run_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self._ended(attempt, started)
+                    raise
+                self._ended(attempt, started)
+
+    def _ended(self, attempt: Any, started: int) -> None:
+        self._connected = False
+        self._health_changed()
+        if self._clock() - started > 60_000:
+            start_over(attempt)  # it ran a while: start the backoff over
 
     async def run_once(self) -> None:
         ws = self._factory()

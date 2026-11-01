@@ -74,9 +74,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
+from tenacity import (AsyncRetrying, RetryCallState, retry_if_exception_type, retry_if_result,
+                      stop_after_attempt)
 
 from btc_signal_engine.adapters.kalshi.auth import KalshiSigner, PrivateKey, now_ms
-from btc_signal_engine.adapters.retry import header, retry_after_s, retry_delay
+from btc_signal_engine.adapters.backoff import busy, failure, last_response, wait_venue
 from btc_signal_engine.domain.markets import PERP_ENVS, PERPS, PerpSpec, allowed_perp_tickers
 from btc_signal_engine.domain.order_resolution import definitive_status
 from btc_signal_engine.domain.timestamps import iso_to_ms
@@ -364,30 +366,39 @@ class MarginClient:
     # -- transport ---------------------------------------------------------------------------------------------------
     async def _send(self, method: str, path: str, *, params: dict | None = None,
                     body: dict | None = None) -> httpx.Response:
-        """One request, retried on a transport error, 429 or 5xx with the SAME body (the only retry anywhere). Returns
-        a 2xx or 4xx response; a 3xx (not followed) or exhausted retries raise MarginUnknown."""
+        """One request, retried on a transport error, 429 or 5xx with the SAME body (the only retry anywhere), at most
+        _RETRY sends, waiting `wait_venue` (full jitter; a 429 at least its Retry-After). Returns a 2xx or 4xx
+        response; a 3xx (not followed) or exhausted retries raise MarginUnknown."""
         q = {k: v for k, v in (params or {}).items() if v is not None}
-        status, text = 0, ""
-        for attempt in range(_RETRY):
-            try:
-                resp = await self._http.request(method, path, params=q or None, json=body)
-            except httpx.TransportError as exc:  # may have reached Kalshi: same body again, never a second write
-                status, text = 0, f"{type(exc).__name__}: {exc}"
-                log.warning("margin %s %s transport error (%s); retry %d", method, path, text[:200], attempt + 1)
-                if attempt + 1 < _RETRY:
-                    await self._sleep(retry_delay(attempt))
-                continue
+
+        async def send() -> httpx.Response:
+            resp = await self._http.request(method, path, params=q or None, json=body)
             if 300 <= resp.status_code < 400:  # not followed; where it went is unknown, so not definitive
                 raise MarginUnknown(resp.status_code, resp.text)
-            if resp.status_code == 429 or resp.status_code >= 500:  # full jitter; a 429 honours its Retry-After
-                status, text = resp.status_code, resp.text
-                wait = retry_delay(attempt, status=status, retry_after=retry_after_s(header(resp.headers)))
-                log.warning("margin %s %s HTTP %d; retry %d in %.2f s", method, path, status, attempt + 1, wait)
-                if attempt + 1 < _RETRY:
-                    await self._sleep(wait)
-                continue
             return resp
-        raise MarginUnknown(status, text or "request failed")
+
+        def last(state: RetryCallState) -> tuple[int, str]:
+            exc = failure(state)  # a transport error: it may have reached Kalshi; same body again, never a 2nd write
+            return (0, f"{type(exc).__name__}: {exc}") if exc is not None else (
+                last_response(state).status_code, last_response(state).text)
+
+        def note(state: RetryCallState) -> None:
+            status, text = last(state)
+            what = f"HTTP {status}" if status else f"transport error ({text[:200]})"
+            log.warning("margin %s %s %s; retry %d in %.2f s", method, path, what, state.attempt_number,
+                        state.upcoming_sleep)
+
+        def give_up(state: RetryCallState) -> Any:
+            status, text = last(state)
+            log.warning("margin %s %s %s; giving up after %d sends", method, path,
+                        f"HTTP {status}" if status else f"transport error ({text[:200]})", state.attempt_number)
+            raise MarginUnknown(status, text or "request failed")
+
+        return await AsyncRetrying(
+            stop=stop_after_attempt(_RETRY), wait=wait_venue(), sleep=self._sleep,
+            retry=retry_if_exception_type(httpx.TransportError) | retry_if_result(busy),
+            before_sleep=note, retry_error_callback=give_up,
+        )(send)
 
     async def _json(self, method: str, path: str, **kw: Any) -> Any:
         resp = await self._send(method, path, **kw)

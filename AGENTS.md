@@ -154,7 +154,7 @@ git-ignored).
   hosts (https, default port), checked in httpx's `auth_flow` and the SDK's auth hook alike. Never sign by hand.
 - **One rule per figure:** a bracket's net and stop (`domain/brackets.py`), money/cents/side text (`domain/fmt.py`;
   the browser's `fmt.*` in `web/app.js`), venue date-times (`domain/timestamps.py`), a stored setting
-  (`application/settings_store.py`) and retry waits (`adapters/retry.py`) each have one function; use it.
+  (`application/settings_store.py`) and retry waits (tenacity, configured in `adapters/backoff.py`) each have one function; use it.
 
 ## Running experiments
 

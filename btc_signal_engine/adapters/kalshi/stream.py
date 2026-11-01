@@ -58,7 +58,7 @@ from typing import Any
 
 from btc_signal_engine.adapters.kalshi.auth import KalshiSigner, PrivateKey, load_private_key, now_ms
 from btc_signal_engine.adapters.kalshi.trading import TradingAuth, TradingViolation, normalize_order
-from btc_signal_engine.adapters.retry import Backoff
+from btc_signal_engine.adapters.backoff import failure, jittered, reconnecting, start_over
 
 log = logging.getLogger(__name__)
 
@@ -445,21 +445,21 @@ class KalshiStream:
                 await ws.close()
 
     async def run(self) -> None:
-        backoff = Backoff(self._backoff0, self._backoff_max)  # full jitter: streams never reconnect in lockstep
-        while not self._closed:
-            started = self._clock()
-            try:
-                await self._session()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # never log headers or key material
-                log.warning("kalshi %s stream dropped (%s); reconnecting within %.1fs", self.env,
-                            type(exc).__name__, backoff.ceiling)
-            if self._closed:
-                break
-            if self._clock() - started > 60_000:
-                backoff.reset()  # it ran a while: start the backoff over
-            await self._sleep(backoff.next())
+        """Reconnect forever (tenacity, adapters/backoff.py): full jitter, so streams never reconnect in lockstep."""
+        def dropped(state: Any) -> None:  # never log headers or key material
+            exc = failure(state)
+            log.warning("kalshi %s stream %s; reconnecting in %.1fs", self.env,
+                        f"dropped ({type(exc).__name__})" if exc is not None else "ended", state.upcoming_sleep)
+
+        async for attempt in reconnecting(jittered(self._backoff0, self._backoff_max), closed=lambda: self._closed,
+                                          sleep=self._sleep, before_sleep=dropped):
+            with attempt:
+                started = self._clock()
+                try:
+                    await self._session()
+                finally:
+                    if self._clock() - started > 60_000:
+                        start_over(attempt)  # it ran a while: start the backoff over
 
 
 def market_stream_from_settings(key_id: str | None, key_path: str | Path | None, on_event: Emit, *,

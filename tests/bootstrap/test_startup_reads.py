@@ -12,7 +12,6 @@ import logging
 import pytest
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from btc_signal_engine.adapters import retry
 from btc_signal_engine.bootstrap import app as app_mod
 from btc_signal_engine.bootstrap.app import Runtime, startup_read
 from btc_signal_engine.bootstrap.config import Settings
@@ -33,14 +32,14 @@ def logs(monkeypatch, caplog):
 
 
 @pytest.fixture
-def waits(monkeypatch):
+def waits(monkeypatch, jitter_top):
     slept: list[float] = []
 
     async def fake_sleep(s):
         slept.append(s)
 
     monkeypatch.setattr(app_mod.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(retry, "_uniform", lambda: 1.0)  # the top of each jittered draw: the doubling ceilings
+    # jitter_top: every jittered draw at the top of its window, the doubling ceilings
     return slept
 
 

@@ -144,3 +144,29 @@ def fast_pin_hash(monkeypatch):
     the slowest in the suite. Tests hash with 1,000 iterations; tests/api/test_access.py pins the production value."""
     from btc_signal_engine.adapters.http import access
     monkeypatch.setattr(access, "PBKDF2_ITERATIONS", 1_000)  # gitleaks:allow - a constant's name, not a secret
+
+
+def _pin_jitter(monkeypatch, at: str) -> None:
+    """Make tenacity's jittered waits exact by replacing the waits themselves (tenacity's waits are strategy objects;
+    replacing the strategy is its way to make a test deterministic): every draw at the top of its window (the
+    exponential ceiling, `wait_exponential`'s own value) or at the bottom (0, or a Retry-After floor alone)."""
+    import tenacity
+
+    if at == "top":
+        monkeypatch.setattr(tenacity.wait_random_exponential, "__call__", tenacity.wait_exponential.__call__)
+        monkeypatch.setattr(tenacity.wait_random, "__call__", lambda self, _state: self.wait_random_max)
+    else:
+        monkeypatch.setattr(tenacity.wait_random_exponential, "__call__", lambda self, _state: self.min)
+        monkeypatch.setattr(tenacity.wait_random, "__call__", lambda self, _state: self.wait_random_min)
+
+
+@pytest.fixture
+def jitter_top(monkeypatch):
+    """Every backoff wait at the top of its full-jitter window: the doubling ceilings themselves (1, 2, 4 ... s)."""
+    _pin_jitter(monkeypatch, "top")
+
+
+@pytest.fixture
+def jitter_bottom(monkeypatch):
+    """Every backoff wait at the bottom of its window: 0, and a 429 waits exactly its Retry-After."""
+    _pin_jitter(monkeypatch, "bottom")

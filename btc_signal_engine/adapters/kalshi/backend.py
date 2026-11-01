@@ -94,7 +94,7 @@ class Reply:
     def __init__(self, status_code: int, content: bytes, headers: Any = None) -> None:
         self.status_code = status_code
         self.content = content
-        try:  # e.g. a 429's Retry-After (adapters/retry.py); never an error of its own
+        try:  # e.g. a 429's Retry-After (adapters/backoff.py); never an error of its own
             self.headers = {str(k): str(v) for k, v in dict(headers or {}).items()}
         except (TypeError, ValueError):
             self.headers = {}

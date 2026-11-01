@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from btc_signal_engine.adapters import retry
 from btc_signal_engine.adapters.kalshi.margin_stream import MARGIN_WS_PATH, MARGIN_WS_URLS, MarginStream
 from btc_signal_engine.domain.markets import perp
 
@@ -37,10 +36,9 @@ ALL_ACKS = acks("orderbook_delta", "ticker", "trade", "fill", "user_orders")
 
 
 @pytest.fixture(autouse=True)
-def top_of_the_jitter(monkeypatch):
-    """Reconnect waits are full-jitter draws (adapters/retry.py); at the top of each draw they are the backoff
-    ceilings themselves (1, 2, 4 ... 30 s), which these tests check exactly."""
-    monkeypatch.setattr(retry, "_uniform", lambda: 1.0)
+def top_of_the_jitter(jitter_top):
+    """Reconnect waits are full-jitter draws (tenacity, adapters/backoff.py); at the top of each draw they are the
+    backoff ceilings themselves (1, 2, 4 ... 30 s), which these tests check exactly."""
 
 
 class FakeWS:
