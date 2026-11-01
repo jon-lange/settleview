@@ -189,6 +189,7 @@ reads; spec `perps_openapi.yaml` / `perps_asyncapi.yaml` from docs.kalshi.com. E
 
 ## Process lessons
 
+- **Postgres CI failures that SQLite passes (2026-11-01):** (1) the perps View "under 5 ms" was a real hot-path cost. It ran 4 selects per call (one `trading_brackets` read per event-contract env). That was 0.65 ms on SQLite and 2.7 ms on local Postgres, and 5.8 ms on CI. It is now 2 selects (about 2.1 ms on local Postgres), with the same figures, still read fresh. (2) A "book feed broken" test that served a quote was a test race: it waited on a condition that the capture's 12th of 57 messages already met. The freshness rule itself was correct. docs/solutions/2026-11-01-perps-view-round-trips-on-postgres.md, docs/solutions/2026-11-01-wait-for-the-message-under-test.md.
 - **Internet outage at the host = unprotected positions** (2026-10-29 10:26–10:29 CT, DNS failures): every feed dropped; BTC crossed a live Polymarket PNW stop at 10:29:19 while offline, the stop correctly refused to act on a stale index, and the $1 trade settled at −$0.70 instead of roughly −$0.25. Feeds reconnected on their own. Same root cause class as the overnight reboot: all protection lives on one machine (an always-on host would remove both).
 - **Same signal, different fills across venues:** at 10:22:49 PNW fired on both; Kalshi's ask moved 65→67c before the order and the 1c entry slack refused it, Polymarket filled at 68c. Track fill-vs-refusal per venue.
 
