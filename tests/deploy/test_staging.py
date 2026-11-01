@@ -218,3 +218,11 @@ def test_the_smoke_finds_otlp_export_errors():
                      "code: 401, reason: Unauthorized")
     assert rx.search("WARNING Transient error ConnectError encountered while exporting metrics batch, retrying in 1s")
     assert not rx.search("INFO btc_signal_engine telemetry: exporting traces, metrics and logs to OTLP")
+
+
+def test_staging_s_sidecar_network_does_not_overlap_production_s(tmp_path):
+    # compose.yaml fixes the Tailscale edge network's subnet; staging runs beside production during every deploy.
+    cfg = _staging_config(tmp_path)
+    subnets = {c["subnet"] for c in cfg["networks"]["tailscale-edge"]["ipam"]["config"]}
+    assert subnets and not subnets & {"10.89.250.0/29"}
+    assert "10.89.250.0/29" in (ROOT / "compose.yaml").read_text(encoding="utf-8")

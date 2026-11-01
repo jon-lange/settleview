@@ -119,3 +119,15 @@ secrets:
     file: ./deploy/staging/secrets/trading_demo_key_id
   trading_prod_key_id:
     file: ./deploy/staging/secrets/trading_prod_key_id
+  ts_authkey:  # the Tailscale sidecar's (profile tailscale): never started in staging
+    file: ./deploy/staging/secrets/ts_authkey
+
+# The app's network to the Tailscale sidecar has a fixed subnet in compose.yaml; two projects on one host cannot both
+# own it, so staging's is the next one (production and staging run side by side during a deploy).
+networks:
+  tailscale-edge:
+    ipam: !override
+      config:
+        - subnet: 10.89.251.0/29
+          ip_range: 10.89.251.4/30
+          gateway: 10.89.251.1
