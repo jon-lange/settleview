@@ -60,6 +60,7 @@
     root.appendChild(wrap);
 
     var cards = {}, skew = 0, busy = {}, alive = true, seen = {}, msgT = null, pollT = null, tickT = null;
+    var asked = 0, applied = 0;  // read numbers: a read answered after a newer one was shown is dropped
 
     function say(text, cls) {
       status.textContent = text || '';
@@ -140,10 +141,13 @@
 
     function load() {
       if (!alive) return Promise.resolve();
-      var sid = sessionOf();
-      if (!sid) { show([]); return Promise.resolve(); }
+      var sid = sessionOf(), n = ++asked;
+      if (!sid) { applied = n; show([]); return Promise.resolve(); }
+      // reads overlap (mount, every proposal event, the poll); an older one that answers last would drop a newer
+      // proposal's card until the next poll, so only a read newer than the one shown is applied
       return api.get('/api/agent/proposals', { session_id: sid }).then(function (r) {
-        if (!alive || sid !== sessionOf()) return;
+        if (!alive || sid !== sessionOf() || n < applied) return;
+        applied = n;
         if (r && r.code === 'assist_unavailable') { clearInterval(pollT); return; }  // this app has no Assist: quiet
         if (!r || !r.ok) { say((r && r.reason) || 'Proposals could not be read.', 'pc-bad'); return; }
         if (ok(r.server_ms)) skew = r.server_ms - Date.now();

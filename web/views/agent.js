@@ -924,7 +924,7 @@
       // presets (GET/POST /api/agent/presets, DELETE /api/agent/presets/{name}); avail null = not read yet, false = 404
       presets: [], presetsAvail: null, presetsErr: '', presetName: '', presetBusy: false, presetMsg: '', presetMsgCls: '',
       // Telegram (GET /api/telegram/status, POST pair / unpair / alerts); avail false = 404
-      tg: null, tgAvail: null, tgErr: '', tgCode: null, tgBusy: false, tgMsg: '', tgMsgCls: '', tgNow: Date.now(), tgT: null,
+      tg: null, tgAvail: null, tgErr: '', tgCode: null, tgBusy: false, tgSeq: 0, tgMsg: '', tgMsgCls: '', tgNow: Date.now(), tgT: null,
       alerts: ALERTS,
 
       init: function () {
@@ -1388,6 +1388,8 @@
       fillFromRun: function (sid, from, who) {
         var self = this;
         return api.get('/api/agent/sessions/' + encodeURIComponent(sid)).then(function (r) {
+          // the prefill is only until the user edits the form: a read that lands after their first pick is dropped
+          if (from === 'last' && self.touched) return;
           var s = r && r.session;
           if (!s) { self.launchMsg = 'That run could not be read.'; return; }
           var lim = s.limits || {};
@@ -1729,12 +1731,16 @@
       },
 
       // ----- Telegram (alerts to your phone; pairing and alert changes on the PC only) -----
+      // a status read applies only if no newer read or change started since it was sent (tgSeq): a slow poll that
+      // landed after a change would put the old settings back on screen (and into the next change's value)
       loadTg: function () {
-        var self = this;
+        var self = this, n = ++self.tgSeq;
         return api.get('/api/telegram/status').then(function (r) {
+          if (n !== self.tgSeq) return;
           self.tgAvail = true; self.tgErr = ''; self.tg = r;
           if (r && r.paired) self.tgCode = null;
         }, function (e) {
+          if (n !== self.tgSeq) return;
           if (e && e.status === 404) { self.tgAvail = false; self.tg = null; return; }
           self.tgErr = errText(e);
         });
@@ -1750,7 +1756,7 @@
       tgPair: function () {
         var self = this;
         if (self.tgBusy || self.phone()) return;
-        self.tgBusy = true; self.tgMsg = '';
+        self.tgBusy = true; self.tgMsg = ''; self.tgSeq++;
         api.post('/api/telegram/pair').then(function (r) {
           if (r && r.code) {
             self.tgCode = { code: r.code, expires_ts: r.expires_ts };
@@ -1780,7 +1786,7 @@
       tgUnpair: function () {
         var self = this;
         if (self.tgBusy || self.phone()) return;
-        self.tgBusy = true; self.tgMsg = '';
+        self.tgBusy = true; self.tgMsg = ''; self.tgSeq++;
         api.post('/api/telegram/unpair').then(function (r) {
           if (r && r.ok === false) { self.tgMsg = refusal(r); self.tgMsgCls = 'red'; }
           else { self.tgMsg = 'Unpaired.'; self.tgMsgCls = ''; self.tgCode = null; }
@@ -1791,7 +1797,7 @@
       tgSetDaily: function (v) {
         var self = this;
         if (self.tgBusy || self.phone() || !/^([01]\d|2[0-3]):[0-5]\d$/.test(v || '')) return;
-        self.tgBusy = true; self.tgMsg = '';
+        self.tgBusy = true; self.tgMsg = ''; self.tgSeq++;
         api.post('/api/telegram/alerts', { daily_at: v }).then(function (r) {
           if (r && r.ok === false) { self.tgMsg = refusal(r); self.tgMsgCls = 'red'; }
           else { self.tgMsg = 'Daily summary at ' + v + '.'; self.tgMsgCls = ''; }
@@ -1801,7 +1807,7 @@
         var self = this, body = {};
         if (self.tgBusy || self.phone()) return;
         body[kind] = !!on;
-        self.tgBusy = true; self.tgMsg = '';
+        self.tgBusy = true; self.tgMsg = ''; self.tgSeq++;
         api.post('/api/telegram/alerts', body).then(function (r) {
           if (r && r.ok === false) { self.tgMsg = refusal(r); self.tgMsgCls = 'red'; }
         }, function (e) { self.tgMsg = 'Not changed: ' + errText(e); self.tgMsgCls = 'red'; })['finally'](function () { self.tgBusy = false; self.loadTg(); });
