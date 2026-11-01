@@ -3,7 +3,8 @@ computed exactly as the Telegram daily summary computes it (application/record_s
 
 GET /api/record/summary?range=today|week|all -> {ok, range, start_ms, now_ms, net, trades, wins,
     you {net, trades, wins}, agent {net, trades, wins}, api {usd, wakes, sessions}, by_rule [{rule, trades, wins, net}],
-    day_tz (the zone the days run in: domain/days.py, the app's TZ)}
+    by_agent [{agent_id, name, market, market_label, archived, runs, trades, wins, net, api_usd, net_after_api}] (best
+    net after API first), day_tz (the zone the days run in: domain/days.py, the app's TZ)}
 `range` is required: missing or unknown is 422 (never a default range)."""
 
 from __future__ import annotations

@@ -5,6 +5,10 @@ All notable user-visible changes to Settleview. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Fixed
+- Telegram: changing an alert or the daily summary's time no longer unmutes every muted agent. `/api/telegram/mute` answers `not_found` for any id while agent mode is off (there are no sessions to mute).
+- An agent session's journal no longer skips rows when more than a page arrived between reads: `GET /api/agent/sessions/{id}/journal?after_id=` (and `/decisions`, and the agents' `get_journal` tool) now answers the oldest rows after `after_id` with `more` and `next_after_id`; the Agents page and the live stream read on until caught up.
+- `GET /api/agent/proposals?session_id=` for an unknown session is 404 `not_found` (was an empty 200). Ask Settleview answers Kalshi 5m and 1h with `available: false` and a reason, as Play does (was 422).
+- Deleting a launch preset finds it by its name normalized as saving stores it (extra spaces no longer made it `not_found`).
 - Assist proposals: Approve is now press-and-hold, so a stray tap can't approve a real-money order. Hold the button (or hold Space or Enter) until it fills. Letting go early, sliding off or scrolling sends nothing. Screen readers and voice control confirm in two steps instead ("Confirm approve").
 - Polymarket US fees are documented as what the code and the production fills show: rounded to the nearest cent per order, not rounded up (2 contracts at 22¢ cost 2¢, not 3¢). Play's `stake.fee_rounding` for Polymarket is now `"nearest_cent"` (was `"cent"`).
 - docs/api.md and docs/api-agents.md document every route: Ask Settleview (copilot), Perps, Telegram, agent prompts, presets, proposals, status and scorecard. They also cover the response fields the web app reads and who may call each route. The stale "only client" text is gone.

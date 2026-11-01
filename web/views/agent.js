@@ -20,8 +20,8 @@
      (this slow client lost events: reconnect for a fresh snapshot). Liveness: some event arrives at least every 15 s
      (the heartbeat when nothing else happens, session or not); quiet past STALE_MS = lost, closed, reopened.
    - GET /api/agent/sessions/{id}/journal: on every (re)connect, the session's rows after the last one seen fill what
-     the stream missed (wake rows rebuild finished runs from their ordered text / tool `segments`; decision, note and
-     tool rows), deduplicated by run id / row id.
+     the stream missed, paged on from the last id while the answer says `more` (wake rows rebuild finished runs from
+     their ordered text / tool `segments`; decision, note and tool rows), deduplicated by run id / row id.
    - All activity spans every run of the agent: GET /api/agent/agents/{agent_id}/journal (newest first, paged back by
      before_id, filtered by kinds, with run dividers from `runs`); the fleet's audit is GET /api/agent/journal/all.
    The selected agent's stream stays open while the page is visible; it closes when the page is hidden. The feed is plain DOM built here (not Alpine): text deltas are queued and appended
@@ -584,6 +584,7 @@
             else if (row.kind === 'tool' && kind === 'external') extTool(sid, d, row.ts);
             else if (row.kind === 'state' && d.state === 'ended') self.endText = d.reason || '';
           });
+          if (r.more) self.fillJournal(sid);  // more rows after this page: read on from lastJid until caught up
         }, function (e) { self.streamNote = 'The journal could not be read: ' + errText(e); });
       },
       custom: function (name, v) {

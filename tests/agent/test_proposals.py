@@ -326,6 +326,16 @@ def test_routes_list_approve_and_skip_and_refuse_an_agent_token(store):
     assert client.post("/api/agent/proposals/approve", json={"id": "nope"}).json()["code"] == "not_found"
 
 
+def test_proposals_for_an_unknown_session_are_404_on_both_routes(store):
+    r = assist(store)
+    client, _ = routes(r)
+    for url in ("/api/agent/proposals?session_id=nope", "/api/agent/sessions/nope/proposals"):
+        res = client.get(url)
+        assert res.status_code == 404 and res.json()["code"] == "not_found", url
+    got = client.get("/api/agent/proposals", params={"session_id": r.ag.latest()["id"]}).json()
+    assert got["ok"] and got["pending"] == []
+
+
 def test_launch_route_requires_the_level(store):
     from tests.agent.test_routes import World, launch_body
     w = World(store)

@@ -98,9 +98,10 @@ signed-in phone.
 - `GET /api/copilot/now?venue=&span=&mode=quiet|full&warn=<keys>|none&stake=`: `venue`, `span` and `stake` as
   `/api/play/now`. `mode` is required (`off` is not accepted: Off means the screen does not ask). `warn` is required
   (1-200 characters): the warnings switched on, comma separated, from `against_btc`, `late`, `band_50_75`, or `none`.
-  An unknown key, a missing parameter or a pair with no market (Kalshi 5m or 1h) is 422; Polymarket 1h (a market with
-  no Play tab) answers `available: false`. Answer: `{mode, warnings_on,
-  market, available, window_end, ticker, lights, line: {none, UP, DOWN}, warnings: {UP, DOWN}, fill, hold, btc}`.
+  An unknown key or a missing parameter is 422. A pair this server has no Play tab for answers 200 `available: false`
+  with a `reason`, as `/api/play/now` does: Polymarket 1h (a market with no tab) and, since 2026-11-01, Kalshi 5m and
+  1h (no such market: `market` null; these were 422 before). Answer: `{mode, warnings_on, market, available, reason
+  (null while available), window_end, ticker, lights, line: {none, UP, DOWN}, warnings: {UP, DOWN}, fill, hold, btc}`.
   With `available: false` the rest is empty (`lights` [], the lines and warnings null). `lights` (full only): one per
   active rule that trades this market, `{rule, market, label, state: grey|amber|green, progress (0-1), side, ask,
   line, details, match, record, backtest, record_text, backtest_text}`. `line.none|UP|DOWN`: the one line for no side
@@ -344,7 +345,9 @@ uses them. The saved launch presets are agent routes (`docs/api-agents.md`, "Pre
 - `POST /api/telegram/unpair` (PC only, no body) → `{ok, was_paired}`.
 - `POST /api/telegram/alerts` (PC only) body `{<kind>: true|false, ..., daily_at?: "HH:MM"}` (at least one key) →
   `{ok, alerts, daily_at}`. An unknown kind is refused `unknown_alert` (never dropped); a non-boolean value, a
-  malformed `daily_at` (00:00-23:59) or an empty body is `invalid`.
+  malformed `daily_at` (00:00-23:59) or an empty body is `invalid`. A change keeps the muted agents (stored with the
+  alert choices; before 2026-11-01 any alert change unmuted them all).
 - `POST /api/telegram/mute` (PC and phone) body `{session_id, muted: true|false}` → `{ok, muted: [session ids]}`: that
   agent session's trade and activity alerts off or on (its pauses, end and proposals still come). `not_found` for an
-  unknown session (agent mode on), `invalid` for a missing session id or a non-boolean `muted`.
+  unknown session, and for any id while agent mode is off (there are no sessions); `invalid` for a missing session id
+  or a non-boolean `muted`.

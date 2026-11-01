@@ -27,8 +27,9 @@ def test_now_needs_mode_and_warnings_and_refuses_unknown_keys(store):
     for bad in ({"mode": "off", "warn": "none"}, {"mode": "full"}, {"warn": "none"}, {"mode": "full", "warn": "lucky"},
                 {"mode": "full", "warn": ""}, {"mode": "full", "warn": "late,"}):
         assert c.get("/api/copilot/now", params={"venue": "kalshi", "span": "15m", **bad}).status_code == 422, bad
-    assert c.get("/api/copilot/now", params={"venue": "kalshi", "span": "5m", "mode": "full",
-                                             "warn": "none"}).status_code == 422
+    for span in ("5m", "1h"):  # no Kalshi market for that span: 200 available false, as /api/play/now answers
+        r = c.get("/api/copilot/now", params={"venue": "kalshi", "span": span, "mode": "full", "warn": "none"})
+        assert r.status_code == 200 and r.json()["available"] is False and r.json()["reason"]
 
 
 def test_shown(store):

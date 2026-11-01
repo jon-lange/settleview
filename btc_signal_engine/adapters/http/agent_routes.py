@@ -11,7 +11,10 @@ sessions run at once, each names its session:
   GET  /api/agent/fleet           {ok, summary, overlaps, server_ms}
   GET  /api/agent/sessions/{id}   {ok, session (view), row, pending_proposals, positions, server_ms}
   POST /api/agent/sessions/{id}/stop | pause | resume {confirm?} | note {text} | rename {name}
-  GET  /api/agent/sessions/{id}/journal | decisions | proposals | stream (SSE: that session's events only)
+  GET  /api/agent/sessions/{id}/journal ?after_id=&limit= | decisions ?after_id= -> {ok, session_id, rows (oldest
+                                  first), more, next_after_id}: after_id 0 the newest rows; > 0 the oldest after it
+                                  (page on from next_after_id while more)
+  GET  /api/agent/sessions/{id}/proposals | stream (SSE: that session's events only)
   POST /api/agent/stop_all        {} -> {ok, stopped: [{id, name, ok, code, reason}]}: PC or phone
   GET  /api/agent/global_limits   POST (PC only) {max_loss_day?, api_day?: dollars or null} (KD3)
   GET  /api/agent/agents          ?archived= -> {ok, agents: [{id, name, market, ..., runs, last_run, net}]} (L0)
@@ -24,12 +27,13 @@ The single-session wrappers (POST stop / resume / note, GET journal / decisions 
 stream, status's `session`, prompts' `session_versions`) were removed with the fleet UI (2026-10-31): every call
 names its session.
 
-  GET  /api/agent/status          availability (in-app: no key / key invalid at the last check), models and rates,
-                                  venues {key: {label, strategy, mode, rules, also_traded_by, next_agent}}, the entry rules [{id, markets,
+  GET  /api/agent/status          {ok, in_app {available, reason} (no key / key invalid at the last check), external
+                                  {available}, key (its view: never the key), models [{id, usd_per_mtok}], venues {key:
+                                  {label, strategy, mode, rules, also_traded_by, next_agent}}, rules [{id, markets,
                                   market_labels, label, description, status {status, reason, at, by, since}}],
-                                  live_count, prompt versions, the shared daily
-                                  total, settle_warnings (positions settling > 60 min after the close: "check
-                                  the venue"), server_ms (the server's clock)
+                                  allow_production, live_count, prompts (current versions), daily (the shared daily
+                                  total), global_limits {limits, used}, wake_cap, settle_warnings (positions settling
+                                  > 60 min after the close: "check the venue"), server_ms (the server's clock)}
   POST /api/agent/launch          {kind, market (one key; or DEPRECATED venues: [one key]), name?, budget, per_trade, minutes | ends_ts (exactly one), spend_cap?,
                                   model?, sell_on_stop?, rules? (rule ids; default none),
                                   one_bet_per_window? (default true), level ("auto" | "assist", required: missing
@@ -40,7 +44,7 @@ names its session.
   GET  /api/agent/scorecard       the rule scorekeeper (rule_scores.scorecard): per rule and per (rule, market) the
                                   status, the live tally, the 30-trade bar and the backtest reference; `agents`: per
                                   session (by agent) its tally, API spend and net after API
-  POST /api/agent/rules/status    {rule, status: "retired" | "active", reason?, confirm?} (PC only) -> {ok, rule};
+  POST /api/agent/rules/status    {rule, status: "retired" | "active", reason?, confirm?} (PC only) -> {ok, changed, rule};
                                   reactivating needs confirm "REACTIVATE <rule>"; journaled into every live session arming it
                                   and sent as CUSTOM "rule_status"
   GET  /api/agent/prompts         both layers (current text and version) + history
@@ -48,8 +52,9 @@ names its session.
   POST /api/agent/prompts/save    {layer, text}      (PC only) -> {ok, changed, prompt}
   POST /api/agent/prompts/restore {layer, version}   (PC only)
   POST /api/agent/prompts/reset   {layer}            (PC only)
-  GET  /api/agent/proposals       ?session_id= -> {ok, session_id, pending, recent, server_ms} (assist proposals;
-                                  without session_id: every live session's pending, recent []). A session's stream
+  GET  /api/agent/proposals       ?session_id= -> {ok, session_id, pending, recent, server_ms} (assist proposals; an
+                                  unknown session_id is 404 not_found; without session_id: every live session's
+                                  pending, recent []). A session's stream
                                   (/sessions/{id}/stream) carries CUSTOM "proposal_new" / "proposal_resolved"
   POST /api/agent/proposals/approve {id} -> the order's answer + {proposal}: the user only (PC or phone; a request
                                   carrying X-Agent-Token is refused 403 agent_cannot_approve); sent through the
@@ -474,13 +479,17 @@ def register_agent_routes(app: FastAPI, *, sessions: AgentSessions, tools: Any, 
                                     limit: int = Query(200, ge=1, le=500)):
         if sessions.row(sid) is None:
             return not_found(sid)
-        return {"ok": True, "session_id": sid, "rows": sessions.journal_rows(sid, after_id=after_id, limit=limit)}
+        rows, more = sessions.journal_after(sid, after_id=after_id, limit=limit)
+        return {"ok": True, "session_id": sid, "rows": rows, "more": more,
+                "next_after_id": rows[-1]["id"] if rows else after_id}
 
     @app.get("/api/agent/sessions/{sid}/decisions")
     async def agent_session_decisions(sid: str = Path(max_length=40), after_id: int = Query(0, ge=0)):
         if sessions.row(sid) is None:
             return not_found(sid)
-        return {"ok": True, "session_id": sid, "rows": tools.decisions(sid, after_id=after_id)}
+        rows, more = tools.decisions_after(sid, after_id=after_id)
+        return {"ok": True, "session_id": sid, "rows": rows, "more": more,
+                "next_after_id": rows[-1]["id"] if rows else after_id}
 
     @app.get("/api/agent/sessions/{sid}/proposals")
     async def agent_session_proposals(sid: str = Path(max_length=40)):
@@ -677,6 +686,8 @@ def register_agent_routes(app: FastAPI, *, sessions: AgentSessions, tools: Any, 
         if session_id is None:  # every live session's pending proposals (the fleet's cards answer any of them)
             pending = [p for s in sessions.live() for p in proposals.pending(s["id"])]
             return {"ok": True, "session_id": None, "pending": pending, "recent": [], "server_ms": now_fn()}
+        if sessions.row(session_id) is None:
+            return not_found(session_id)
         return {"ok": True, "session_id": session_id, "pending": proposals.pending(session_id),
                 "recent": proposals.recent(session_id), "server_ms": now_fn()}
 

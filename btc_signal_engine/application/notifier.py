@@ -542,7 +542,8 @@ class RemoteControl:
         flags = {k: v for k, v in changes.items() if k != DAILY_AT}
         at = changes.get(DAILY_AT, self.daily_at())
         value = {**self.alerts(), **flags}
-        self._put(ALERTS, {**value, DAILY_AT: at}, now)
+        stored = self._setting(ALERTS) or {}  # keep what else is stored with the choices (the muted list)
+        self._put(ALERTS, {**stored, **value, DAILY_AT: at}, now)
         if DAILY_AT in changes:
             self._daily_day = None  # a new time may still fall later today
         return {"ok": True, "alerts": value, DAILY_AT: at}
@@ -779,7 +780,7 @@ class RemoteControl:
             return {"ok": False, "code": "invalid", "reason": "Name the agent session to mute."}
         if not isinstance(on, bool):
             return {"ok": False, "code": "invalid", "reason": "muted must be true or false."}
-        if self.sessions is not None and self.sessions.row(session_id) is None:
+        if self.sessions is None or self.sessions.row(session_id) is None:  # agent mode off: no session to mute
             return {"ok": False, "code": "not_found", "reason": f"There is no agent session {session_id!r}."}
         cur = self.muted()
         cur = cur | {session_id} if on else cur - {session_id}

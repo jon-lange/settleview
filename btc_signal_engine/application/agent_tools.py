@@ -62,6 +62,7 @@ OBSERVE_SERIES_POINTS = 30
 NOTES_MAX = 6000
 JOURNAL_RESULT_MAX = 2000
 JOURNAL_ARG_MAX = 500
+DECISION_PAGE = 200  # decision rows per read (GET .../decisions, the stream's catch-up pages on by after_id)
 EPS = 1e-9
 PERPS_LATER = "Perps for agents come in a later step."
 
@@ -284,12 +285,16 @@ class AgentTools:
                                          limit=1)
         return rows[0]["data"]["text"] if rows else None
 
-    def decisions(self, session_id: str, after_id: int = 0, limit: int = 200) -> list[dict]:
-        """The session's decision rows (record_decision, or the runner's UNRECORDED), oldest first: the latest
-        `limit` with id > `after_id`, each {id, **data}."""
-        rows = self.sessions.repo.select(JOURNAL, {"session_id": session_id, "kind": "decision"},
-                                         filters=[("id", ">", after_id)], order_by=["-id"], limit=limit)
-        return [{"id": r["id"], **r["data"]} for r in reversed(rows)]
+    def decisions(self, session_id: str, after_id: int = 0, limit: int = DECISION_PAGE) -> list[dict]:
+        """The session's decision rows (record_decision, or the runner's UNRECORDED), oldest first, each {id, **data}
+        (see decisions_after)."""
+        return self.decisions_after(session_id, after_id, limit)[0]
+
+    def decisions_after(self, session_id: str, after_id: int = 0,
+                        limit: int = DECISION_PAGE) -> tuple[list[dict], bool]:
+        """(rows, more): `after_id` 0: the latest `limit`; > 0: the oldest `limit` after it, `more` = others remain."""
+        rows, more = self.sessions.journal_after(session_id, after_id=after_id, limit=limit, kind="decision")
+        return [{"id": r["id"], **r["data"]} for r in rows], more
 
     async def call(self, name: str, args: Any, now: int, *, session_id: str | None = None,
                    wake_id: int | None = None, by_rule: str | None = None) -> dict:
@@ -522,8 +527,10 @@ class AgentTools:
     async def get_journal(self, ctx: Ctx, args: dict, now: int) -> dict:
         if ctx.view is None:
             return {"ok": False, "code": "no_agent_session", "reason": "There is no session journal to read."}
-        rows = self.sessions.journal_rows(ctx.sid, after_id=args.get("after_id", 0), limit=args.get("limit", 50))
-        return {"ok": True, "rows": [{k: r[k] for k in ("id", "ts", "kind", "data")} for r in rows]}
+        after = args.get("after_id", 0)
+        rows, more = self.sessions.journal_after(ctx.sid, after_id=after, limit=args.get("limit", 50))
+        return {"ok": True, "rows": [{k: r[k] for k in ("id", "ts", "kind", "data")} for r in rows], "more": more,
+                "next_after_id": rows[-1]["id"] if rows else after}
 
     async def quote_entry(self, ctx: Ctx, args: dict, now: int) -> dict:
         key = args["market"]
@@ -720,7 +727,8 @@ TOOLS: tuple[Tool, ...] = (
     Tool("get_perps_record", "read", "Not available yet: perps for agents come in a later step. Takes no arguments.",
          _PERPS, AgentTools.perps_later),
     Tool("get_journal", "read", "This session's journal: past wakes, tool calls with their notes, notes and state "
-                                "changes, oldest first.",
+                                "changes, oldest first. No after_id: the latest `limit` rows. With after_id: the oldest "
+                                "`limit` rows after it; while `more` is true, call again with after_id = next_after_id.",
          _obj({"after_id": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1,
                                                                         "maximum": 200}}, []), AgentTools.get_journal),
     Tool("quote_entry", "read",

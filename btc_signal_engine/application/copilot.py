@@ -41,7 +41,7 @@ from btc_signal_engine.application.play import PlayService
 from btc_signal_engine.application.rule_scores import BACKTEST, RuleBook, tally
 from btc_signal_engine.application.setups import GREEN, STATES, lights as setup_lights
 from btc_signal_engine.application.your_record import BAND, BRACKETS, SHOWN, YourRecord, against
-from btc_signal_engine.domain.markets import by_venue_span
+from btc_signal_engine.domain.markets import MARKETS, UnknownMarket, by_venue_span, venue as venue_spec
 
 MODES = ("off", "quiet", "full")
 WARNINGS = {"against_btc": "Against BTC", "late": "Under 3 minutes left", "band_50_75": "50–75¢ favourites"}
@@ -211,13 +211,21 @@ class Copilot:
         if mode == "off":
             raise ValueError("Ask Settleview is off: nothing is computed")
         enabled = check_warnings(warnings)
-        market = by_venue_span(venue, span).key
+        venue_spec(venue)  # an unknown venue or span is an error, never a default
+        if span not in {m.span for m in MARKETS}:
+            raise UnknownMarket(f"unknown span {span!r}")
+        try:
+            market: str | None = by_venue_span(venue, span).key
+        except UnknownMarket:  # a real pair with no market (Kalshi 5m / 1h): unavailable, as Play answers it
+            market = None
         v = self.play.now_view(now, venue, span=span, stake=stake)
-        out = {"mode": mode, "warnings_on": sorted(enabled), "market": market, "available": bool(v.get("available")),
+        available = market is not None and bool(v.get("available"))
+        out = {"mode": mode, "warnings_on": sorted(enabled), "market": market, "available": available,
+               "reason": None if available else (v.get("reason") or f"{venue} has no {span} market here."),
                "window_end": (v.get("window") or {}).get("end"), "ticker": (v.get("window") or {}).get("ticker"),
                "lights": [], "line": {"none": None, "UP": None, "DOWN": None}, "warnings": {"UP": None, "DOWN": None},
                "fill": None, "hold": None, "btc": None}
-        if not v.get("available"):
+        if not available:
             return out
         b = v.get("btc") or {}
         out["btc"] = {"btc": b.get("btc"), "strike": b.get("strike"), "gap": b.get("gap"),

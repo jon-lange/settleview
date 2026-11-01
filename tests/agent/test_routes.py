@@ -220,6 +220,51 @@ def test_a_note_is_queued_then_marked_delivered_when_a_wake_takes_it(store):
     assert dec["ok"] and dec["rows"]  # the runner's UNRECORDED row: this wake did not call record_decision
 
 
+def test_journal_after_an_id_pages_oldest_first_and_says_when_more_remain(store):
+    w = World(store)
+    assert w.pc.post("/api/agent/launch", json=launch_body()).json()["ok"]
+    url = f"/api/agent/sessions/{SID}/journal"
+    first = w.r.ag.journal("note", {"text": "seen"}, NOW, session_id=SID)  # the last row a poller has
+    start = w.pc.get(url).json()
+    assert start["more"] is False and start["next_after_id"] == first == start["rows"][-1]["id"]
+    ids = [w.r.ag.journal("note", {"text": f"n{i}"}, NOW, session_id=SID) for i in range(5)]
+    seen, after, pages = [], first, 0
+    while True:  # what a poller does: page on from next_after_id while more
+        page = w.pc.get(url, params={"after_id": after, "limit": 2}).json()
+        seen += [r["id"] for r in page["rows"]]
+        after, pages = page["next_after_id"], pages + 1
+        if not page["more"]:
+            break
+    assert seen == ids and pages == 3  # the oldest first, none skipped (2 + 2 + 1)
+    tail = w.pc.get(url, params={"limit": 2}).json()  # no after_id: the newest rows, oldest first
+    assert [r["id"] for r in tail["rows"]] == ids[-2:] and tail["more"] is False
+    done = w.pc.get(url, params={"after_id": ids[-1]}).json()
+    assert done["rows"] == [] and done["more"] is False and done["next_after_id"] == ids[-1]
+    for i in range(3):
+        w.r.ag.journal("decision", {"action": "HOLD", "n": i}, NOW, session_id=SID)
+    rows, more = w.r.tools.decisions_after(SID, ids[-1], limit=2)
+    assert [r["n"] for r in rows] == [0, 1] and more is True
+    dec = w.pc.get(f"/api/agent/sessions/{SID}/decisions", params={"after_id": rows[-1]["id"]}).json()
+    assert [r["n"] for r in dec["rows"]] == [2] and dec["more"] is False
+
+
+def test_the_stream_sends_every_new_decision_however_many_came_at_once(store, monkeypatch):
+    import btc_signal_engine.adapters.http.agent_feed as agent_feed
+    w = World(store)
+    assert w.pc.post("/api/agent/launch", json=launch_body()).json()["ok"]
+    monkeypatch.setattr(agent_feed, "DECISION_PAGE", 2)
+    sent: list[dict] = []
+    feed = AgUiFeed(FeedHub(), lambda: {}, decisions_fn=lambda sid, after_id=0: w.r.tools.decisions(sid, after_id, 2),
+                    now_fn=lambda: NOW)
+    feed.custom = lambda name, v: sent.append(v)
+    w.r.ag.journal("decision", {"action": "HOLD", "n": 0}, NOW, session_id=SID)
+    feed.new_decisions(SID)
+    for i in range(1, 6):
+        w.r.ag.journal("decision", {"action": "HOLD", "n": i}, NOW, session_id=SID)
+    feed.new_decisions(SID)
+    assert [v["n"] for v in sent] == [0, 1, 2, 3, 4, 5]
+
+
 # -- tool endpoints (MCP) -----------------------------------------------------------------------------------------------
 def test_a_tool_call_without_a_live_sessions_token_is_403_and_prepares_nothing(store):
     w = World(store)

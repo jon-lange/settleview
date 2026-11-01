@@ -142,8 +142,8 @@ No persistent learning memory yet (plan L0's memory part comes later): just the 
 | `POST .../resume` (PC; phone types `{"confirm": "RESUME"}`) | `{confirm?}` | `{ok, session}`; `not_paused`, `cannot_resume` (kill switch, mode change, global limit), `confirm_required` |
 | `POST .../note` (PC and phone) | `{text}` (1-1000) | `{ok, note: {id, session_id, ts, text, by, state: "queued", delivered_ts}}` |
 | `POST .../rename` (PC and phone) | `{name}` | `{ok, session, agent}`: renames the session's agent; `invalid_name`, `name_taken`, `no_session` |
-| `GET .../journal?after_id=0&limit=200` (limit 1-500) | | `{ok, session_id, rows: [{id, session_id, ts, kind, data}]}`: the newest `limit` rows after `after_id`, oldest first |
-| `GET .../decisions?after_id=0` | | `{ok, session_id, rows}` |
+| `GET .../journal?after_id=0&limit=200` (limit 1-500) | | `{ok, session_id, rows: [{id, session_id, ts, kind, data}], more, next_after_id}`, rows oldest first. `after_id` 0 (or omitted): the newest `limit` rows (the tail; `more` false). `after_id` > 0: the OLDEST `limit` rows after it; `more` is true when rows after those remain: page on with `after_id = next_after_id` until `more` is false, so nothing is skipped however many rows came between polls. `next_after_id`: the last row's id (`after_id` when there are none) |
+| `GET .../decisions?after_id=0` | | `{ok, session_id, rows, more, next_after_id}`: the decision rows, paged as `journal` (200 a page) |
 | `GET .../proposals` | | `{ok, session_id, pending, recent, server_ms}` (see "Assist proposals"); `assist_unavailable` without assist |
 | `GET .../stream` | | SSE, AG-UI events of this session only (STATE_SNAPSHOT of `{session, positions, prompts, wakes}`, then deltas and events); `not_available` when this app has no per-session streams |
 
@@ -165,6 +165,10 @@ the PC or a person, whatever their address or headers. On the PC and phone liste
 | `GET /api/agent/tools` | | `{ok, tools: [{name, description, input_schema, kind: read / write / session}]}` (no data) |
 | `POST /api/agent/call/{tool}` | the tool's arguments (JSON object); `X-Agent-Token: <the token shown once at launch>` | the tool's answer. Every call, reads too, needs the token of a live external session: else 403 `no_agent_session` and nothing is read or prepared (the token is checked before the body is read). The agent actor (`agent:<8>`) is set only after the token checks out. |
 | `GET /api/agent/events/wait` | `?timeout_s<=25` | `not_available` (poll `observe` and `get_journal`) |
+
+The `get_journal` tool (`{after_id?, limit? 1-200, default 50}`) answers `{ok, rows: [{id, ts, kind, data}], more,
+next_after_id}` and pages as `GET .../journal`: no `after_id` = the newest rows; with one, the oldest rows after it,
+and while `more` is true the caller reads on with `after_id = next_after_id`.
 
 Before this change the tool routes were on the PC's own port and reads needed no token; move the agent's base URL to
 the agent port. The agent can never answer a proposal, resume, change limits or a mode, or post the presence
@@ -225,7 +229,7 @@ answers `assist_unavailable`.
 
 | route | body | answer |
 |---|---|---|
-| `GET /api/agent/proposals?session_id=` (PC and phone) | | `{ok, session_id, pending: [Proposal], recent: [Proposal] (that session's last 20), server_ms}`; without `session_id`: every live session's pending, `session_id` null, `recent` [] |
+| `GET /api/agent/proposals?session_id=` (PC and phone) | | `{ok, session_id, pending: [Proposal], recent: [Proposal] (that session's last 20), server_ms}`; an unknown `session_id` is 404 `not_found` (as `GET /api/agent/sessions/{id}/proposals`); without `session_id`: every live session's pending, `session_id` null, `recent` [] |
 | `POST /api/agent/proposals/approve` (people only) | `{id (1-64)}` | the trading approve's answer (`{ok: true, bracket, ...}`) plus `proposal`; or a refusal (with `proposal` when it names one) |
 | `POST /api/agent/proposals/skip` (people only) | `{id}` | `{ok, proposal}`; nothing is sent (past its time it is resolved `expired`) |
 
@@ -254,7 +258,7 @@ whose market has changed mode since is refused at `/launch`, `mode_changed`).
 |---|---|---|
 | `GET /api/agent/presets` (PC and phone) | | `{ok, presets: [{name, launch, modes: {market: mode}, created_ts}]}`, oldest first |
 | `POST /api/agent/presets` (PC only) | `{name, launch}` | `{ok, preset, replaced}` |
-| `DELETE /api/agent/presets/{name}` (PC only) | | `{ok}`; `not_found` |
+| `DELETE /api/agent/presets/{name}` (PC only) | | `{ok}`; `not_found`. The name is normalized as a save stores it (spaces trimmed and runs of spaces collapsed), so `" H4  assist "` deletes `"H4 assist"` |
 
 `launch` is the launch body without `confirm` (refused `invalid` if it has one), with `minutes` not `ends_ts`
 (`invalid`), `kind: "in_app"` only (`in_app_only`: an external session's token would have to travel over Telegram),

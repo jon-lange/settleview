@@ -186,3 +186,12 @@ def test_the_bot_username_setting_is_shown_and_a_bad_one_is_an_error(tmp_path):
     for bad in ("settleview", "@xbot", "my bot", "1example_bot", "a" * 30 + "_bot"):
         with pytest.raises(ValueError, match="BTCFLOW_TELEGRAM_BOT_USERNAME"):
             Settings(_env_file=None, telegram_bot_username=bad)
+
+
+def test_a_preset_is_found_and_deleted_by_its_name_normalized_as_save_stores_it(store):
+    p = AgentPresets(store, lambda spec, now: None, lambda: {"kalshi_15m": "shadow"})
+    assert p.save("  H4   assist ", GOOD, 1)["preset"]["name"] == "H4 assist"
+    assert p.get(" H4  assist")["name"] == "H4 assist"
+    assert p.delete("", 2)["code"] == "not_found" and p.delete(None, 2)["code"] == "not_found"
+    assert p.delete("H4   assist  ", 3) == {"ok": True}
+    assert p.all() == []

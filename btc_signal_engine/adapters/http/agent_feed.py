@@ -35,6 +35,7 @@ from collections.abc import Callable
 from typing import Any
 
 from btc_signal_engine.adapters.http.push import FeedHub
+from btc_signal_engine.application.agent_tools import DECISION_PAGE
 
 log = logging.getLogger(__name__)
 
@@ -138,17 +139,22 @@ class AgUiFeed:
         self.refresh()
 
     def new_decisions(self, sid: str) -> None:
-        """Send each decision row of `sid` not sent yet as CUSTOM "decision" (value = the row: {id, ...})."""
+        """Send each decision row of `sid` not sent yet as CUSTOM "decision" (value = the row: {id, ...}), oldest
+        first; a full page (DECISION_PAGE rows) reads on from its last id until caught up."""
         if self._decisions_fn is None:
             return
-        try:
-            rows = self._decisions_fn(sid, after_id=self._decision_seen.get(sid, 0))
-        except Exception:
-            log.warning("agent decision rows could not be read", exc_info=True)
-            return
-        for r in rows:
-            self._decision_seen[sid] = max(self._decision_seen.get(sid, 0), int(r["id"]))
-            self.custom("decision", {"session_id": sid, **r})
+        while True:
+            seen = self._decision_seen.get(sid, 0)
+            try:
+                rows = self._decisions_fn(sid, after_id=seen)
+            except Exception:
+                log.warning("agent decision rows could not be read", exc_info=True)
+                return
+            for r in rows:
+                self._decision_seen[sid] = max(self._decision_seen.get(sid, 0), int(r["id"]))
+                self.custom("decision", {"session_id": sid, **r})
+            if len(rows) < DECISION_PAGE or self._decision_seen.get(sid, 0) <= seen:
+                return
 
     # -- a wake as a run -----------------------------------------------------------------------------------------------
     def _run(self, sid: str, wake_id: int, trigger: list[str] | None = None, started: int | None = None) -> _Run:

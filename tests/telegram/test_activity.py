@@ -413,6 +413,23 @@ def test_a_muted_agent_sends_no_trade_alerts_but_its_pause_still_comes(store):
     assert w.c.set_muted(SID, False, w.clock.t)["muted"] == []
 
 
+def test_changing_an_alert_or_the_daily_time_keeps_the_muted_agents(store):
+    w = World(store)
+    w.new()
+    assert w.c.set_muted(SID, True, w.clock.t)["ok"]
+    assert w.c.set_alerts({"pauses": True}, w.clock.t)["ok"]
+    assert w.c.set_alerts({"daily_at": "07:30"}, w.clock.t)["ok"]
+    assert w.c.muted() == {SID} and w.c.status()["muted"] == [SID]
+    assert w.c.alerts()["pauses"] is True and w.c.daily_at() == "07:30"
+
+
+def test_mute_with_agent_mode_off_is_not_found(store):
+    c = RemoteControl(store, now_fn=lambda: NOW)  # no sessions: agent mode is off
+    out = c.set_muted("anything", True, NOW)
+    assert out["ok"] is False and out["code"] == "not_found"
+    assert c.muted() == set()
+
+
 def test_two_agents_on_opposite_sides_send_one_warning(store):
     w = World(store)
     w.pump()

@@ -128,8 +128,14 @@ def test_the_view_full_and_quiet(store):
     assert quiet["lights"] == [] and quiet["fill"] is None and quiet["line"]["none"] is None
     with pytest.raises(ValueError, match="off"):
         cp.view(NOW, "kalshi", "15m", mode="off", warnings=[])
-    with pytest.raises(ValueError):
-        cp.view(NOW, "kalshi", "5m", mode="full", warnings=[])  # Kalshi has no 5-minute market
+    for span in ("5m", "1h"):  # Kalshi has no 5-minute or hourly market: unavailable, as Play answers it
+        none = cp.view(NOW, "kalshi", span, mode="full", warnings=[])
+        assert none["available"] is False and none["market"] is None and none["reason"]
+        assert none["lights"] == [] and none["fill"] is None and none["line"]["none"] is None
+    for venue, span in (("kalshi", "2h"), ("binance", "15m")):  # an unknown span or venue is still an error
+        with pytest.raises(ValueError):
+            cp.view(NOW, venue, span, mode="full", warnings=[])
+    assert full["available"] is True and full["reason"] is None
 
 
 def test_a_retired_rule_vanishes_from_the_view(store):

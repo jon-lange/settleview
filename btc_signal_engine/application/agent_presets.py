@@ -67,8 +67,10 @@ class AgentPresets:
         return sorted((dict(p) for p in self._stored().values()), key=lambda p: (p.get("created_ts") or 0,
                                                                                     p.get("name") or ""))
 
-    def get(self, name: str) -> dict | None:
-        p = self._stored().get(name)
+    def get(self, name: Any) -> dict | None:
+        """The preset by name, the name normalized as save stores it (clean_name)."""
+        n = self.clean_name(name)
+        p = self._stored().get(n) if n is not None else None
         return dict(p) if p is not None else None
 
     # -- writes ---------------------------------------------------------------------------------------------------
@@ -107,11 +109,12 @@ class AgentPresets:
         self._write({**stored, n: preset}, now)
         return {"ok": True, "preset": preset, "replaced": n in stored}
 
-    def delete(self, name: str, now: int) -> dict:
-        stored = self._stored()
-        if name not in stored:
+    def delete(self, name: Any, now: int) -> dict:
+        """Delete a preset; the name is normalized as save stores it (clean_name: spaces collapsed and trimmed)."""
+        n, stored = self.clean_name(name), self._stored()
+        if n is None or n not in stored:
             return _refused("not_found", f"There is no preset named {name!r}.")
-        del stored[name]
+        del stored[n]
         self._write(stored, now)
         return {"ok": True}
 

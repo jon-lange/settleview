@@ -1148,9 +1148,20 @@ class AgentSessions:
         return out
 
     def journal_rows(self, session_id: str, *, after_id: int = 0, limit: int = 200) -> list[dict]:
-        rows = self.repo.select(JOURNAL, {"session_id": session_id}, filters=[("id", ">", after_id)],
-                                order_by=["-id"], limit=limit)
-        return list(reversed(rows))
+        """The session's rows, oldest first (see journal_after)."""
+        return self.journal_after(session_id, after_id=after_id, limit=limit)[0]
+
+    def journal_after(self, session_id: str, *, after_id: int = 0, limit: int = 200,
+                      kind: str | None = None) -> tuple[list[dict], bool]:
+        """(rows oldest first, more). `after_id` 0: the newest `limit` rows (the tail; more is False). `after_id` > 0:
+        the OLDEST `limit` rows after it, and `more` = rows after those remain (page on from the last id until it is
+        False), so a reader catching up never skips rows. `kind`: only that kind. Both read ix_agent_journal_session
+        (session_id, id)."""
+        match = {"session_id": session_id, **({"kind": kind} if kind else {})}
+        if after_id <= 0:
+            return list(reversed(self.repo.select(JOURNAL, match, order_by=["-id"], limit=limit))), False
+        rows = self.repo.select(JOURNAL, match, filters=[("id", ">", after_id)], order_by=["id"], limit=limit + 1)
+        return rows[:limit], len(rows) > limit
 
     def _save(self, s: dict, keys: tuple[str, ...]) -> None:
         self.repo.update(SESSIONS, {"id": s["id"]}, {k: s[k] for k in keys})
