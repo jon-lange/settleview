@@ -26,8 +26,8 @@ dependencies = [
   # CVE-2026-69249, GHSA-537c-gmf6-5ccf) everywhere it has a wheel, the Docker image and CI included. Windows ARM64
   # keeps 46.0.3, the newest release with a win_arm64 wheel (later ones would build from source with Rust there): a
   # residual risk on that dev host only, which runs no service anyone else reaches (docs/operations.md, "Quality gates").
-  "cryptography==50.0.2; sys_platform != 'win32' or platform_machine != 'ARM64'",
-  "cryptography==46.0.3; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "cryptography==50.0.0; sys_platform != 'win32' or platform_machine != 'ARM64'",
+  "cryptography==50.0.0; sys_platform == 'win32' and platform_machine == 'ARM64'",
   "polymarket-us==2.4.1",  # Polymarket US official SDK (user-approved 2026-10-29); pulls pynacl
   "kalshi_python_async==3.35.0",  # Kalshi official SDK (user-approved 2026-10-29); pulls aiohttp, aiohttp-retry
   "aiohttp==3.14.5",  # the SDK's HTTP client; backend.py relies on its private _retry_connection switch
