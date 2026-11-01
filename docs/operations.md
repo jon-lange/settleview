@@ -208,7 +208,7 @@ not wait for it, and a stop waits at most 5 s for the last export.
 **The services' credential is ingest-only** (review B4#14). `secrets/otlp_headers`, which the app and the recorders
 mount, holds OpenObserve's organization ingestion token (`Authorization=Basic ...` of `otlp@settleview.local:<token>`),
 never the root login: with it the exporters can send logs, metrics and traces, and every other API (search, streams,
-users, settings) answers 401 (checked against v1.1.1, 2026-11-01). `deploy/openobserve/ingest_token.py` (standard
+users, settings) answers 401 (checked against v1.1.1, 2026-11-01; why not a service account: [docs/solutions/2026-11-01-openobserve-ingest-only-credential.md](solutions/2026-11-01-openobserve-ingest-only-credential.md)). `deploy/openobserve/ingest_token.py` (standard
 library; `--url` for another address, e.g. an SSH tunnel on Swarm, with `O2_ROOT_PASSWORD` in the environment instead of
 the env file) reads the token with the root login, checks both halves (an OTLP batch is accepted, the stream list is
 refused) and only then writes the header; run again it changes nothing. `--rotate` issues a new token (the old one
