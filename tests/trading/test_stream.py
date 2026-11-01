@@ -20,6 +20,7 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from btc_signal_engine.adapters import retry
 from btc_signal_engine.adapters.kalshi.shadow import ShadowExchange, ShadowStream, book_quote
 from btc_signal_engine.adapters.kalshi.stream import WS_PATH, WS_URLS, KalshiStream, fill_event
 from btc_signal_engine.adapters.kalshi.trading import TradingAuth, TradingViolation, normalize_order
@@ -247,7 +248,9 @@ def test_seq_gap_marks_stale_requests_a_snapshot_and_recovers():
     run(go())
 
 
-def test_reconnects_with_backoff_and_resubscribes():
+def test_reconnects_with_backoff_and_resubscribes(monkeypatch):
+    # reconnect waits are full-jitter draws (adapters/retry.py); at the top of each draw they are the ceilings
+    monkeypatch.setattr(retry, "_uniform", lambda: 1.0)
     async def go():
         head = [json.loads(x) for x in lines("prod_orderbook_yes_price.jsonl")[:5]]
         a, b = FakeWS(), FakeWS()
