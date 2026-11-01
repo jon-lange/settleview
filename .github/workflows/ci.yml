@@ -53,6 +53,7 @@ jobs:
     permissions:
       contents: read
       security-events: write  # the SARIF upload; this job only
+      actions: read  # upload-sarif reads this workflow run (GET .../actions/runs/{id}); a private repo must grant it
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 

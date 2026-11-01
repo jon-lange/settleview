@@ -19,13 +19,30 @@ DUMP="${1:-}"
 cleanup() { docker rm -f "$NAME" > /dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker run -d --name "$NAME" -e POSTGRES_PASSWORD="drill-$$-$RANDOM" -e POSTGRES_DB=drill \
+PW="drill-$$-$RANDOM"
+docker run -d --name "$NAME" -e POSTGRES_PASSWORD="$PW" -e POSTGRES_DB=drill \
   -v "$VOLUME":/backups:ro "$IMAGE" > /dev/null
-for _ in $(seq 1 60); do
-  docker exec "$NAME" pg_isready -U postgres -d drill > /dev/null 2>&1 && break
+
+# The image's entrypoint first runs a temporary server (initdb and the init scripts) on the Unix socket only, then
+# stops it and starts the real one: a socket check can pass on the temporary server, and the next command then meets
+# "the database system is shutting down". Only the real server listens on TCP, so ready means a query over TCP that
+# answers three times in a row, and every command below goes over TCP too.
+pg() { docker exec -e PGPASSWORD="$PW" "$NAME" "$@"; }
+ready=0
+for _ in $(seq 1 120); do
+  if pg psql -h 127.0.0.1 -U postgres -d drill -At -c "select 1" > /dev/null 2>&1; then
+    ready=$((ready + 1))
+    [ "$ready" -ge 3 ] && break
+  else
+    ready=0
+  fi
   sleep 1
 done
-docker exec "$NAME" pg_isready -U postgres -d drill > /dev/null
+if [ "$ready" -lt 3 ]; then
+  echo "restore drill: the throwaway Postgres did not become ready" >&2
+  docker logs --tail 50 "$NAME" >&2
+  exit 1
+fi
 
 if [ -z "$DUMP" ]; then
   DUMP="$(docker exec "$NAME" sh -c 'ls -1 /backups/settleview-*.dump 2>/dev/null | sort | tail -n 1')"
@@ -35,9 +52,9 @@ fi
 echo "restore drill: restoring $DUMP into a fresh $IMAGE"
 
 # Ownership and grants name roles this throwaway server does not have: restore the data and schema only.
-docker exec "$NAME" pg_restore -U postgres -d drill --no-owner --no-privileges --exit-on-error "/backups/$DUMP"
+pg pg_restore -h 127.0.0.1 -U postgres -d drill --no-owner --no-privileges --exit-on-error "/backups/$DUMP"
 
-docker exec "$NAME" psql -U postgres -d drill -v ON_ERROR_STOP=1 -At -c "
+pg psql -h 127.0.0.1 -U postgres -d drill -v ON_ERROR_STOP=1 -At -c "
   select 'alembic version: ' || version_num from app.alembic_version;
   select 'app tables: ' || count(*) from information_schema.tables where table_schema = 'app';
   select 'research tables: ' || count(*) from information_schema.tables where table_schema = 'research';
