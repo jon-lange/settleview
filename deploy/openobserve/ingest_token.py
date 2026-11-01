@@ -44,7 +44,8 @@ def _basic(user: str, secret: str) -> str:
 
 
 def _call(method: str, url: str, auth: str, body: bytes | None = None) -> tuple[int, bytes]:
-    req = urllib.request.Request(url, data=body, method=method, headers={"Authorization": auth})
+    # main() refuses any --url that is not http(s), so no file: or custom scheme reaches urlopen.
+    req = urllib.request.Request(url, data=body, method=method, headers={"Authorization": auth})  # noqa: S310
     if body is not None:
         req.add_header("Content-Type", "application/json")
     try:
