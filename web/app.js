@@ -178,6 +178,20 @@
     settleHash(first);
   });
 
+  // A drop-down menu's open state (the market pickers on Play and Perps): x-data="menu", @click="toggle",
+  // @keydown.escape / @click.outside="close", :aria-expanded="expanded". A view's own item handler closes it with
+  // this.close() (the picker's scope is the view's too).
+  document.addEventListener('alpine:init', function () {
+    Alpine.data('menu', function () {
+      return {
+        open: false,
+        get expanded() { return this.open ? 'true' : 'false'; },
+        toggle: function () { this.open = !this.open; },
+        close: function () { this.open = false; }
+      };
+    });
+  });
+
   document.addEventListener('alpine:init', function () {
     window.addEventListener('hashchange', function () {
       var r = parseHash();
