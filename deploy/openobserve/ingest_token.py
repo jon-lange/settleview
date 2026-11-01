@@ -78,12 +78,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ingest_token.py", description=__doc__.split("\n\n")[0])
     ap.add_argument("--url", default="http://127.0.0.1:5080")
     ap.add_argument("--org", default="default")
-    ap.add_argument("--secrets", type=Path, default=Path(__file__).resolve().parents[2] / "secrets")
+    ap.add_argument("--secrets", type=Path, default=None)
     ap.add_argument("--rotate", action="store_true")
     a = ap.parse_args(argv)
     if not a.url.startswith(("http://", "https://")):
         print("error   --url must be an http(s) address", file=sys.stderr)
         return 2
+    if a.secrets is None:  # secrets/ next to compose.yaml (this file is deploy/openobserve/ingest_token.py)
+        a.secrets = Path(__file__).resolve().parents[2] / "secrets"
     base = a.url.rstrip("/") + f"/api/{a.org}"
     root = _basic(ROOT_EMAIL, root_password(a.secrets))
     status, body = _call("PUT" if a.rotate else "GET", base + "/passcode", root)
