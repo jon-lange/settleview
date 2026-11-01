@@ -120,6 +120,18 @@ async def until(cond, timeout=3.0):
     raise AssertionError("condition not reached")
 
 
+CAPTURE_TRADES = sum(1 for m in CAPTURE if m["type"] == "trade")
+
+
+async def read_whole_capture(rig):
+    """Wait until the stream has handled the whole CAPTURE, whose LAST message is a trade. Never wait on an earlier
+    sign (a quote, a ticker's last price, the last delta's seq): the stream reads one message per loop turn, so on a
+    slow runner such a sign comes true while the trailing prints are still unread, and a test that then moves the
+    clock judges a book with no print after it (docs/solutions/2026-11-01-wait-for-the-message-under-test.md)."""
+    assert CAPTURE[-1]["type"] == "trade"
+    await until(lambda: len(rig.of("trade")) == CAPTURE_TRADES)
+
+
 def replay_top(msgs):
     """Expected best bid / ask computed independently: levels as Decimal in plain dicts, deltas in seq order."""
     bids: dict[Decimal, Decimal] = {}
@@ -155,7 +167,8 @@ def test_captured_snapshot_and_deltas_give_the_expected_best_bid_and_ask():
         rig = Rig(ws)
         task = await rig.start()
         last_seq = max(m["seq"] for m in CAPTURE if m["type"] == "orderbook_delta")
-        await until(lambda: rig.stream.health()["last_seq"].get(1) == last_seq)
+        await read_whole_capture(rig)
+        assert rig.stream.health()["last_seq"].get(1) == last_seq
         assert rig.signer.calls == [("GET", MARGIN_WS_PATH)]
         assert rig.urls[0] == (MARGIN_WS_URLS["perp_demo"], {"KALSHI-ACCESS-KEY", "KALSHI-ACCESS-TIMESTAMP",
                                                               "KALSHI-ACCESS-SIGNATURE"})
@@ -228,7 +241,8 @@ def test_a_book_older_than_two_seconds_with_a_print_after_it_is_not_served():
     async def go():
         rig = Rig(FakeWS(*CAPTURE))
         task = await rig.start()
-        await until(lambda: rig.stream.quotes.quote() is not None and rig.stream.quotes.quote().last_price)
+        await read_whole_capture(rig)
+        assert rig.stream.quotes.quote() is not None and rig.stream.quotes.quote().last_price
         rig.clock[0] = NOW + 2000
         assert rig.stream.quotes.quote() is not None and rig.stream.quotes.age_ms() == 2000
         rig.clock[0] = NOW + 3400
