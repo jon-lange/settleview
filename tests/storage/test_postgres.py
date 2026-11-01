@@ -7,7 +7,7 @@ import asyncio
 import math
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.exc import DBAPIError
 
 from btc_signal_engine.adapters.polymarket_us import recorders as rec
@@ -155,3 +155,29 @@ def test_the_app_starts_on_postgres(pg, tmp_path):
     assert not (tmp_path / "btcflow.db").exists()  # the data is in Postgres; the folder holds logs and pid files
     rt.store._write.dispose()
     rt.store._read.dispose()
+
+
+def test_the_startup_probe_reads_the_ts_index_not_the_primary_key(pg):
+    """2026-11-01: startup's "any trade in the last 15 h?" probe ordered by trade_id (the generic select's default
+    order), so Postgres walked trades_pkey from the oldest trade and filtered by ts (13.6M rows, past the 5 s statement
+    timeout on a cold cache). The probe is an EXISTS on ts. Synthetic rows: trade_id grows with ts, like Coinbase's."""
+    store, _ = pg
+    with store._write.begin() as c:
+        c.execute(text("insert into trades (trade_id, ts, ingest_ts, price, size, buy, backfilled) "
+                       "select g, g * 10, g * 10, 100000, 0.01, g % 2 = 0, false from generate_series(1, 200000) g"))
+        c.execute(text("analyze trades"))
+    sql = []
+
+    def capture(conn, cursor, statement, params, context, executemany):
+        sql.append((statement, params))
+
+    event.listen(store._read, "before_cursor_execute", capture)
+    try:
+        assert store.has_trades_since(1_999_000) is True
+        assert store.has_trades_since(2_000_001) is False
+    finally:
+        event.remove(store._read, "before_cursor_execute", capture)
+    statement, params = sql[0]
+    with store._read.connect() as c:
+        plan = "\n".join(r[0] for r in c.exec_driver_sql("explain " + statement, params))
+    assert "ix_trades_ts" in plan and "trades_pkey" not in plan, plan

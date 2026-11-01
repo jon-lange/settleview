@@ -24,6 +24,7 @@ import logging
 from collections.abc import Callable
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -82,7 +83,7 @@ from btc_signal_engine.adapters.ruleset_files import read_seed_files
 from btc_signal_engine.adapters.sqlite.db import describe, migrate, read_engine, write_engine
 from btc_signal_engine.adapters.sqlite.store import SqliteStore
 from btc_signal_engine.adapters.sqlite.urls import use_pg_timeouts
-from btc_signal_engine.adapters.sqlite.writer import BufferedStore
+from btc_signal_engine.adapters.sqlite.writer import BufferedStore, is_transient
 from btc_signal_engine.adapters.telegram.bot import TelegramBot
 from btc_signal_engine.application.actor import SYSTEM
 from btc_signal_engine.application.agent_presets import AgentPresets
@@ -129,6 +130,11 @@ SKEW_LIMIT_MS = 1_000
 YOU = market("kalshi_15m").phone_strategy
 YOU_TICK_S = 0.5
 RV_P95_REFRESH_S = 3_600  # the engine's rv_p95 (7 days of snapshots) is recomputed hourly, off the loop
+# A startup read that hits a transient database error (a statement timeout on a cold cache, a dropped connection) is
+# tried this many times, waiting 2 s, then 4 s, before the start stops (docs/solutions/2026-11-01-startup-trades-probe-
+# walked-the-pkey.md). Each failed try is a warning, the last one an error naming the read.
+STARTUP_READ_ATTEMPTS = 3
+STARTUP_READ_BACKOFF_S = 2.0
 # Loops whose repeated failure turns the kill switch on (KTD7): the phone services' monitor, the writer, the web server.
 CRITICAL_LOOPS = frozenset({"you", "writer", "server"})
 # Strategies of the retired bots (taker, PNW cushion, PNW on Polymarket). Their past orders are still in the database
@@ -303,6 +309,28 @@ class _StreamView:
 def _feed_trimmed(n: int) -> dict:
     """An agent feed's event for a slow client that lost `n` events."""
     return {"type": "CUSTOM", "name": "feed_trimmed", "value": {"dropped": n}}
+
+
+async def startup_read(what: str, read: Callable[[], Any], *, attempts: int = STARTUP_READ_ATTEMPTS,
+                       backoff_s: float = STARTUP_READ_BACKOFF_S) -> Any:
+    """`read()`, a read-only store call (safe to repeat), retried with doubling waits on a transient database error.
+    A non-transient error, or the last failure, is raised after an error line naming the read: never a silent default."""
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
+    for attempt in range(1, attempts + 1):
+        try:
+            return read()
+        except Exception as exc:
+            first = (str(exc).strip().splitlines() or [""])[0][:300]
+            if not is_transient(exc) or attempt == attempts:
+                log.error("startup: %s failed (%s: %s) after %d attempt(s); the start stops here", what,
+                          type(exc).__name__, first, attempt)
+                raise
+            wait = backoff_s * 2 ** (attempt - 1)
+            log.warning("startup: %s failed (%s: %s), attempt %d of %d; retrying in %.0f s", what,
+                        type(exc).__name__, first, attempt, attempts, wait)
+            await asyncio.sleep(wait)
+    raise AssertionError("unreachable")
 
 
 class Runtime:
@@ -1274,7 +1302,7 @@ class Runtime:
         now = self.clock.now_ms()
         self.rulesets.load_seeds(read_seed_files(ROOT / "rulesets"), now)
         rest = CoinbaseRest()
-        recent = self.store.select("trades", filters=[("ts", ">=", now - LOOKBACK_MS)], limit=1)
+        recent = await startup_read("the recent-trades probe", lambda: self.store.has_trades_since(now - LOOKBACK_MS))
         try:
             if not recent:
                 log.info("no recent history: backfilling %.0fh of Coinbase trades for feature warm-up", LOOKBACK_MS / 3.6e6)
@@ -1285,8 +1313,13 @@ class Runtime:
             await backfill_kalshi(self.store, self.kalshi, max_pages=1)
         except Exception:  # network trouble must not stop live collection
             log.exception("startup backfill failed; continuing with what is stored")
-        n = hydrate(self.engine, self.store, now)
-        self._hydrated_max_id = self.store.max_trade_id() or 0
+        try:
+            n = hydrate(self.engine, self.store, now)
+        except Exception as exc:  # not retried in-process: the engine already holds the events read before the failure
+            log.error("startup: hydrating the engine from stored history failed (%s); the start stops here and the "
+                      "supervisor or container restart tries again", type(exc).__name__)
+            raise
+        self._hydrated_max_id = await startup_read("the newest trade id", self.store.max_trade_id) or 0
         log.info("engine hydrated from %d stored events", n)
         # Before any loop runs, so the first boundaries after a restart see rv_p95 as before it (skip_high_vol).
         await self.refresh_rv_p95()

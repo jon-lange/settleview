@@ -10,7 +10,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from sqlalchemy import Boolean, Connection, Engine, Integer, Table, UniqueConstraint, and_, func, select, update
+from sqlalchemy import (Boolean, Connection, Engine, Integer, Table, UniqueConstraint, and_, exists, func, select,
+                        update)
 from sqlalchemy.dialects import postgresql, sqlite
 
 from btc_signal_engine.adapters.sqlite.tables import TABLES, book_1s, index_1s, trades
@@ -214,6 +215,13 @@ class SqliteStore:
         with self._read.connect() as c:
             r = c.execute(stmt).first()
         return IndexSecond(r.ts, r.price, r.last_trade_ts, r.mid) if r else None
+
+    def has_trades_since(self, ts: int) -> bool:
+        """True when a trade at or after `ts` is stored. An EXISTS on ts alone (ix_trades_ts, index only): a
+        `select(..., limit=1)` adds the table's default order, trade_id, and Postgres then walked the primary key from
+        the oldest trade, filtering by ts (docs/solutions/2026-11-01-startup-trades-probe-walked-the-pkey.md)."""
+        with self._read.connect() as c:
+            return bool(c.execute(select(exists().where(trades.c.ts >= ts))).scalar())
 
     def max_trade_id(self) -> int | None:
         with self._read.connect() as c:
