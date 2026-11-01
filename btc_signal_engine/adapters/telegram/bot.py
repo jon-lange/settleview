@@ -19,8 +19,8 @@ The token is read once from the settings' SecretStr by the wiring and handed to 
 `TokenRedactor` masks it (message, arguments and the formatted traceback) in the records of this module's logger and
 of every "telegram*" / "httpx*" / "httpcore*" logger that exists when the bot is built (a logger's filter does not
 reach its children's records, so each is named; httpx logs each request URL, which carries the token), and this
-module never logs an exception's text unmasked. Records from any other logger (a traceback logged elsewhere) need the
-app's handler-level scrubbing filter (bootstrap; not this module).
+module never logs an exception's text unmasked. Records from any other logger (a traceback logged elsewhere) are
+covered by the app's log mask of its exact secret values (bootstrap/logs.py mask_secrets; not this module).
 """
 
 from __future__ import annotations

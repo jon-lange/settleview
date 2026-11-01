@@ -1,12 +1,12 @@
 """One OpenTelemetry pipeline for the whole tests/telemetry package (the SDK's global providers can be set once per
-process): bootstrap/telemetry.setup with in-memory exporters in place of the OTLP ones, so everything the tests see went
-through the same scrubbing the real exporters get. Header capture is switched on (as a careless operator might) to prove
-the scrubber still removes credentials, and the background sampling ratio is 0 so the tests are deterministic."""
+process): bootstrap/telemetry.setup with in-memory exporters in place of the OTLP ones, so the tests see exactly what
+the process emits. The process does no redaction of its own (the OpenTelemetry Collector does, by pattern:
+deploy/otel-collector/config.yaml, proven end to end by test_collector_e2e.py), so these tests check what it never
+emits by design: header values (capture is off), SQL parameter values, prompts, tool arguments and results, model
+text. The background sampling ratio is 0 so the tests are deterministic."""
 
 from __future__ import annotations
 
-import os
-import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -20,7 +20,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from btc_signal_engine.bootstrap import telemetry  # noqa: E402
 
-# Secrets planted by the tests: none may ever reach an exporter.
+# Secrets planted by the tests (also by test_collector_e2e.py, which proves the collector redacts each one).
 TG_TOKEN = "7123456789:AAHfakeTelegramTokenValue_abcdefghijk12"
 ANTHROPIC_KEY = "sk-ant-api03-FAKEfakeFAKEfake0123456789abcdefABCDEF"
 DB_PASSWORD = "Wc3n_x9QpL2vR7tY8uZa1bKd"  # gitleaks:allow - planted fake
@@ -28,14 +28,11 @@ BEARER = "Bearer eyJhbGciOiJIUzI1NiJ9.ZmFrZQ.c2lnbmF0dXJlVmFsdWU"
 COOKIE = "settleview_session=s3ss10nV4lu3Abc"
 QUERY_SECRET = "q5ecr3tQueryValue"
 SIGNATURE = "kH3s9+Qm2Lx7Vb1Nc8Zr5Tw0Py4Jd6Ga/Fe3Ui9Oq2Ws7Ex1Rc5Tv8Yb2Nm4Kl6Hj0Gf3Dd=="
+KEY_PATH = "/keys/kalshi-prod-planted.pem"
 PLANTED = (TG_TOKEN, ANTHROPIC_KEY, DB_PASSWORD, BEARER.split()[1], COOKIE.split("=")[1], QUERY_SECRET, SIGNATURE)
-# Shapes of a credential, whatever its value.
-TOKEN_SHAPES = (re.compile(r"\d{5,}:[A-Za-z0-9_-]{30,}"), re.compile(r"sk-ant-[A-Za-z0-9_-]{8,}"),
-                re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}"))
-
-ENV = {"OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_REQUEST": "Authorization,Cookie,X-Api-Key,Content-Type",
-       "OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST": "Authorization,Cookie,X-Api-Key,Content-Type",
-       "OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_CLIENT_RESPONSE": "Set-Cookie,Content-Type"}
+# What the process never emits by design, whatever the collector does: header values (the tests send these as
+# headers; capture is off), the API key (the agent harness holds it), bound SQL parameters.
+NEVER_EMITTED = (ANTHROPIC_KEY, DB_PASSWORD, BEARER.split()[1], COOKIE.split("=")[1], SIGNATURE)
 
 
 class CaptureMetrics(MetricExporter):
@@ -116,34 +113,23 @@ class Pipeline:
 
     def assert_clean(self, extra: tuple[str, ...] = ()) -> None:
         for text in self.strings():
-            for secret in (*PLANTED, *extra):
-                assert secret not in text, f"a planted secret reached an exporter: {text[:200]!r}"
-            for shape in TOKEN_SHAPES:
-                assert not shape.search(text), f"a token-shaped value reached an exporter: {text[:200]!r}"
+            for secret in (*NEVER_EMITTED, *extra):
+                assert secret not in text, f"the process emitted what it never should: {text[:200]!r}"
 
 
 @pytest.fixture(scope="package")
 def otel() -> Iterator[Pipeline]:
-    saved = {k: os.environ.get(k) for k in ENV}
-    os.environ.update(ENV)
     spans, logs, metrics = InMemorySpanExporter(), InMemoryLogRecordExporter(), CaptureMetrics()
-    tel = telemetry.setup("settleview-test", environ={"OTEL_TRACES_SAMPLER_ARG": "0"},
-                          secrets=[DB_PASSWORD, ANTHROPIC_KEY, TG_TOKEN],
-                          span_exporter=spans, metric_exporter=metrics, log_exporter=logs)
+    tel = telemetry.setup("settleview-test", environ={"OTEL_TRACES_SAMPLER_ARG": "0"}, span_exporter=spans, metric_exporter=metrics, log_exporter=logs)
     assert tel.enabled
     try:
         yield Pipeline(tel, spans, logs, metrics)
     finally:
         tel.shutdown()
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
 
 
 @pytest.fixture
 def pipe(otel: Pipeline) -> Iterator[Pipeline]:
     otel.clear()
     yield otel
-    otel.assert_clean()  # every test: nothing secret left the process
+    otel.assert_clean()  # every test: nothing the process should never emit

@@ -99,7 +99,8 @@ shows yesterday's coverage (5-minute windows recorded of 288, longest gap).
 
 Observability: OpenTelemetry traces, metrics and logs from every service once you set an OTLP endpoint (off by
 default), with each agent wake as a GenAI trace (model, tokens, cost, tool calls; never prompts or output) and tokens,
-keys and headers scrubbed before anything leaves the process. An opt-in OpenObserve container is the local backend;
+keys, key paths and headers removed by the OpenTelemetry Collector's standard redaction before anything reaches a
+backend. An opt-in OpenObserve container (behind the collector) is the local backend;
 Azure Monitor, CloudWatch or any OTLP backend in the cloud ([docs/operations.md](docs/operations.md#observability-opentelemetry)).
 SLO alerts as code: 17 OpenObserve alerts (feeds per venue, the database writer, dead letters, dropped venue data,
 event-loop stalls, refused approvals, agent spend vs budget, recorder coverage, restarts, a silent service, a failed
@@ -226,7 +227,7 @@ agents (MCP) call `http://localhost:8002` with their session token
 `deploy/swarm/render_stack.py`, which never publishes the PC-only ports. Moving an existing SQLite database in
 (`ops migrate-sqlite-to-pg`), backups and restores, cloud hosts with a managed Postgres:
 [`docs/operations.md`](docs/operations.md#postgres). Telemetry (opt-in): `docker compose --profile observability up
--d` with `OTEL_EXPORTER_OTLP_ENDPOINT=http://openobserve:5080/api/default` in `.env`, then http://localhost:5080
+-d` with `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` in `.env`, then http://localhost:5080
 ([Observability](docs/operations.md#observability-opentelemetry)).
 
 **Without Docker** (the host install above), the app alone:

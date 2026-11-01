@@ -11,10 +11,11 @@ OpenObserve already uses it), so running it again only adds what is missing. Pri
   pg_backup_password      settleview_backup: the backup service
   openobserve.env         OpenObserve's root password (ZO_ROOT_USER_PASSWORD=...), the `openobserve` service's env file
                           (profile `observability`; its image has no shell, so it cannot read a secret file itself)
-  otlp_headers            the OTLP headers, mounted into the app and the recorders and read through
-                          OTEL_EXPORTER_OTLP_HEADERS_FILE: created EMPTY here. Once OpenObserve runs,
-                          deploy/openobserve/ingest_token.py writes its ingest-only organization token into it (the
-                          services never hold the root password). For another backend, write its headers instead.
+  openobserve_ingest_token
+                          OpenObserve's ingest-only organization token, mounted into the otel-collector only (the
+                          services send to the collector and hold no backend credential): created EMPTY here. Once
+                          OpenObserve runs, deploy/openobserve/ingest_token.py writes it (the collector never holds
+                          the root password).
   polymarket_key_id, polymarket_secret_key, anthropic_api_key, telegram_bot_token, kalshi_key_id,
   trading_demo_key_id, trading_prod_key_id
                           the venue / API secrets compose mounts into the app (the Polymarket pair also into
@@ -42,7 +43,7 @@ NAMES = ("pg_superuser_password", "pg_app_password", "pg_research_password", "pg
 APP_SECRETS = ("polymarket_key_id", "polymarket_secret_key", "anthropic_api_key", "telegram_bot_token", "kalshi_key_id",
                "trading_demo_key_id", "trading_prod_key_id")
 O2_ENV = "openobserve.env"
-OTLP_HEADERS = "otlp_headers"
+O2_INGEST_TOKEN = "openobserve_ingest_token"
 
 
 def _write(f: Path, text: str) -> None:
@@ -81,7 +82,7 @@ def main(argv: list[str]) -> int:
     if not _kept(env_file):
         _write(env_file, f"ZO_ROOT_USER_PASSWORD={os.environ.get('O2_ROOT_PASSWORD') or o2_password()}\n")
         print(f"created {env_file}")
-    for name in (OTLP_HEADERS, *APP_SECRETS):
+    for name in (O2_INGEST_TOKEN, *APP_SECRETS):
         f = root / name
         if f.exists():
             print(f"kept    {f}")

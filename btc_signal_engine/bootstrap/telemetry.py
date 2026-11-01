@@ -5,18 +5,18 @@ OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT) or with OTEL_SDK_DISABLED=tru
 nothing and the process logs to stderr as before. Configuration is the standard OTEL_* environment only:
   OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES      who is reporting (default service.name: the caller's)
   OTEL_EXPORTER_OTLP_ENDPOINT (+ per-signal forms)  where to (http/protobuf; OTEL_EXPORTER_OTLP_PROTOCOL must be that)
-  OTEL_EXPORTER_OTLP_HEADERS                        headers, e.g. Authorization (prefer the _FILE form below)
+  OTEL_EXPORTER_OTLP_HEADERS                        headers (none needed for the compose collector)
   OTEL_{TRACES,METRICS,LOGS}_EXPORTER               otlp (default), console or none, per signal
   OTEL_TRACES_SAMPLER / _ARG                        unset: the Settleview sampler below (_ARG = its background ratio)
   OTEL_METRIC_EXPORT_INTERVAL, OTEL_BSP_*, OTEL_BLRP_*, OTEL_EXPORTER_OTLP_TIMEOUT, OTEL_PYTHON_*_EXCLUDED_URLS, ...
-One addition, the Docker secrets convention the settings use: OTEL_EXPORTER_OTLP_HEADERS_FILE names a file holding the
-headers (same `key=value,key2=value2` form), so a backend credential is a secret file, never an environment value.
-Setting both it and OTEL_EXPORTER_OTLP_HEADERS is an error. An unknown exporter or protocol, or the `otel` extra not
-installed while an endpoint is set, is an error too: nothing falls back silently.
+An unknown exporter or protocol, or the `otel` extra not installed while an endpoint is set, is an error: nothing falls
+back silently.
 
-What is exported, and what never is (bootstrap/scrub.py runs on every span, log record and metric point on its way out):
+The services export to the OpenTelemetry Collector (compose service `otel-collector`, deploy/otel-collector/), which
+redacts secrets and personal data from every span, log and metric (its standard redaction and transform processors)
+and alone holds the backend's credential. This module does no redaction of its own; what it never emits by design:
 - traces: FastAPI requests, httpx calls, SQLAlchemy statements (no parameter values), agent wakes (GenAI spans) and
-  their tool calls; never headers, bodies, prompts, model output or tool arguments, and URL query values are blanked;
+  their tool calls; never headers (capture is off), bodies, prompts, model output or tool arguments;
 - metrics: request and client durations, event-loop lag, loop heartbeats and restarts, the writer's backlog and
   batches, the database pools, each venue stream's state and flaps, recorder freshness, the agent wake queue, wakes,
   tokens and cost, order gate decisions, process memory and CPU;
@@ -28,8 +28,8 @@ the heartbeat POST are kept at the background ratio, and /api/health and every `
 client HTTP span (a background poll: Kalshi perps every 2 s, Coinbase, Polymarket) is kept at the background ratio
 (OTEL_TRACES_SAMPLER_ARG, default 0.01); a database statement outside a request or wake (the writer's flush every
 250 ms, the loops' reads) is never a trace of its own (its time is in the writer and pool metrics); a call to
-api.telegram.org is never traced (the bot token is in its URL; it would be scrubbed anyway). Internal roots (agent
-wakes) are always kept. Metrics count everything regardless.
+api.telegram.org is never traced (the bot token is in its URL; the collector would redact it anyway). Internal roots
+(agent wakes) are always kept. Metrics count everything regardless.
 """
 
 from __future__ import annotations
@@ -48,7 +48,6 @@ log = logging.getLogger(__name__)
 SIGNALS = ("traces", "metrics", "logs")
 EXPORTERS = frozenset({"otlp", "console", "none"})
 PROTOCOL = "http/protobuf"
-HEADERS_FILE = "OTEL_EXPORTER_OTLP_HEADERS_FILE"
 DEFAULT_BACKGROUND_RATIO = 0.01
 NEVER_TRACED_HOSTS = frozenset({"api.telegram.org"})
 NEVER_TRACED_PATHS = ("/api/health",)
@@ -79,7 +78,6 @@ class Plan:
     """Which signals export where (from the environment); `enabled` False = install nothing."""
 
     exporters: Mapping[str, str]  # signal -> otlp | console | none
-    headers: Mapping[str, str] | None  # from OTEL_EXPORTER_OTLP_HEADERS_FILE (None: the exporters read the env)
     background_ratio: float
     custom_sampler: bool  # OTEL_TRACES_SAMPLER unset: SettleviewSampler
 
@@ -92,7 +90,7 @@ def plan(environ: Mapping[str, str]) -> Plan:
     """Read the OTEL_* environment; raises TelemetryConfigError on a bad value."""
     off = {s: "none" for s in SIGNALS}
     if _truthy(_env(environ, "OTEL_SDK_DISABLED")):
-        return Plan(off, None, DEFAULT_BACKGROUND_RATIO, True)
+        return Plan(off, DEFAULT_BACKGROUND_RATIO, True)
     generic = _env(environ, "OTEL_EXPORTER_OTLP_ENDPOINT")
     exporters: dict[str, str] = {}
     for sig in SIGNALS:
@@ -108,17 +106,6 @@ def plan(environ: Mapping[str, str]) -> Plan:
         v = _env(environ, var)
         if v and v != PROTOCOL:
             raise TelemetryConfigError(f"{var} must be {PROTOCOL} (the only OTLP exporter installed)")
-    headers = None
-    path = _env(environ, HEADERS_FILE)
-    if path and any(v == "otlp" for v in exporters.values()):
-        if _env(environ, "OTEL_EXPORTER_OTLP_HEADERS"):
-            raise TelemetryConfigError(f"both OTEL_EXPORTER_OTLP_HEADERS and {HEADERS_FILE} are set: use one")
-        try:
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read().strip()
-        except OSError as exc:
-            raise TelemetryConfigError(f"{HEADERS_FILE}: the file cannot be read ({type(exc).__name__})") from None
-        headers = _parse_headers(text)
     sampler = _env(environ, "OTEL_TRACES_SAMPLER")
     ratio = DEFAULT_BACKGROUND_RATIO
     if not sampler and _env(environ, "OTEL_TRACES_SAMPLER_ARG"):
@@ -128,25 +115,11 @@ def plan(environ: Mapping[str, str]) -> Plan:
             raise TelemetryConfigError("OTEL_TRACES_SAMPLER_ARG must be a number from 0 to 1") from None
         if not 0.0 <= ratio <= 1.0:
             raise TelemetryConfigError("OTEL_TRACES_SAMPLER_ARG must be a number from 0 to 1")
-    return Plan(exporters, headers, ratio, not sampler)
-
-
-def _parse_headers(text: str) -> dict[str, str]:
-    """`key=value,key2=value2` (values may be percent-encoded), as OTEL_EXPORTER_OTLP_HEADERS."""
-    from urllib.parse import unquote
-    out: dict[str, str] = {}
-    for part in (p.strip() for p in text.replace("\n", ",").split(",")):
-        if not part:
-            continue
-        key, sep, value = part.partition("=")
-        if not sep or not key.strip():
-            raise TelemetryConfigError(f"{HEADERS_FILE}: each header must be key=value")
-        out[unquote(key.strip()).lower()] = unquote(value.strip())
-    return out
+    return Plan(exporters, ratio, not sampler)
 
 
 def secret_values(settings: Any) -> list[str]:
-    """Every secret (and key id) the settings hold, for the scrubber's exact-value pass. Never logged."""
+    """Every secret (and key id) the settings hold, for the log mask (bootstrap/logs.py mask_secrets). Never logged."""
     out: list[str] = []
     for name in ("telegram_bot_token", "anthropic_api_key", "polymarket_secret_key", "database_password",
                  "research_database_password", "polymarket_key_id", "kalshi_key_id", "trading_demo_key_id",
@@ -228,94 +201,6 @@ def _request(name: str, attrs: Mapping[str, Any]) -> tuple[str, str]:
     path = str(attrs.get("http.route") or attrs.get("url.path") or attrs.get("http.target")
                or (name.split(" ", 1)[1] if " " in name else ""))
     return method, path.split("?", 1)[0]
-
-
-# -- scrubbing exporters ----------------------------------------------------------------------------------------------
-def _scrubbing_classes(scrubber):
-    from opentelemetry.sdk._logs import LogRecordProcessor
-    from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult
-    from opentelemetry.sdk.trace import Event, ReadableSpan
-    from opentelemetry.sdk.trace.export import SpanExporter
-    from opentelemetry.trace import Link, Status
-    import dataclasses
-
-    sc = scrubber
-
-    def span_copy(s: ReadableSpan) -> ReadableSpan:
-        status = s.status
-        if status.description:
-            status = Status(status.status_code, sc.text(status.description))
-        return ReadableSpan(
-            name=sc.text(s.name), context=s.context, parent=s.parent, resource=s.resource,
-            attributes=sc.attributes(s.attributes),
-            events=[Event(sc.text(e.name), sc.attributes(e.attributes), e.timestamp) for e in s.events],
-            links=[Link(lk.context, sc.attributes(lk.attributes)) for lk in s.links], kind=s.kind, status=status,
-            start_time=s.start_time, end_time=s.end_time, instrumentation_scope=s.instrumentation_scope)
-
-    class ScrubbingSpanExporter(SpanExporter):
-        def __init__(self, inner: SpanExporter) -> None:
-            self.inner = inner
-
-        def export(self, spans):
-            return self.inner.export([span_copy(s) for s in spans])
-
-        def shutdown(self):
-            return self.inner.shutdown()
-
-        def force_flush(self, timeout_millis: int = 30000) -> bool:
-            return self.inner.force_flush(timeout_millis)
-
-    class ScrubbingLogProcessor(LogRecordProcessor):
-        """Runs first: the record is scrubbed in place before any exporting processor sees it."""
-
-        def on_emit(self, log_record) -> None:
-            r = log_record.log_record
-            r.body = sc.body(r.body)
-            if r.attributes:
-                clean = sc.attributes(dict(r.attributes))
-                for k, v in clean.items():
-                    r.attributes[k] = v
-
-        def shutdown(self) -> None:
-            pass
-
-        def force_flush(self, timeout_millis: int = 30000) -> bool:
-            return True
-
-    def point_copy(p):
-        changes: dict[str, Any] = {"attributes": sc.attributes(p.attributes)}
-        if getattr(p, "exemplars", None):
-            changes["exemplars"] = [dataclasses.replace(e, filtered_attributes=sc.attributes(e.filtered_attributes))
-                                    for e in p.exemplars]
-        return dataclasses.replace(p, **changes)
-
-    def metrics_copy(data):
-        rms = []
-        for rm in data.resource_metrics:
-            sms = []
-            for sm in rm.scope_metrics:
-                ms = [dataclasses.replace(m, data=dataclasses.replace(
-                    m.data, data_points=[point_copy(p) for p in m.data.data_points])) for m in sm.metrics]
-                sms.append(dataclasses.replace(sm, metrics=ms))
-            rms.append(dataclasses.replace(rm, scope_metrics=sms))
-        return dataclasses.replace(data, resource_metrics=rms)
-
-    class ScrubbingMetricExporter(MetricExporter):
-        def __init__(self, inner: MetricExporter) -> None:
-            super().__init__(preferred_temporality=getattr(inner, "_preferred_temporality", None),
-                             preferred_aggregation=getattr(inner, "_preferred_aggregation", None))
-            self.inner = inner
-
-        def export(self, metrics_data, timeout_millis: float = 10_000, **kwargs) -> MetricExportResult:
-            return self.inner.export(metrics_copy(metrics_data), timeout_millis=timeout_millis, **kwargs)
-
-        def force_flush(self, timeout_millis: float = 10_000) -> bool:
-            return self.inner.force_flush(timeout_millis=timeout_millis)
-
-        def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
-            self.inner.shutdown(timeout_millis=timeout_millis, **kwargs)
-
-    return ScrubbingSpanExporter, ScrubbingLogProcessor, ScrubbingMetricExporter
 
 
 # -- the handle -------------------------------------------------------------------------------------------------------
@@ -556,14 +441,12 @@ def _resource(service: str, environ: Mapping[str, str]):
     return Resource.create(attrs)
 
 
-def setup(service: str, *, environ: Mapping[str, str] | None = None, secrets: Iterable[str] = (),
-          span_exporter: Any = None, metric_exporter: Any = None, log_exporter: Any = None,
+def setup(service: str, *, environ: Mapping[str, str] | None = None, span_exporter: Any = None, metric_exporter: Any = None, log_exporter: Any = None,
           instrument: bool = True) -> Telemetry:
     """Install OpenTelemetry for this process when configured (see the module docstring), else nothing.
 
-    `service` is the default service.name (OTEL_SERVICE_NAME wins). `secrets` are exact values the scrubber removes
-    (`secret_values(settings)`). The exporters are for tests: given ones replace the OTLP exporters of their signal,
-    are wrapped by the same scrubbing, and export synchronously."""
+    `service` is the default service.name (OTEL_SERVICE_NAME wins). The exporters are for tests: given ones replace
+    the OTLP exporters of their signal and export synchronously."""
     env = os.environ if environ is None else environ
     p = plan(env)
     given = {"traces": span_exporter, "metrics": metric_exporter, "logs": log_exporter}
@@ -581,37 +464,32 @@ def setup(service: str, *, environ: Mapping[str, str] | None = None, secrets: It
     except ImportError:
         raise TelemetryConfigError("an OTLP endpoint is set but the OpenTelemetry SDK is not installed: install the "
                                    "`otel` extra (pip install -e \".[otel]\")") from None
-    from btc_signal_engine.bootstrap.scrub import Scrubber
-    scrubber = Scrubber(secrets)
-    SpanEx, LogScrub, MetricEx = _scrubbing_classes(scrubber)
     resource = _resource(service, env)
     tel = Telemetry(True, service, dict(exporters))
-    headers = dict(p.headers) if p.headers is not None else None
 
     if exporters["traces"] != "none":
         sampler = _sampler_class()(p.background_ratio) if p.custom_sampler else None
         tp = TracerProvider(resource=resource, sampler=sampler, shutdown_on_exit=False)
         if exporters["traces"] == "given":
-            tp.add_span_processor(SimpleSpanProcessor(SpanEx(span_exporter)))
+            tp.add_span_processor(SimpleSpanProcessor(span_exporter))
         elif exporters["traces"] == "console":
             from opentelemetry.sdk.trace.export import ConsoleSpanExporter
-            tp.add_span_processor(SimpleSpanProcessor(SpanEx(ConsoleSpanExporter())))
+            tp.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
         else:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-            tp.add_span_processor(BatchSpanProcessor(SpanEx(OTLPSpanExporter(headers=headers))))
+            tp.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
         trace.set_tracer_provider(tp)
         tel._providers.append(tp)
 
     if exporters["metrics"] != "none":
         if exporters["metrics"] == "given":
-            inner = metric_exporter
-            reader = PeriodicExportingMetricReader(MetricEx(inner), export_interval_millis=3_600_000)
+            reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=3_600_000)
         elif exporters["metrics"] == "console":
             from opentelemetry.sdk.metrics.export import ConsoleMetricExporter
-            reader = PeriodicExportingMetricReader(MetricEx(ConsoleMetricExporter()))
+            reader = PeriodicExportingMetricReader(ConsoleMetricExporter())
         else:
             from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-            reader = PeriodicExportingMetricReader(MetricEx(OTLPMetricExporter(headers=headers)))
+            reader = PeriodicExportingMetricReader(OTLPMetricExporter())
         mp = MeterProvider(resource=resource, metric_readers=[reader], shutdown_on_exit=False)
         metrics.set_meter_provider(mp)
         tel._providers.append(mp)
@@ -619,7 +497,6 @@ def setup(service: str, *, environ: Mapping[str, str] | None = None, secrets: It
 
     if exporters["logs"] != "none":
         lp = LoggerProvider(resource=resource, shutdown_on_exit=False)
-        lp.add_log_record_processor(LogScrub())  # first: every exporter below sees the scrubbed record
         if exporters["logs"] == "given":
             lp.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
         elif exporters["logs"] == "console":
@@ -627,7 +504,7 @@ def setup(service: str, *, environ: Mapping[str, str] | None = None, secrets: It
             lp.add_log_record_processor(SimpleLogRecordProcessor(ConsoleLogRecordExporter()))
         else:
             from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-            lp.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter(headers=headers)))
+            lp.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
         _logs.set_logger_provider(lp)
         tel._providers.append(lp)
 

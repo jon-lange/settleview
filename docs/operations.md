@@ -137,14 +137,15 @@ UTC too) line up in one collector. The HTTP client libraries `httpx` and `httpco
 polling every 2 s); request counts and latencies are OpenTelemetry metrics instead (next section). With an OTLP
 endpoint set, the same records also go to OpenTelemetry; stderr stays on and stays the source of truth.
 
-**Every line is scrubbed** before any handler writes it (stderr, `app.log`, the supervisor's files, uvicorn's own
-lines, the OpenTelemetry bridge), with the same rules as the telemetry exporters (`bootstrap/scrub.py`): the exact
-values of the app's secrets (Telegram token, Anthropic key, Polymarket secret, key ids, database passwords), Telegram
-bot tokens in URLs, `Authorization` / API-key / cookie headers, `pin=` / `password=` / `token=` values, URL
-credentials, and long base64-looking runs. That covers the message after its arguments are filled in, the exception
-text and the exception object, and stack dumps, from any logger (`bootstrap/logs.py`). A side effect: a long opaque
-value such as a Kalshi pagination cursor shows as `<redacted>`. Database errors never include bound parameters (every
-engine has `hide_parameters`).
+**Secrets stay out of the logs at the source**: nothing logs a credential, database errors never include bound
+parameters (every engine has `hide_parameters`), httpx stays at WARNING so no request URL is written, and the Telegram
+adapter masks its token in the library's loggers. One defence in depth stays in the process, because stderr and
+Docker's logs never pass through the OpenTelemetry Collector that redacts the exported telemetry ("Observability"
+below): every log record, from any logger and before any handler sees it, has the **exact values of the app's own
+secrets** (Telegram token, Anthropic key, Polymarket secret, key ids, database passwords: whatever the settings hold)
+replaced by `****`, in the message after its arguments are filled in, the exception text and object, and stack dumps
+(`bootstrap/logs.py`, `mask_secrets`). It knows no patterns: shapes of credentials are the collector's job, and only
+for what is exported.
 
 **Container logs** (compose): every service uses Docker's `local` log driver, at most 5 files of 10 MB per container
 (`x-logging` in `compose.yaml`), so logs can never fill the disk Postgres shares. `docker compose logs` reads them as
@@ -155,17 +156,29 @@ before. In the cloud the platform's collector takes stderr.
 Every Python service (the app and both recorders) exports **traces, metrics and logs** over OTLP/HTTP when an
 endpoint is configured, and nothing at all when not (the default): no endpoint, no SDK set-up, no patched library.
 Plan and decisions: [docs/plans/2026-10-31-1400-infra-observability-evaluation.md](plans/2026-10-31-1400-infra-observability-evaluation.md).
-The code: `bootstrap/telemetry.py` (set-up, sampling, the app's gauges), `bootstrap/scrub.py` (what never leaves),
-`adapters/telemetry.py` (the agent wake's GenAI spans, the writer's batch metrics). The SDK is the `otel` extra
-(in the Docker image and the dev container).
+The code: `bootstrap/telemetry.py` (set-up, sampling, the app's gauges), `adapters/telemetry.py` (the agent wake's
+GenAI spans, the writer's batch metrics). The SDK is the `otel` extra (in the Docker image and the dev container).
+
+**The OpenTelemetry Collector sits between the services and the backend** (compose service `otel-collector`, the
+official `otel/opentelemetry-collector-contrib` image pinned by digest, profile `observability`; its own configuration
+is `deploy/otel-collector/config.yaml`). The services send OTLP/HTTP to `http://otel-collector:4318` with no credential
+(inside the compose network; nothing is published). The collector, with standard components only:
+`memory_limiter` (refuses data at 80 % of its 256 MiB limit; the services retry, then drop), `attributes` (deletes
+client IP addresses), `redaction` (masks credential-shaped values in every span, span event, resource, log and metric
+attribute and in log bodies, and every value of an attribute whose key names a credential or a captured HTTP header),
+`transform` (the span name and status message, and every query value of a URL attribute), `batch`, then OTLP/HTTP to
+OpenObserve with the ingest-only token. It alone holds that token (`secrets/openobserve_ingest_token`, its
+`basicauth` password file); the app and the recorders hold no backend credential at all. Its compose healthcheck is
+its own binary validating the configuration (the image has no shell or HTTP client); `GET :13133/` (the
+`health_check` extension) is the HTTP probe for platforms that have one. Masked text reads `****`; an item the
+redaction processor changed carries `redaction.masked.count`.
 
 **Settings** (the standard OpenTelemetry variables; names and purpose only):
 
 | Variable | Purpose |
 |---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | The OTLP/HTTP base URL (e.g. `http://openobserve:5080/api/default`); `/v1/traces`, `/v1/metrics`, `/v1/logs` are added. Unset: telemetry is off. Per signal: `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` (used as given). |
-| `OTEL_EXPORTER_OTLP_HEADERS_FILE` | A file holding the backend's headers (`key=value,key2=value2`, values may be percent-encoded), e.g. `Authorization=Basic%20...`. Compose mounts the `otlp_headers` secret and sets this. The one addition to the standard set (the `_FILE` secrets convention); read only when an endpoint is set. Setting it and `OTEL_EXPORTER_OTLP_HEADERS` is an error. |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Headers as an environment value: works, but prefer the file (a credential in the environment shows in `docker inspect`). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The OTLP/HTTP base URL: `http://otel-collector:4318` (the collector); `/v1/traces`, `/v1/metrics`, `/v1/logs` are added. Unset: telemetry is off. Per signal: `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` (used as given). Always a collector that redacts, never a backend directly: the services do no redaction of their own. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Not needed (the collector takes the services' data without a credential). The standard variable still works for another collector that wants one. |
 | `OTEL_SERVICE_NAME` | Who reports. Compose sets `settleview-app`, `settleview-rec-pm-quotes`, `settleview-rec-pm-settle`; unset, the same names are the defaults. `service.version` is the package version plus the image's commit (`0.1.0+<sha>`), `vcs.ref.head.revision` the full commit. |
 | `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes; compose's default is `deployment.environment.name=local`. |
 | `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER` | `otlp` (default), `console` (stdout, for debugging) or `none`, per signal. Anything else stops the start with an error naming the variable (exit 78 for a recorder). |
@@ -178,19 +191,19 @@ The code: `bootstrap/telemetry.py` (set-up, sampling, the app's gauges), `bootst
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | Defaults to `http,database` (the stable HTTP and database conventions: `http.route` on server metrics, not one series per raw path). |
 
 Only the app reads other `OTEL_*` variables from `.env` (its `env_file`); compose passes the recorders the endpoint,
-the headers file, the service name and the resource attributes.
+the service name and the resource attributes.
 
 **Local backend: OpenObserve** (one container, opt-in compose profile `observability`; logs, metrics, traces and
 GenAI views in one UI; AGPL-3.0, run unmodified):
 
 ```bash
-python deploy/postgres/make_secrets.py        # adds secrets/openobserve.env and an empty secrets/otlp_headers
-echo OTEL_EXPORTER_OTLP_ENDPOINT=http://openobserve:5080/api/default >> .env
-docker compose --profile observability up -d  # OpenObserve, and the services recreated with the endpoint
-python deploy/openobserve/ingest_token.py     # the services' ingest-only credential into secrets/otlp_headers
-docker compose up -d --force-recreate app rec-pm-quotes rec-pm-settle   # they read it at their start
+python deploy/postgres/make_secrets.py        # adds secrets/openobserve.env and an empty secrets/openobserve_ingest_token
+echo OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 >> .env
+docker compose --profile observability up -d  # OpenObserve and the collector; the services recreated with the endpoint
+python deploy/openobserve/ingest_token.py     # the collector's ingest-only token into secrets/openobserve_ingest_token
+docker compose --profile observability up -d --force-recreate otel-collector   # it reads the token at its start
 # UI: http://localhost:5080 (this PC only), user admin@settleview.local, the password in secrets/openobserve.env
-docker compose --profile observability stop openobserve   # pause it (the app keeps running; exports retry, then drop)
+docker compose --profile observability stop openobserve   # pause it (the collector queues, retries, then drops)
 # off again: remove the line from .env, then `docker compose up -d`; `docker volume rm settleview_settleview-o2` deletes its data
 ```
 
@@ -201,20 +214,21 @@ volume while the disk actually used is a few MB to start with (`du` inside a con
 only. The root password is read once, on its first start, from the env file (its image has no shell, so it cannot read
 a secret file). To change it: change it in the UI, delete `secrets/openobserve.env`, run
 `O2_ROOT_PASSWORD=<new> python deploy/postgres/make_secrets.py` (the services' header does not change with it).
-Another backend: write its headers into `secrets/otlp_headers` and point the endpoint at
-it. If the backend is down, exports fail quietly in the background (a few WARNINGs from `opentelemetry`); the app does
-not wait for it, and a stop waits at most 5 s for the last export.
+Another backend: add its exporter (and its credential, as a secret file the collector mounts) to
+`deploy/otel-collector/config.yaml`; the services do not change. If the backend is down, the collector retries and
+queues in memory, then drops the oldest data; if the collector is down, the services' exports fail quietly in the
+background (a few WARNINGs from `opentelemetry`). The app never waits for either, and a stop waits at most 5 s for
+the last export.
 
-**The services' credential is ingest-only** (review B4#14). `secrets/otlp_headers`, which the app and the recorders
-mount, holds OpenObserve's organization ingestion token (`Authorization=Basic ...` of `otlp@settleview.local:<token>`),
-never the root login: with it the exporters can send logs, metrics and traces, and every other API (search, streams,
-users, settings) answers 401 (checked against v1.1.1, 2026-11-01; why not a service account: [docs/solutions/2026-11-01-openobserve-ingest-only-credential.md](solutions/2026-11-01-openobserve-ingest-only-credential.md)). `deploy/openobserve/ingest_token.py` (standard
+**The collector's credential is ingest-only** (review B4#14). `secrets/openobserve_ingest_token`, which only the
+collector mounts, holds OpenObserve's organization ingestion token (sent as Basic auth of
+`otlp@settleview.local:<token>`), never the root login: with it the collector can send logs, metrics and traces, and
+every other API (search, streams, users, settings) answers 401 (checked against v1.1.1, 2026-11-01; why not a service account: [docs/solutions/2026-11-01-openobserve-ingest-only-credential.md](solutions/2026-11-01-openobserve-ingest-only-credential.md)). `deploy/openobserve/ingest_token.py` (standard
 library; `--url` for another address, e.g. an SSH tunnel on Swarm, with `O2_ROOT_PASSWORD` in the environment instead of
 the env file) reads the token with the root login, checks both halves (an OTLP batch is accepted, the stream list is
-refused) and only then writes the header; run again it changes nothing. `--rotate` issues a new token (the old one
-stops at once): run it, then recreate the three services. The root password lives only in `secrets/openobserve.env`,
-which only the `openobserve` container reads. A deployment made before 2026-11-01 has a root-derived header: run the
-script once (see "Deploying: the 2026-11-01 least-privilege steps").
+refused) and only then writes the token; run again it changes nothing. `--rotate` issues a new token (the old one
+stops at once): run it, then recreate the collector (a compose secret is the file as it was when the container
+started). The root password lives only in `secrets/openobserve.env`, which only the `openobserve` container reads.
 
 **What is exported**
 
@@ -245,13 +259,18 @@ script once (see "Deploying: the 2026-11-01 least-privilege steps").
   read at most every 10 minutes). The one-off migrate job exports its logs as `settleview-migrate`.
 - Logs: every record the root logger handles, with the trace and span id when it was written inside a span.
 
-**What is never exported**: prompts, model output, thinking, tool arguments or results, order tickets, request or
-response bodies, HTTP headers, cookies, URL query values, the Telegram bot token (it is in the bot API's URL path),
-API keys, signatures, passwords, PEM keys, and the app's own secret values. Every exporter is wrapped by the scrubber
-(`bootstrap/scrub.py`), so this holds even if someone turns on header capture (`OTEL_INSTRUMENTATION_HTTP_CAPTURE_*`);
-`tests/telemetry` fails if a planted token, key, cookie, signature or query secret, or anything shaped like one,
-reaches an exporter. The agent's Claude Code CLI gets no `OTEL_*` variable (the harness blanks them), so its own
-telemetry stays off.
+**What is never emitted** by the services (by design, tested in `tests/telemetry`): prompts, model output, thinking,
+tool arguments or results, order tickets, request or response bodies, HTTP header values (capture is off), SQL
+parameter values. **What the collector removes** from whatever is emitted, before it reaches OpenObserve: Telegram bot
+tokens (in a URL, a span name, a log line), Anthropic-style API keys, PEM private keys and private key file paths,
+JSON Web Tokens, `Bearer` / `Basic` credentials, `user:password@` in URLs, `password=` / `token=` / `pin=` / `sig=` and
+similar pairs, long padded base64 runs (signatures, raw keys), e-mail addresses, every URL query value, every captured
+header value (if someone turns on `OTEL_INSTRUMENTATION_HTTP_CAPTURE_*`), every attribute whose key names a credential,
+and client IP addresses. `tests/telemetry/test_collector_e2e.py` proves it against a throwaway collector and OpenObserve
+(the same images as compose.yaml; the steps are in `tests/telemetry/collector_e2e.compose.yaml`): a span, a log and
+metrics from each service, carrying a planted token, key, key path, signature, password, query secret and phone IP,
+arrive with none of them, under unchanged service names, and every SLO alert still applies and sees each service. The
+agent's Claude Code CLI gets no `OTEL_*` variable (the harness blanks them), so its own telemetry stays off.
 
 **Sampling** (the default sampler): a span with a parent follows it. Requests that change something (POST, PUT, PATCH,
 DELETE: the order path) are always traced; GET polls (Play's scoreboard, odds and kill-switch reads) and `/api/trading/heartbeat` at
@@ -260,21 +279,25 @@ Coinbase, Polymarket) is traced at the background ratio; api.telegram.org never;
 a wake (the writer's flush every 250 ms) is never a trace of its own: its timing is in the writer and pool metrics.
 Agent wakes are always traced. Metrics count everything.
 
-**In the cloud** the same image exports to the platform's collector; only the endpoint and the headers file change:
-- **Azure Container Apps**: the environment's managed OpenTelemetry agent injects the endpoint and sends traces and
-  logs to Application Insights (Azure Monitor); for metrics, add a generic OTLP destination (or Azure Monitor managed
-  Prometheus behind a collector). `azure-monitor-opentelemetry` is not needed.
-- **AWS ECS / Fargate**: an ADOT (AWS Distro for OpenTelemetry) collector sidecar on `localhost:4318` forwards to
-  CloudWatch (X-Ray traces, Logs, Metrics) with SigV4; the app needs no AWS credentials for it.
-- **Anything else** that speaks OTLP/HTTP (Grafana Cloud, Honeycomb, SigNoz, Datadog's OTLP intake, a self-hosted
-  OpenTelemetry Collector, OpenObserve on a server): its URL in `OTEL_EXPORTER_OTLP_ENDPOINT`, its key in the headers file.
+**In the cloud** the same image exports to a collector beside it; only the endpoint changes. Run this collector
+configuration there too (its processors are what keep secrets out of the backend), with that platform's exporter:
+- **Azure Container Apps**: the collector as a container app (or sidecar) on the environment's network, exporting to
+  Application Insights (Azure Monitor) or any OTLP backend. The environment's managed OpenTelemetry agent has no
+  redaction step: put the collector in front of it, never the services straight onto it.
+- **AWS ECS / Fargate**: an ADOT (AWS Distro for OpenTelemetry, a distribution of this collector with the same
+  `redaction` and `transform` processors) sidecar on `localhost:4318` with this configuration's processors, forwarding
+  to CloudWatch (X-Ray traces, Logs, Metrics) with SigV4; the app needs no AWS credentials for it.
+- **Anything else** that speaks OTLP (Grafana Cloud, Honeycomb, SigNoz, Datadog's OTLP intake, OpenObserve on a
+  server): an exporter in the collector's configuration, its key a secret file the collector mounts.
 
 **Checked end to end** (2026-10-31, a throwaway stack with OpenObserve v1.1.1 on linux/arm64, no keys, a fake bot token,
 an agent wake of the bundled Claude Code CLI against the repo's local fake Anthropic API): traces, 71 metric streams and
 logs arrived per service; the wake's spans nested with tokens, cost and tool results; a log line carried its trace id;
 no planted token, query secret, password or prompt marker appeared in any stream. See
 [docs/solutions/2026-10-31-otel-instrumentation-gotchas.md](solutions/2026-10-31-otel-instrumentation-gotchas.md) for
-what that run caught.
+what that run caught. Since 2026-11-01 the redaction is the collector's (above);
+[docs/solutions/2026-11-01-otel-collector-redaction.md](solutions/2026-11-01-otel-collector-redaction.md) records
+what building it taught.
 
 <a id="alerting"></a>
 ## Alerting (SLOs on OpenObserve)
@@ -337,8 +360,8 @@ period counts from zero, so the first dead letter after a restart is not missed 
 doc explains it). The research recorders' own silence alert stays the app's Telegram `data` alert ("Health").
 
 **Why the bot token lives in OpenObserve, and why a separate bot.** The Bot API takes the token in the URL path, so
-the destination holds it (its admins can read it; it never appears in a log line of ours: the app scrubs Telegram
-tokens and nothing of ours calls that URL). Use a bot made only for alerts (@BotFather, `/newbot`), never the app's
+the destination holds it (its admins can read it; it never appears in our telemetry: the collector masks Telegram
+tokens, and nothing of ours calls that URL). Use a bot made only for alerts (@BotFather, `/newbot`), never the app's
 `BTCFLOW_TELEGRAM_BOT_TOKEN`: the app's bot is the remote control (it approves proposals and stops agents), so its
 token must stay in the app alone; an alerts bot can only send you text, and revoking it stops only the alerts. The
 alternative, a webhook into the app that forwards to the app's bot, was not built: it would be an endpoint and a
@@ -442,8 +465,11 @@ that keeps restarting logs its traceback every time.
 
 <a id="alert-service-silent"></a>
 **Service stopped reporting** (`service_silent`). The row counts samples per service in the last 5 minutes; a 0 is
-down or not exporting. `docker compose ps`; if it runs, check its telemetry settings (`OTEL_EXPORTER_OTLP_ENDPOINT`,
-`secrets/otlp_headers`) and that OpenObserve accepts the token (`deploy/openobserve/ingest_token.py`). On a host
+down or not exporting. `docker compose ps`; if it runs, check its `OTEL_EXPORTER_OTLP_ENDPOINT`
+(`http://otel-collector:4318`), that the collector runs (`docker compose --profile observability ps otel-collector`;
+`docker compose logs otel-collector` names a refused export) and that OpenObserve accepts its token
+(`deploy/openobserve/ingest_token.py`, then recreate the collector). All three services silent at once is the
+collector or OpenObserve, not the services. On a host
 without the recorders, delete their part of the query (and `export`/commit) or the alert stays on.
 
 <a id="alert-migration"></a>
@@ -864,6 +890,7 @@ it. In the cloud they become the task / container sizes.
 | `backup` | 512 MiB, 1 CPU | 64 MiB | `pg_dump` streams; ~10 MiB idle. |
 | `rec-pm-quotes` | 256 MiB, 0.5 CPU | 96 MiB | ~64 MiB measured. |
 | `rec-pm-settle` | 256 MiB, 0.5 CPU | 64 MiB | ~58 MiB measured (70 MiB with telemetry on). |
+| `otel-collector` | 256 MiB, 0.5 CPU | 64 MiB | ~45 MiB measured idle; `memory_limiter` refuses data at 80 % of the limit; the healthcheck's `validate` needs under 48 MB for 0.4 s. |
 | `openobserve` | 1 GiB, 1 CPU | 256 MiB | ~350 MiB measured just after start with its caches capped; budget from the plan: ~0.5 GiB, under 0.1 CPU idle, under 1 GB of disk for 14 days. |
 
 **Postgres settings** (`command:` flags in `compose.yaml`; a managed server takes the same values from its parameter
@@ -1074,7 +1101,7 @@ the new commit and `docker build ... -t settleview:local .` in the deploy checko
 
 ```bash
 python deploy/postgres/make_secrets.py          # adds secrets/pg_recorder_password; every existing file is kept
-python deploy/openobserve/ingest_token.py       # only with the observability profile running: the ingest-only header
+python deploy/openobserve/ingest_token.py       # only with the observability profile running: the ingest-only token
 docker compose up -d postgres                   # Postgres recreated with the new secret and roles.sh (seconds)
 docker compose exec -T postgres bash /docker-entrypoint-initdb.d/20-roles.sh   # prints "settleview roles: ..."
 docker compose up -d                            # migrate job, then the app; the recorders as settleview_recorder
@@ -1087,9 +1114,25 @@ otherwise Git Bash rewrites the container path into a Windows path under its ins
 container finds no such file (this happened in the 2026-11-01 live deploy). PowerShell, cmd and Linux/macOS shells
 need nothing. The same applies to any `docker ... exec` or `run` argument that is an absolute container path.
 
-`ingest_token.py` before `up -d`: the recreated app and recorders read the new header at their start, so no second
-restart. The old header held OpenObserve's root login; changing the root password in its UI afterwards is a sensible
-extra (see "Observability"). Rolling back the code needs no database change: the old compose file runs the recorders
+`ingest_token.py` before `up -d`: the recreated services read their secrets at their start, so no second restart.
+The old header held OpenObserve's root login; changing the root password in its UI afterwards is a sensible extra
+(see "Observability"). (Since the collector step below, the token goes to the collector, not to the services.)
+
+**The 2026-11-01 collector steps** (once, on a deployment that exports to OpenObserve; in the window between agent
+sessions, as any app restart). After `git checkout` of the new commit and the image build in the deploy checkout:
+
+```bash
+python deploy/postgres/make_secrets.py          # adds an empty secrets/openobserve_ingest_token; the rest is kept
+python deploy/openobserve/ingest_token.py       # OpenObserve running: writes the token for the collector
+# in .env: OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318   (was http://openobserve:5080/api/default)
+docker compose --profile observability up -d    # the collector starts; app and recorders recreated with the endpoint
+docker compose --profile observability ps       # otel-collector healthy
+rm secrets/otlp_headers                         # the services' old header file: nothing mounts it any more
+```
+
+Before the `.env` change the services would send straight to OpenObserve without a credential and be refused (401):
+nothing unredacted reaches it. Rolling back: the previous commit's compose file mounts `secrets/otlp_headers` again,
+so keep that file until the new commit has run for a while (or re-create it with the previous `ingest_token.py`). Rolling back the code needs no database change: the old compose file runs the recorders
 as `settleview_app`, which can then read `research` but not write it, so on a rollback also run
 `docker compose exec postgres psql -U postgres -d settleview -c "ALTER SCHEMA research OWNER TO settleview_app"` and the
 same for each table (or keep the recorders stopped until the roll forward).
@@ -1408,8 +1451,8 @@ with `BTCFLOW_TRADING_PROD_KEY_PATH=/run/keys/prod` in `.env`. Windows-only sett
 what it needs, and the Linux image bundles the agent CLI.
 
 `compose.yaml` runs five services: `postgres` and `backup` (the official `postgres:17.10` image) and, from one app
-image, `app`, `rec-pm-quotes`, `rec-pm-settle`; a sixth, `openobserve`, only with `--profile observability` (see
-"Observability"). First start: `python deploy/postgres/make_secrets.py` once (see "Postgres"); run it again after an
+image, `app`, `rec-pm-quotes`, `rec-pm-settle`; `otel-collector` and `openobserve` only with `--profile
+observability` (see "Observability"). First start: `python deploy/postgres/make_secrets.py` once (see "Postgres"); run it again after an
 update that adds a secret file (it keeps every existing one). Each service's memory and CPU limits: "Resource limits
 and Postgres settings".
 
@@ -1465,7 +1508,7 @@ the agent's CLI, would see it): each is a compose secret mounted under `/run/sec
 | `pg_app_password` | `BTCFLOW_DATABASE_PASSWORD` (settleview_app) | postgres, migrate, app |
 | `pg_recorder_password` | `BTCFLOW_DATABASE_PASSWORD` (settleview_recorder) | postgres, rec-pm-quotes, rec-pm-settle |
 | `pg_superuser_password`, `pg_research_password`, `pg_backup_password` | the other roles' passwords (see "Postgres") | postgres; backup (its own) |
-| `otlp_headers` | `OTEL_EXPORTER_OTLP_HEADERS_FILE`: OpenObserve's ingest-only token (see "Observability") | app, rec-pm-quotes, rec-pm-settle |
+| `openobserve_ingest_token` | the collector's `basicauth` password file: OpenObserve's ingest-only token (see "Observability") | otel-collector |
 
 An **empty file means "not configured"** (that feature stays off), so every file always exists:
 `deploy/postgres/make_secrets.py` creates the missing ones empty. A value in both `.env` and a non-empty file is an
@@ -1577,9 +1620,9 @@ Not tried yet; the image and services are built for it. The rules that matter on
   only the Polymarket key; never give them the Kalshi or Anthropic keys.
 - **Logs**: stderr in every container; the platform's collector reads it (Container Apps: Log Analytics; ECS:
   CloudWatch via `awslogs`; Swarm: `docker service logs`).
-- **Telemetry**: point `OTEL_EXPORTER_OTLP_ENDPOINT` at the platform's OpenTelemetry collector (Container Apps' managed
-  agent, an ADOT sidecar on ECS) and give its credential, if any, as the headers file (see "Observability"): an
-  ingest-only one, never the backend's admin login.
+- **Telemetry**: point `OTEL_EXPORTER_OTLP_ENDPOINT` at an OpenTelemetry Collector running
+  `deploy/otel-collector/config.yaml`'s processors (a container app on ACA, an ADOT sidecar on ECS; see
+  "Observability"); the backend's credential belongs to the collector, an ingest-only one, never the admin login.
 - **Sizes**: the compose limits are the starting task / container sizes ("Resource limits and Postgres settings").
 - **Health**: the image's healthcheck is the app's liveness probe (`GET /api/health` on loopback: open without a
   session, it answers such a caller only `{"status": "up"}`); each recorder's is
@@ -1933,8 +1976,8 @@ How the fleet works: `docs/agent/multi-agent.md`.
 - Stop waits up to 30 s for an agent's order in flight (its own or a rule's) to be answered and recorded before the
   session ends; an order still unanswered then keeps running and is recorded when it finishes (logged as a warning).
 - **Wake inputs** (migration 0021, table `agent_wake_inputs`, one row per wake keyed by the wake's `agent_journal`
-  id): the exact user message the model got (`<memory>` + `<events>` + `<observe>`, verbatim after the log scrubber:
-  the secret patterns and the settings' exact secret values), its sha256, a `fingerprint` (system prompt sha256, the
+  id): the exact user message the model got (`<memory>` + `<events>` + `<observe>`, verbatim after the log mask:
+  the settings' exact secret values replaced), its sha256, a `fingerprint` (system prompt sha256, the
   user layer versions, the tool specs sha256, model, effort, max_tokens, max_turns, SDK and CLI version, git sha from
   `SETTLEVIEW_GIT_SHA`, else `unknown`) and `sensitive` (what an eval export must redact or drop:
   `observe.balances`, numbers after cash / balance words in free text, ids). The wake row itself carries the

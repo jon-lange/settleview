@@ -35,7 +35,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from btc_signal_engine.bootstrap import processes
-from btc_signal_engine.bootstrap.logs import EX_CONFIG, SCRUB, UtcFormatter, install_scrubbing, log_to_stderr
+from btc_signal_engine.bootstrap.logs import EX_CONFIG, UtcFormatter, log_to_stderr
 
 log = logging.getLogger("btc_signal_engine.supervise")
 
@@ -82,7 +82,6 @@ def child_logger(log_dir: Path, name: str, max_bytes: int, backups: int) -> logg
     log_dir.mkdir(parents=True, exist_ok=True)
     h = RotatingFileHandler(log_dir / f"{name}.log", maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
     h.setFormatter(logging.Formatter("%(message)s"))
-    h.addFilter(SCRUB)  # a child's own lines are scrubbed by the child; this catches anything else it printed
     lg.addHandler(h)
     return lg
 
@@ -295,7 +294,6 @@ def main(argv: list[str] | None = None) -> int:
     fh = RotatingFileHandler(log_dir / "supervisor.log", maxBytes=LOG_BYTES, backupCount=LOG_BACKUPS, encoding="utf-8")
     fh.setFormatter(UtcFormatter())
     logging.getLogger().addHandler(fh)
-    install_scrubbing()
     pid_file = data_dir / SUPERVISOR_PID_FILE
     if not _claim_pid_file(pid_file):
         log.error("another supervisor is running for %s (%s); not starting a second one", data_dir, pid_file)

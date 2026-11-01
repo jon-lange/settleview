@@ -19,20 +19,23 @@
 #                  127.0.0.1:8002: external agents' tool API
 #   rec-pm-quotes  Polymarket US quotes + trades (WebSocket)        writes schema research (settleview_recorder)
 #   rec-pm-settle  Polymarket US settlement terms (public, no keys) writes schema research (settleview_recorder)
+#   otel-collector the OpenTelemetry Collector: redacts the services' telemetry, forwards it to OpenObserve;
+#                  profile `observability` only                                                  not published
 #   openobserve    logs, metrics and traces (OpenTelemetry), profile `observability` only    127.0.0.1:5080: this PC
 #   tailscale      HTTPS for phones over your tailnet (Tailscale Serve -> app:8000), profile `tailscale` only;
 #                  publishes nothing on this host (docs/operations.md, "Phones over HTTPS (Tailscale)")
 #
 # Observability (docs/operations.md, "Observability"): every Python service exports OpenTelemetry over OTLP/HTTP once
-# OTEL_EXPORTER_OTLP_ENDPOINT is set in `.env` next to this file; unset, nothing is exported. The local backend is opt-in:
-#   echo OTEL_EXPORTER_OTLP_ENDPOINT=http://openobserve:5080/api/default >> .env
+# OTEL_EXPORTER_OTLP_ENDPOINT is set in `.env` next to this file; unset, nothing is exported. The services send to the
+# OpenTelemetry Collector (no credential, inside this network), which removes secrets and personal data
+# (deploy/otel-collector/config.yaml) and forwards to OpenObserve. The local backend is opt-in:
+#   echo OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 >> .env
 #   docker compose --profile observability up -d          # then http://localhost:5080 (admin@settleview.local)
-#   python deploy/openobserve/ingest_token.py               # once it runs: secrets/otlp_headers, ingest-only
-#   docker compose up -d --force-recreate app rec-pm-quotes rec-pm-settle
+#   python deploy/openobserve/ingest_token.py               # once it runs: secrets/openobserve_ingest_token, ingest-only
 #   python deploy/openobserve/alerts.py apply                # the SLO alerts -> Telegram (docs/operations.md, "Alerting")
-# The services' credential (and any other backend's) is the secret file secrets/otlp_headers, never an environment
-# value: OpenObserve's organization ingestion token, which can send telemetry and nothing else (no reading, no
-# administration); the root password stays in secrets/openobserve.env, mounted into OpenObserve only.
+# Only the collector holds the backend credential (the secret file secrets/openobserve_ingest_token, never an
+# environment value): OpenObserve's organization ingestion token, which can send telemetry and nothing else (no
+# reading, no administration); the root password stays in secrets/openobserve.env, mounted into OpenObserve only.
 #
 # Resources: every service has a memory limit (a leak or a runaway agent CLI stops at its own service) and a CPU cap,
 # sized for one small host from measurements (docs/operations.md, "Resource limits and Postgres settings"). Raise them,
@@ -137,11 +140,10 @@ x-recorder-database: &recorder-database
   BTCFLOW_DATABASE_PASSWORD_FILE: /run/secrets/pg_recorder_password
 
 # OpenTelemetry for the app and the recorders (bootstrap/telemetry.py): inert while OTEL_EXPORTER_OTLP_ENDPOINT is empty
-# (the default). The backend's credential is read from the otlp_headers secret file (OTEL_EXPORTER_OTLP_HEADERS_FILE),
-# never from the environment; deploy/openobserve/ingest_token.py writes it for the local OpenObserve.
+# (the default); http://otel-collector:4318 sends to the collector (profile observability), which needs no credential
+# from them: the services hold none.
 x-otel: &otel
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-  OTEL_EXPORTER_OTLP_HEADERS_FILE: /run/secrets/otlp_headers
   OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment.name=local}
 
 # The venue / API secrets: each setting read from its file (bootstrap/config.py, the *_FILE convention). An empty file
@@ -326,7 +328,7 @@ services:
       <<: [*database, *otel]
       # A failed run's ERROR record reaches OpenObserve as this service (the migration_failed alert).
       OTEL_SERVICE_NAME: settleview-migrate
-    secrets: [pg_app_password, otlp_headers]
+    secrets: [pg_app_password]
     depends_on: *needs-postgres
     deploy:
       <<: *deploy
@@ -365,7 +367,7 @@ services:
     networks:
       default: {}
       tailscale-edge: {}
-    secrets: [pg_app_password, otlp_headers, polymarket_key_id, polymarket_secret_key, anthropic_api_key,
+    secrets: [pg_app_password, polymarket_key_id, polymarket_secret_key, anthropic_api_key,
               telegram_bot_token, kalshi_key_id, trading_demo_key_id, trading_prod_key_id]
     depends_on: *needs-migrated
     deploy:
@@ -402,7 +404,7 @@ services:
     environment:
       <<: [*recorder-database, *otel, *polymarket-secret-files]
       OTEL_SERVICE_NAME: settleview-rec-pm-quotes
-    secrets: [pg_recorder_password, otlp_headers, polymarket_key_id, polymarket_secret_key]
+    secrets: [pg_recorder_password, polymarket_key_id, polymarket_secret_key]
     depends_on: *needs-postgres
     deploy:
       <<: *deploy
@@ -428,7 +430,7 @@ services:
     environment:
       <<: [*recorder-database, *otel]
       OTEL_SERVICE_NAME: settleview-rec-pm-settle
-    secrets: [pg_recorder_password, otlp_headers]
+    secrets: [pg_recorder_password]
     depends_on: *needs-postgres
     deploy:
       <<: *deploy
@@ -457,7 +459,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     environment:
-      ZO_ROOT_USER_EMAIL: admin@settleview.local  # the same login deploy/postgres/make_secrets.py puts in otlp_headers
+      ZO_ROOT_USER_EMAIL: admin@settleview.local  # the root login (deploy/openobserve/ingest_token.py, alerts.py)
       ZO_DATA_DIR: /data
       ZO_COMPACT_DATA_RETENTION_DAYS: "14"
       ZO_TELEMETRY: "false"  # no usage reports to the vendor
@@ -474,7 +476,7 @@ services:
     volumes:
       - settleview-o2:/data
     ports:
-      - "127.0.0.1:5080:5080"  # the UI and API on this PC only, like 8001; the services reach it as openobserve:5080
+      - "127.0.0.1:5080:5080"  # the UI and API on this PC only, like 8001; the collector reaches it as openobserve:5080
     stop_grace_period: 30s  # it flushes its write-ahead log on SIGTERM
     healthcheck:
       # The image has no shell or curl: its own CLI asks the running node (exits non-zero when none answers).
@@ -488,6 +490,45 @@ services:
       resources:
         limits: {cpus: "1.0", memory: 1g}
         reservations: {memory: 256m}
+
+  # The OpenTelemetry Collector (profile observability): the services' OTLP/HTTP in on otel-collector:4318 (this
+  # network only, nothing published, no credential), secrets and personal data removed by its standard processors
+  # (deploy/otel-collector/config.yaml: redaction, transform, attributes; memory_limiter and batch), OTLP/HTTP out to
+  # OpenObserve with the ingest-only token (secrets/openobserve_ingest_token; recreate it after a rotation). The official
+  # contrib image at an exact release and its digest (0.162.0, 2026-09-29; a deliberate bump moves both).
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
+    profiles: [observability]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    restart: unless-stopped
+    logging: *logging
+    # It writes nothing (its queue is in memory): read-only root, no capability, no privilege gain, the image's
+    # non-root user (10001).
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    configs:
+      - source: otelcol_config
+        target: /etc/otelcol-contrib/config.yaml
+    secrets: [openobserve_ingest_token]
+    depends_on:
+      openobserve:
+        condition: service_started
+    healthcheck:
+      # The image has no shell or HTTP client, so the probe is its own binary: the configuration it runs is readable
+      # and valid (~0.4 s, under 48 MB). The health_check extension's GET http://otel-collector:13133/ is the probe
+      # for platforms that check over HTTP (ACA, ECS, Kubernetes). A dead collector exits and is restarted.
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol-contrib/config.yaml"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    deploy:
+      <<: *deploy
+      resources:
+        # ~45 MiB measured idle; memory_limiter refuses data at 80 % of this limit before it is ever reached.
+        limits: {cpus: "0.5", memory: 256m}
+        reservations: {memory: 64m}
 
   # HTTPS for phones over the owner's tailnet: opt-in, `docker compose --profile tailscale up -d` (docs/operations.md,
   # "Phones over HTTPS (Tailscale)"). The official image at an exact release and its digest (v1.104.4, the stable
@@ -567,11 +608,10 @@ networks:
 
 secrets:
   # Files written by deploy/postgres/make_secrets.py (Swarm: `docker secret create`, then `external: true`).
-  # otlp_headers: the OTLP backend's headers (OpenObserve's ingest-only organization token, written by
-  # deploy/openobserve/ingest_token.py); mounted into the app and the recorders and read only when
-  # OTEL_EXPORTER_OTLP_ENDPOINT is set.
-  otlp_headers:
-    file: ./secrets/otlp_headers
+  # openobserve_ingest_token: OpenObserve's ingest-only organization token (written by
+  # deploy/openobserve/ingest_token.py); mounted into the otel-collector only (profile observability).
+  openobserve_ingest_token:
+    file: ./secrets/openobserve_ingest_token
   pg_superuser_password:
     file: ./secrets/pg_superuser_password
   pg_app_password:
@@ -613,6 +653,8 @@ configs:
     file: ./deploy/postgres/backup.sh
   ts_serve:
     file: ./deploy/tailscale/serve.json
+  otelcol_config:
+    file: ./deploy/otel-collector/config.yaml
 
 volumes:
   settleview-pg:  # the database files (Postgres's data directory)

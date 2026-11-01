@@ -5,13 +5,14 @@ process's TZ is, so lines from the app, the recorders and Postgres (which logs U
 level and the logger. The HTTP client libraries (`httpx`, `httpcore`) log at WARNING by default: at INFO httpx writes
 one line per request (Kalshi perps polling alone is ~240 a minute); BTCFLOW_HTTP_CLIENT_LOG_LEVEL changes it.
 
-Every log line is scrubbed before any handler writes it (stderr, the rotating files, uvicorn's own handlers, the
-OpenTelemetry bridge): the message after its arguments are filled in, the exception text and the stack, through the
-same `Scrubber` the telemetry exporters use (bootstrap/scrub.py: Telegram bot tokens, API keys, Authorization headers,
-PINs and passwords as key=value, URL credentials, long secret-looking runs, and the exact values of the app's own
-secrets once `scrub_secrets` has them). Two layers, so nothing depends on where a handler was attached: a log-record
-factory scrubs each record as it is made (any logger, propagating or not), and `ScrubFilter` sits on every handler
-(`install_scrubbing`) for records made elsewhere.
+Secrets are kept out of the logs at the source (standard practice: nothing logs a credential, every database engine
+has `hide_parameters`, httpx stays at WARNING so it never writes a request URL). One defence in depth stays here,
+because stderr and Docker's logs never pass through the OpenTelemetry Collector that redacts the exported telemetry
+(deploy/otel-collector/config.yaml): `mask_secrets` installs a log-record factory that replaces the EXACT values of the
+app's own configured secrets (telemetry.secret_values: the Telegram token, the Anthropic key, the Polymarket secret,
+the key ids, the database passwords) with `****` in every record as it is made: the message with its arguments, the
+exception text and object, and the stack. It knows no patterns (those are the collector's job); it only makes sure a
+value the process itself holds can never be printed, whichever logger or handler writes the line.
 """
 
 from __future__ import annotations
@@ -20,12 +21,12 @@ import logging
 import time
 from collections.abc import Iterable
 
-from btc_signal_engine.bootstrap.scrub import Scrubber
-
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 EX_CONFIG = 78  # sysexits.h: a configuration error. The supervisor does not restart a child that exits with it.
 HTTP_CLIENT_LOGGERS = ("httpx", "httpcore")
 HTTP_CLIENT_LOG_LEVEL = "WARNING"
+MASK = "****"
+MIN_SECRET_LEN = 6  # shorter "secrets" (an empty value, a short test string) would blank ordinary text
 
 
 class UtcFormatter(logging.Formatter):
@@ -40,76 +41,58 @@ class UtcFormatter(logging.Formatter):
         return time.strftime("%Y-%m-%dT%H:%M:%S", self.converter(record.created)) + f".{int(record.msecs):03d}Z"
 
 
-class ScrubbedError(Exception):
-    """A logged exception after scrubbing: the original type's name and its scrubbed message. It replaces the
-    exception object in record.exc_info (the traceback is kept: its frames print source lines, not values), so a
-    handler that formats the object itself shows the same scrubbed text."""
+class MaskedError(Exception):
+    """A logged exception whose text held a secret: the original type's name and its masked message, in place of the
+    exception object in record.exc_info (the traceback is kept), so a handler that formats the object itself (the
+    OpenTelemetry bridge's exception.message) shows the masked text too."""
 
 
-class ScrubFilter(logging.Filter):
-    """Scrubs a record in place (message with its arguments, exception text and object, stack); never drops one."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.scrubber = Scrubber()
-        self._fmt = logging.Formatter()
-
-    def scrub(self, record: logging.LogRecord) -> None:
-        """Idempotent (no marker on the record: every attribute a record carries becomes an exported log attribute)."""
-        sc = self.scrubber
-        try:
-            msg = record.getMessage()
-        except Exception:  # a bad format string: logging reports it itself; scrub what is there
-            msg = str(record.msg)
-        record.msg, record.args = sc.text(msg), None
-        if record.exc_info and not record.exc_text:
-            record.exc_text = self._fmt.formatException(record.exc_info)
-        if record.exc_text:
-            record.exc_text = sc.text(record.exc_text)
-        if record.exc_info and record.exc_info[1] is not None and not isinstance(record.exc_info[1], ScrubbedError):
-            # Handlers that format the exception object themselves (the OpenTelemetry bridge's exception.message and
-            # exception.stacktrace) never see the original message (nor its chained causes; exc_text keeps those,
-            # scrubbed).
-            exc = record.exc_info[1]
-            record.exc_info = (record.exc_info[0], ScrubbedError(f"{type(exc).__name__}: {sc.text(str(exc))}"),
-                               record.exc_info[2])
-        if record.stack_info:
-            record.stack_info = sc.text(record.stack_info)
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            self.scrub(record)
-        except Exception:  # noqa: S110 - never lose a line to the scrubber (the factory already scrubbed it); logging from inside the log filter would recurse
-            pass
-        return True
-
-
-SCRUB = ScrubFilter()
+_secrets: tuple[str, ...] = ()
 _factory = logging.getLogRecordFactory()
 
 
-def _scrubbing_factory(*args, **kwargs) -> logging.LogRecord:
+def mask(text: str) -> str:
+    """`text` with every exact secret value set by `mask_secrets` replaced by MASK (the longest first)."""
+    for v in _secrets:
+        if v in text:
+            text = text.replace(v, MASK)
+    return text
+
+
+def _mask_record(record: logging.LogRecord) -> None:
+    msg = record.getMessage()
+    masked = mask(msg)
+    if masked != msg:
+        record.msg, record.args = masked, None
+    if record.exc_info and record.exc_info[1] is not None:
+        text = logging.Formatter().formatException(record.exc_info)
+        if mask(text) != text:
+            exc = record.exc_info[1]
+            record.exc_text = mask(text)
+            record.exc_info = (record.exc_info[0], MaskedError(f"{type(exc).__name__}: {mask(str(exc))}"),
+                               record.exc_info[2])
+    if record.stack_info:
+        record.stack_info = mask(record.stack_info)
+
+
+def _masking_factory(*args, **kwargs) -> logging.LogRecord:
     record = _factory(*args, **kwargs)
-    SCRUB.filter(record)
+    if _secrets:
+        try:
+            _mask_record(record)
+        except Exception:  # noqa: S110 - never lose a line to the mask (a bad format string: logging reports it itself)
+            pass
     return record
 
 
-def scrub_secrets(values: Iterable[str]) -> None:
-    """The exact secret values (telemetry.secret_values(settings)) every later log line is scrubbed of too."""
-    SCRUB.scrubber = Scrubber(values)
-
-
-def install_scrubbing() -> None:
-    """Scrub every log record: the record factory (once per process) and a ScrubFilter on every handler of every
-    logger configured so far. Call it again after something adds handlers (uvicorn, a log file, OpenTelemetry)."""
-    if logging.getLogRecordFactory() is not _scrubbing_factory:
-        logging.setLogRecordFactory(_scrubbing_factory)
-    loggers = [logging.getLogger()] + [lg for lg in list(logging.Logger.manager.loggerDict.values())
-                                        if isinstance(lg, logging.Logger)]
-    for lg in loggers:
-        for h in list(lg.handlers):
-            if SCRUB not in h.filters:
-                h.addFilter(SCRUB)
+def mask_secrets(values: Iterable[str | None]) -> None:
+    """Mask these exact values (telemetry.secret_values(settings)) in every log record made from now on, by any logger
+    (the record factory, installed once per process). Values shorter than MIN_SECRET_LEN are ignored."""
+    global _secrets
+    found = {v.strip() for v in values if isinstance(v, str) and len(v.strip()) >= MIN_SECRET_LEN}
+    _secrets = tuple(sorted(found, key=len, reverse=True))
+    if logging.getLogRecordFactory() is not _masking_factory:
+        logging.setLogRecordFactory(_masking_factory)
 
 
 def set_http_client_log_level(level: str | int = HTTP_CLIENT_LOG_LEVEL) -> None:
@@ -120,7 +103,7 @@ def set_http_client_log_level(level: str | int = HTTP_CLIENT_LOG_LEVEL) -> None:
 
 def log_to_stderr(level: int = logging.INFO) -> None:
     """As logging.basicConfig: when the root logger has no handler yet, one that writes UTC ISO 8601 lines to stderr,
-    and the root level. The HTTP client loggers at WARNING and every line scrubbed (install_scrubbing) either way."""
+    and the root level. The HTTP client loggers at WARNING either way."""
     root = logging.getLogger()
     if not root.handlers:
         h = logging.StreamHandler()
@@ -128,4 +111,3 @@ def log_to_stderr(level: int = logging.INFO) -> None:
         root.addHandler(h)
         root.setLevel(level)
     set_http_client_log_level()
-    install_scrubbing()

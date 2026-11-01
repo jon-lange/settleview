@@ -1,5 +1,5 @@
-"""OpenTelemetry configuration (bootstrap/telemetry.plan / setup): inert without an endpoint, standard OTEL_* only, the
-headers file, and every bad value an error naming the variable (never its value); nothing falls back silently."""
+"""OpenTelemetry configuration (bootstrap/telemetry.plan / setup): inert without an endpoint, standard OTEL_* only
+(no credential: the collector holds the backend's), and every bad value an error naming the variable (never its value); nothing falls back silently."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from btc_signal_engine.bootstrap.config import Settings
 from btc_signal_engine.bootstrap.logs import EX_CONFIG
 from btc_signal_engine.bootstrap.telemetry import TelemetryConfigError, plan
 
-EP = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://openobserve:5080/api/default"}
+EP = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector:4318"}
 
 
 def test_no_endpoint_means_nothing_is_installed():
@@ -49,25 +49,6 @@ def test_a_bad_value_is_an_error_naming_the_variable(env, var):
         plan(env)
 
 
-def test_the_headers_file(tmp_path):
-    f = tmp_path / "otlp_headers"
-    f.write_text("Authorization=Basic%20YWRtaW46c2VjcmV0LXZhbHVl\nstream-name=default\n", encoding="utf-8")
-    p = plan({**EP, "OTEL_EXPORTER_OTLP_HEADERS_FILE": str(f)})
-    assert p.headers == {"authorization": "Basic YWRtaW46c2VjcmV0LXZhbHVl", "stream-name": "default"}
-    with pytest.raises(TelemetryConfigError, match="both OTEL_EXPORTER_OTLP_HEADERS and"):
-        plan({**EP, "OTEL_EXPORTER_OTLP_HEADERS_FILE": str(f), "OTEL_EXPORTER_OTLP_HEADERS": "a=b"})
-    with pytest.raises(TelemetryConfigError, match="OTEL_EXPORTER_OTLP_HEADERS_FILE: the file cannot be read") as e:
-        plan({**EP, "OTEL_EXPORTER_OTLP_HEADERS_FILE": str(tmp_path / "missing")})
-    assert "missing" not in str(e.value)
-    bad = tmp_path / "bad"
-    bad.write_text("Authorization Basic xyz", encoding="utf-8")
-    with pytest.raises(TelemetryConfigError, match="key=value") as e:
-        plan({**EP, "OTEL_EXPORTER_OTLP_HEADERS_FILE": str(bad)})
-    assert "xyz" not in str(e.value)
-    # no endpoint: the file is never read (compose mounts it whether or not telemetry is on)
-    assert plan({"OTEL_EXPORTER_OTLP_HEADERS_FILE": str(tmp_path / "missing")}).headers is None
-
-
 def test_secret_values_reads_every_secret_setting():
     s = Settings(_env_file=None, telegram_bot_token="123456:ABCdefGHIjklMNOpqrSTUvwxYZ0123456789",
                  anthropic_api_key="sk-ant-x" + "y" * 20, polymarket_key_id="kid-123456",
@@ -91,8 +72,8 @@ def test_service_version_names_the_commit(monkeypatch):
     assert "+" not in telemetry.service_version()
 
 
-def test_make_secrets_writes_the_openobserve_password_and_an_empty_otlp_header(tmp_path, capsys):
-    """The services' header is the ingest-only token (deploy/openobserve/ingest_token.py,
+def test_make_secrets_writes_the_openobserve_password_and_an_empty_ingest_token(tmp_path, capsys):
+    """The collector's credential is the ingest-only token (deploy/openobserve/ingest_token.py,
     tests/deploy/test_ingest_token.py), never derived from the root password: make_secrets.py leaves it empty."""
     import importlib.util
     import re
@@ -104,7 +85,7 @@ def test_make_secrets_writes_the_openobserve_password_and_an_empty_otlp_header(t
     assert ms.main(["make_secrets", str(tmp_path)]) == 0
     pw = (tmp_path / "openobserve.env").read_text(encoding="ascii").strip().removeprefix("ZO_ROOT_USER_PASSWORD=")
     assert re.search(r"[A-Z]", pw) and re.search(r"[a-z]", pw) and re.search(r"\d", pw) and re.search(r"[^\w]", pw)
-    assert plan({**EP, "OTEL_EXPORTER_OTLP_HEADERS_FILE": str(tmp_path / "otlp_headers")}).headers == {}
+    assert (tmp_path / "openobserve_ingest_token").read_text(encoding="ascii") == ""
     first = {p.name: p.read_text() for p in tmp_path.iterdir()}
     assert ms.main(["make_secrets", str(tmp_path)]) == 0  # a second run keeps every file
     assert {p.name: p.read_text() for p in tmp_path.iterdir()} == first

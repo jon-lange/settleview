@@ -1,4 +1,4 @@
-"""deploy/openobserve/ingest_token.py (review B4#14): the services' OTLP header is OpenObserve's ingest-only
+"""deploy/openobserve/ingest_token.py (review B4#14): the collector's OpenObserve credential is the ingest-only
 organization token, never the root login. Against a fake OpenObserve on a local port (checked against the real
 v1.1.1 image on 2026-11-01: the token is accepted by /v1/logs and refused by /streams, /users and /_search)."""
 
@@ -12,8 +12,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-
-from btc_signal_engine.bootstrap.telemetry import plan
 
 ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location("ingest_token", ROOT / "deploy" / "openobserve" / "ingest_token.py")
@@ -86,37 +84,31 @@ def _secrets(tmp_path: Path, pw: str = ROOT_PW) -> Path:
     d = tmp_path / "secrets"
     d.mkdir()
     (d / "openobserve.env").write_text(f"ZO_ROOT_USER_PASSWORD={pw}\n", encoding="ascii")
-    (d / "otlp_headers").write_text("Authorization=Basic%20" + base64.b64encode(
-        f"{it.ROOT_EMAIL}:{ROOT_PW}".encode()).decode() + "\n", encoding="ascii")  # the old, root-derived header
+    (d / it.INGEST_TOKEN).write_text("", encoding="ascii")  # make_secrets.py's empty file
     return d
 
 
-def _header_token(path: Path) -> str:
-    h = plan({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://o2:5080/api/default",
-              "OTEL_EXPORTER_OTLP_HEADERS_FILE": str(path)}).headers
-    scheme, b64 = h["authorization"].split(" ")
-    user, token = base64.b64decode(b64).decode().split(":", 1)
-    assert scheme == "Basic" and user == it.INGEST_LABEL
-    return token
+def _token(d: Path) -> str:
+    return (d / it.INGEST_TOKEN).read_text(encoding="ascii")
 
 
-def test_the_root_header_is_replaced_by_the_ingest_token_and_nothing_is_printed(o2, tmp_path, capsys, monkeypatch):
+def test_the_ingest_token_is_written_for_the_collector_and_nothing_is_printed(o2, tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("O2_ROOT_PASSWORD", raising=False)
     d = _secrets(tmp_path)
     assert it.main(["--url", o2.url, "--secrets", str(d)]) == 0
-    assert _header_token(d / "otlp_headers") == TOKEN  # the telemetry settings read it as before
+    assert _token(d) == TOKEN  # the token alone: the collector's basicauth password_file
     assert it.main(["--url", o2.url, "--secrets", str(d)]) == 0  # idempotent
     out = capsys.readouterr().out
     assert "kept" in out and "HTTP 401 (want 401" in out
     assert TOKEN not in out and ROOT_PW not in out
     assert it.main(["--url", o2.url, "--secrets", str(d), "--rotate"]) == 0
-    assert _header_token(d / "otlp_headers") == NEW_TOKEN
+    assert _token(d) == NEW_TOKEN
 
 
 def test_a_wrong_root_password_or_a_token_that_can_read_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.delenv("O2_ROOT_PASSWORD", raising=False)
     d = _secrets(tmp_path, pw="wrong")
-    before = (d / "otlp_headers").read_text()
+    before = _token(d)
     f = FakeO2()
     try:
         assert it.main(["--url", f.url, "--secrets", str(d)]) == 1
@@ -128,7 +120,7 @@ def test_a_wrong_root_password_or_a_token_that_can_read_writes_nothing(tmp_path,
         assert it.main(["--url", f.url, "--secrets", str(d)]) == 1
     finally:
         f.close()
-    assert (d / "otlp_headers").read_text() == before
+    assert _token(d) == before
 
 
 def test_make_secrets_no_longer_derives_the_header_from_the_root_password(tmp_path):
@@ -136,6 +128,14 @@ def test_make_secrets_no_longer_derives_the_header_from_the_root_password(tmp_pa
     ms = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ms)
     assert ms.main(["make_secrets", str(tmp_path)]) == 0
-    assert (tmp_path / "otlp_headers").read_text() == ""  # empty until ingest_token.py runs
+    assert (tmp_path / "openobserve_ingest_token").read_text() == ""  # empty until ingest_token.py runs
+    assert not (tmp_path / "otlp_headers").exists()  # the services hold no backend credential any more
     assert (tmp_path / "pg_recorder_password").stat().st_size > 20
     assert it.ROOT_EMAIL in (ROOT / "compose.yaml").read_text(encoding="utf-8")  # ZO_ROOT_USER_EMAIL's literal
+
+
+def test_the_collector_sends_the_label_and_reads_the_file_this_script_writes():
+    cfg = (ROOT / "deploy" / "otel-collector" / "config.yaml").read_text(encoding="utf-8")
+    assert f"username: {it.INGEST_LABEL}" in cfg
+    assert f"password_file: /run/secrets/{it.INGEST_TOKEN}" in cfg
+    assert f"file: ./secrets/{it.INGEST_TOKEN}" in (ROOT / "compose.yaml").read_text(encoding="utf-8")

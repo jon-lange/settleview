@@ -51,7 +51,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(autouse=True)
 def _log_record_factory():
-    """main() installs the log scrubber's record factory process-wide (bootstrap/logs.py): put the previous one back
+    """main() installs the log mask's record factory process-wide (bootstrap/logs.py): put the previous one back
     after each test, so one test's entry point does not change what later tests' caplog records read."""
     import logging
     factory = logging.getLogRecordFactory()

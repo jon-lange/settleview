@@ -31,11 +31,10 @@ import uvicorn
 from btc_signal_engine.bootstrap import telemetry
 from btc_signal_engine.bootstrap.logs import (
     LOG_FORMAT as _LOG_FORMAT,
-    SCRUB as _LOG_SCRUB,
     UtcFormatter,
-    install_scrubbing,
     log_to_stderr,
-    scrub_secrets,
+    mask,
+    mask_secrets,
     set_http_client_log_level,
 )
 from btc_signal_engine.bootstrap.maintenance import DailyMaintenance
@@ -635,7 +634,7 @@ class Runtime:
                         "cli_version": getattr(harness, "cli_version", None) or "unknown"}
 
             def scrub_input(text: str) -> str:
-                return _LOG_SCRUB.scrubber.text(text)  # the log scrubber: patterns plus the settings' exact secrets
+                return mask(text)  # the settings' exact secret values (bootstrap/logs.py mask_secrets)
 
             def make_runner() -> AgentRunner:
                 box: dict = {}
@@ -1790,7 +1789,6 @@ class Runtime:
         if self.telemetry is not None:
             self.telemetry.instrument_app(app)  # request traces and metrics (nothing when telemetry is off)
         servers = self.make_servers(app)
-        install_scrubbing()  # uvicorn's own log handlers, made with its config
         log.info("Play: http://%s:%d", host, self.settings.api_port)
         sup = self.supervisor
 
@@ -1875,7 +1873,6 @@ def install_file_log(log_dir: Path, *, max_bytes: int = LOG_FILE_BYTES,
     h = RotatingFileHandler(log_dir / "app.log", maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
     h.setFormatter(UtcFormatter())
     logging.getLogger().addHandler(h)
-    install_scrubbing()
     return h
 
 
@@ -1888,14 +1885,13 @@ def main(argv: list[str] | None = None) -> None:
     # Every exit that passes through Python leaves this line; an exit without it was a forced kill.
     atexit.register(lambda: log.info("process exiting (pid %d, up %.0f s)", os.getpid(), time.monotonic() - started))
     settings = Settings()
-    scrub_secrets(telemetry.secret_values(settings))  # every log line from here on, also of exact secret values
+    mask_secrets(telemetry.secret_values(settings))  # every log line from here on: the exact secret values masked
     set_http_client_log_level(settings.http_client_log_level)
     if settings.file_log:  # off in containers (BTCFLOW_FILE_LOG=false): stderr only, for the platform's collector
         install_file_log(Path(settings.db_path).parent / "logs")
     # OpenTelemetry: nothing unless OTEL_EXPORTER_OTLP_ENDPOINT (or a per-signal endpoint) is set; a bad OTEL_* setting
     # stops the start here, naming the variable.
-    tel = telemetry.setup("settleview-app", secrets=telemetry.secret_values(settings))
-    install_scrubbing()  # telemetry's log bridge, if it added a handler
+    tel = telemetry.setup("settleview-app")
     try:
         if args.command == "backfill":
             asyncio.run(run_backfill(settings))

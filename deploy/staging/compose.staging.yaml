@@ -20,7 +20,7 @@
 #   - Neither `.env` is read: the app's env_file is reset, and the production key settings' *_FILE variables are
 #     removed, so nothing names a production key file.
 #   - Every secret file comes from deploy/staging/secrets/, never ./secrets: the production key files are not mounted,
-#     and the app mounts only its database password, the OTLP headers, the Anthropic key and the Kalshi DEMO key id.
+#     and the app mounts only its database password, the Anthropic key and the Kalshi DEMO key id.
 #   - rec-pm-quotes (it needs the Polymarket US keys, which are production keys) runs only with the profile
 #     `polymarket-recorder`, which staging never turns on.
 # tests/deploy/test_staging.py checks all of this; the smoke suite checks it again on the running stack.
@@ -62,7 +62,7 @@ services:
       BTCFLOW_AGENT_ENABLED: "true"
       BTCFLOW_TRADING_DEMO_KEY_PATH: ${BTCFLOW_TRADING_DEMO_KEY_PATH:-}
       OTEL_SERVICE_NAME: settleview-staging-app
-    secrets: !override [pg_app_password, otlp_headers, anthropic_api_key, trading_demo_key_id]
+    secrets: !override [pg_app_password, anthropic_api_key, trading_demo_key_id]
     ports: !override
       - "127.0.0.1:18000:18000"
       - "127.0.0.1:18001:18001"
@@ -78,7 +78,7 @@ services:
       <<: *staging-app-env
       BTCFLOW_POLYMARKET_KEY_ID_FILE: !reset null
       BTCFLOW_POLYMARKET_SECRET_KEY_FILE: !reset null
-    secrets: !override [pg_recorder_password, otlp_headers]
+    secrets: !override [pg_recorder_password]
 
   rec-pm-settle:
     environment:
@@ -94,8 +94,8 @@ services:
 
 # Every secret from staging's own folder (deploy/postgres/make_secrets.py deploy/staging/secrets), never ./secrets.
 secrets:
-  otlp_headers:
-    file: ./deploy/staging/secrets/otlp_headers
+  openobserve_ingest_token:
+    file: ./deploy/staging/secrets/openobserve_ingest_token
   pg_superuser_password:
     file: ./deploy/staging/secrets/pg_superuser_password
   pg_app_password:

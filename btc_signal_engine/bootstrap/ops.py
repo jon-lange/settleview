@@ -262,7 +262,7 @@ def migrate_db() -> int:
     from btc_signal_engine.bootstrap.logs import log_to_stderr
     log_to_stderr()
     try:
-        tel = telemetry.setup("settleview-migrate", secrets=telemetry.secret_values(s), instrument=False)
+        tel = telemetry.setup("settleview-migrate", instrument=False)
     except ValueError as exc:
         warn(f"configuration error: {exc}")
         return 78

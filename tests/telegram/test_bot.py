@@ -234,8 +234,8 @@ def test_the_token_is_masked_in_httpx_log_lines(store, caplog):
     logging.getLogger("httpx").info('HTTP Request: POST %s "HTTP/1.1 200 OK"',
                                     f"https://api.telegram.org/bot{TOKEN}/getMe")
     (r,) = [r for r in caplog.records if r.name == "httpx"]
-    # The bot's own redactor, or the process-wide log scrubber when main() installed it (bootstrap/logs.py)
-    assert TOKEN not in r.getMessage() and (REDACTED in r.getMessage() or "<redacted>" in r.getMessage())
+    # The bot's own redactor, or the process-wide log mask when main() installed it (bootstrap/logs.py)
+    assert TOKEN not in r.getMessage() and (REDACTED in r.getMessage() or "****" in r.getMessage())
 
 
 def test_the_token_is_masked_in_the_librarys_child_loggers_tracebacks_and_this_modules_own_lines(store, caplog):

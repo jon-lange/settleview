@@ -1,0 +1,114 @@
+# The OpenTelemetry Collector between the Settleview services and the telemetry backend (compose service
+# `otel-collector`, the official otel/opentelemetry-collector-contrib image; docs/operations.md, "Observability").
+# The services send OTLP/HTTP here with no credential (inside the compose network only); this collector removes
+# secrets and personal data from every span, log and metric, then forwards to OpenObserve with the ingest-only token
+# (secrets/openobserve_ingest_token, which no other container mounts). Only standard components:
+#
+#   memory_limiter  refuses data before the container's memory limit is reached (the services retry, then drop)
+#   attributes/pii  deletes client addresses (a phone's LAN or tailnet IP)
+#   redaction       masks credential-shaped values and credential-named keys in every attribute (span, span event,
+#                   resource, log, metric data point) and in log bodies, with `****`
+#   transform       the two string fields the redaction processor does not read (span name, span status message),
+#                   and every query value of a URL attribute
+#   batch           fewer, larger requests to the backend
+#
+# A value the redaction processor masks is replaced by **** (only the matching part); `summary: info` adds
+# redaction.masked.count to the item it changed, so a masked value is visible as such. To check a change to this file:
+# tests/telemetry/test_collector_e2e.py (a throwaway collector and OpenObserve).
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133  # GET / answers 200 while the pipelines run (for platforms that probe over HTTP)
+  basicauth/openobserve:
+    client_auth:
+      username: otlp@settleview.local  # only a label: OpenObserve checks the token, not the name
+      # The compose secret is a bind mount of the file as it was at the container's start: after ingest_token.py
+      # rewrites it, recreate the collector (`docker compose up -d --force-recreate otel-collector`).
+      password_file: /run/secrets/openobserve_ingest_token
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318  # OTLP/HTTP, the services' only protocol (no gRPC listener)
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80  # of the container's memory limit (cgroup)
+    spike_limit_percentage: 20
+
+  attributes/pii:
+    actions:
+      - {key: client.address, action: delete}
+      - {key: http.client_ip, action: delete}
+      - {key: net.sock.peer.addr, action: delete}
+      - {key: network.peer.address, action: delete}
+
+  redaction:
+    allow_all_keys: true  # keep every attribute; mask only what matches below
+    blocked_key_patterns:
+      # any captured HTTP header (header capture is off in the services; this holds if someone turns it on)
+      - '^(http|rpc)\.(request|response)\.header\..*'
+      # a key that names a credential
+      - '(?i).*(authorization|cookie|passw(or)?d|secret|api[._-]?key|signature|credential|private[._-]?key|(access|refresh|session|bot|auth|id)[._-]?token).*'
+    blocked_values:
+      - '-----BEGIN [A-Z ]*PRIVATE KEY-----(?s:.*?)-----END [A-Z ]*PRIVATE KEY-----'  # a PEM private key
+      - '[0-9]{5,}:[A-Za-z0-9_-]{30,}'  # a Telegram bot token (also inside /bot<token>/ in a URL)
+      - 'sk-[A-Za-z0-9_-]{16,}'  # an Anthropic (or OpenAI-style) API key
+      - 'eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*'  # a JSON Web Token
+      - '(?i)\b(bearer|basic|digest)\s+[A-Za-z0-9._~+/=-]{8,}'  # an Authorization credential
+      - '://[^/\s:@]+:[^/\s@]+@'  # user:password in a URL
+      # key=value / "key": "value" pairs whose key names a secret (the whole pair is masked)
+      - '(?i)\b(password|passwd|pwd|secret|secret_key|token|access_token|refresh_token|api[_-]?key|apikey|private[_-]?key|signature|sig|pin|cookie|authorization|kalshi-access-(key|signature))["'']?\s*[:=]\s*["'']?[^\s"'',;&]+'
+      - '[A-Za-z0-9+/]{40,}={1,2}'  # a long padded base64 run (a signature, a raw key)
+      - '(?i)[A-Za-z0-9_./\\:~-]*\.(pem|key|p8|p12|pfx)\b'  # a private key file's path or name
+      - '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'  # an e-mail address (personal data)
+    summary: info
+
+  transform:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          # The span name and status message are not attributes: the same credential shapes as above.
+          - replace_pattern(name, "[0-9]{5,}:[A-Za-z0-9_-]{30,}", "****")
+          - replace_pattern(name, "sk-[A-Za-z0-9_-]{16,}", "****")
+          - replace_pattern(name, "(?i)[A-Za-z0-9_./\\\\:~-]*\\.(pem|key|p8|p12|pfx)\\b", "****")
+          - replace_pattern(status.message, "[0-9]{5,}:[A-Za-z0-9_-]{30,}", "****")
+          - replace_pattern(status.message, "sk-[A-Za-z0-9_-]{16,}", "****")
+          - replace_pattern(status.message, "(?i)\\b(bearer|basic|digest)\\s+[A-Za-z0-9._~+/=-]{8,}", "****")
+          - replace_pattern(status.message, "(?i)[A-Za-z0-9_./\\\\:~-]*\\.(pem|key|p8|p12|pfx)\\b", "****")
+          # Every query value of a URL ($$ is a literal $ in collector configuration).
+          - replace_pattern(attributes["url.full"], "([?&][^=&#]+)=[^&#]*", "$${1}=****")
+          - replace_pattern(attributes["http.url"], "([?&][^=&#]+)=[^&#]*", "$${1}=****")
+          - replace_pattern(attributes["http.target"], "([?&][^=&#]+)=[^&#]*", "$${1}=****")
+          - replace_pattern(attributes["url.query"], "(^|&)([^=&#]+)=[^&#]*", "$${1}$${2}=****")
+
+  batch:
+    send_batch_size: 1024
+    timeout: 5s
+
+exporters:
+  otlp_http/openobserve:
+    endpoint: http://openobserve:5080/api/default  # /v1/traces, /v1/metrics, /v1/logs are added
+    auth:
+      authenticator: basicauth/openobserve
+    # The standard retry with backoff and an in-memory queue: an OpenObserve restart loses nothing short; a long
+    # outage drops the oldest data once the queue is full (telemetry is never worth stalling the services for).
+
+service:
+  extensions: [health_check, basicauth/openobserve]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/pii, redaction, transform, batch]
+      exporters: [otlp_http/openobserve]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/pii, redaction, batch]
+      exporters: [otlp_http/openobserve]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/pii, redaction, batch]
+      exporters: [otlp_http/openobserve]

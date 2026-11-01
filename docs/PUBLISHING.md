@@ -63,7 +63,7 @@ Options: `SETTLEVIEW_PREPUSH_TRIVY=1` also runs the repository secret scan (`pyt
 trivy-fs`: Trivy in its pinned container over the working tree, not the pushed commits; off by default because it
 takes a while). `python scripts/prepush_scan.py --range origin/main..HEAD` scans a range without pushing. The
 history already on GitHub contains reviewed placeholders and dummy test tokens (the `.env.example` and
-`docs/operations.md` path examples, the fake keys in the scrubbing tests), so a scan of the whole history reports
+`docs/operations.md` path examples, the fake keys in the redaction tests), so a scan of the whole history reports
 them; pushes to `origin` scan only new commits.
 
 `git push --no-verify` skips the hook. Don't, except for a reviewed false positive, and say so in the pull request.

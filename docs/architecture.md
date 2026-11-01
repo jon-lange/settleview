@@ -57,6 +57,7 @@ flowchart LR
     dumps[(settleview-backups<br/>7 daily + 4 weekly)]
     data[(settleview-data<br/>logs · pid · stop files)]
     o2[openobserve · profile observability<br/>logs · metrics · traces · GenAI<br/>127.0.0.1:5080]
+    otelcol[otel-collector · profile observability<br/>redaction · transform · memory_limiter<br/>not published]
     o2vol[(settleview-o2<br/>14 days)]
   end
   pmws[(Polymarket US<br/>markets WebSocket)]
@@ -75,9 +76,10 @@ flowchart LR
   dumps -.-> offsite
   rq <--> pmws
   rs --> pmrest
-  app -. OTLP/HTTP, scrubbed .-> o2
-  rq -. OTLP .-> o2
-  rs -. OTLP .-> o2
+  app -. OTLP/HTTP .-> otelcol
+  rq -. OTLP .-> otelcol
+  rs -. OTLP .-> otelcol
+  otelcol -. OTLP, redacted, ingest-only token .-> o2
   o2 --- o2vol
 ```
 
@@ -95,10 +97,12 @@ processes on a SQLite file (`btcflow.db`) and the recorders' file (`polymarket_u
   minutes of silence and when one is back, and yesterday's coverage in the daily summary.
 - **Configuration** is environment only (`.env`, or `BTCFLOW_<NAME>_FILE` secrets); logs go to stderr in containers.
 - **Telemetry is OpenTelemetry, off until an endpoint is set** (docs/operations.md, "Observability"): each service
-  exports traces, metrics and logs over OTLP/HTTP, every span, log and metric point through one scrubber (no tokens,
-  keys, headers, query values or prompts); an agent wake is a GenAI span with its tool calls as children. Locally the
-  opt-in `openobserve` service receives it; in the cloud the platform's collector does (Azure Monitor, CloudWatch via
-  ADOT, any OTLP backend).
+  exports traces, metrics and logs over OTLP/HTTP to the OpenTelemetry Collector (`otel-collector`,
+  deploy/otel-collector/config.yaml), whose standard redaction and transform processors remove tokens, keys, key
+  paths, headers, query values and client addresses before anything reaches a backend; the services emit no prompts
+  or bodies and hold no backend credential. An agent wake is a GenAI span with its tool calls as children. Locally the
+  collector forwards to the opt-in `openobserve` service; in the cloud the same collector configuration runs beside
+  the services (Azure Monitor, CloudWatch via ADOT, any OTLP backend).
 - **Every service has a memory and CPU limit** (docs/operations.md, "Resource limits and Postgres settings"); Postgres's
   memory settings are sized to its limit.
 - **One database server, four roles** (docs/operations.md, "Postgres"): `settleview_app` writes the schema `app` (the

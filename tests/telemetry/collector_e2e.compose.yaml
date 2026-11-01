@@ -1,0 +1,51 @@
+# A throwaway OpenTelemetry Collector + OpenObserve for tests/telemetry/test_collector_e2e.py: compose.yaml's own
+# `otel-collector` and `openobserve` services (the same images, config, hardening), with only what a throwaway needs
+# changed, and the test runner beside them. Never the live project; never ./secrets. The steps (any OS, from the
+# checkout; P is the throwaway project's name, S an empty folder outside the checkout):
+#
+#   export SETTLEVIEW_E2E_SECRETS=S ; : > "$S/openobserve_ingest_token"
+#   F="-p P -f compose.yaml -f tests/telemetry/collector_e2e.compose.yaml --profile observability"
+#   docker compose $F up -d --wait openobserve
+#   O2_ROOT_PASSWORD=E2e-throwaway-Pw-9a python deploy/openobserve/ingest_token.py --url http://127.0.0.1:15081 \
+#     --secrets "$S"                                   # the real ingest-only token, as on a real host
+#   docker compose $F up -d --wait otel-collector
+#   docker compose $F --profile e2e run --rm e2e     # pytest's exit code
+#   docker compose $F down --volumes
+#
+# OpenObserve is published on 127.0.0.1:15081 only (ingest_token.py runs on the host); the collector publishes nothing.
+
+services:
+  openobserve:
+    env_file: !reset []
+    environment:
+      ZO_ROOT_USER_PASSWORD: E2e-throwaway-Pw-9a  # a throwaway server's root password, not a secret
+    ports: !override
+      - "127.0.0.1:15081:5080"
+
+  e2e:
+    profiles: [e2e]
+    image: settleview-dev:local  # scripts/dev.py builds it
+    working_dir: /app
+    volumes:
+      - type: bind
+        source: .  # relative to the project folder (compose.yaml's): the checkout
+        target: /app
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      HOME: /tmp
+      SETTLEVIEW_E2E_OTLP: http://otel-collector:4318
+      SETTLEVIEW_E2E_COLLECTOR_HEALTH: http://otel-collector:13133/
+      SETTLEVIEW_E2E_O2: http://openobserve:5080
+      SETTLEVIEW_E2E_O2_PASSWORD: E2e-throwaway-Pw-9a
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "-v", "-rs", "tests/telemetry/test_collector_e2e.py"]
+
+secrets:
+  openobserve_ingest_token:
+    file: ${SETTLEVIEW_E2E_SECRETS:?the throwaway secrets folder}/openobserve_ingest_token

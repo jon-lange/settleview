@@ -147,8 +147,7 @@ def test_the_staging_app_reads_no_env_file_and_names_no_production_key(tmp_path)
     assert "BTCFLOW_TRADING_ENABLED" not in env and env["OTEL_EXPORTER_OTLP_ENDPOINT"] == ""
     for name in PROD_SECRETS:
         assert f"BTCFLOW_{name.upper()}_FILE" not in env, name
-    assert {s["source"] for s in app["secrets"]} == {"pg_app_password", "otlp_headers", "anthropic_api_key",
-                                                     "trading_demo_key_id"}
+    assert {s["source"] for s in app["secrets"]} == {"pg_app_password", "anthropic_api_key", "trading_demo_key_id"}
     for svc in ("migrate", "rec-pm-settle"):
         assert cfg["services"][svc]["environment"]["BTCFLOW_STAGING"] == "true", svc
 

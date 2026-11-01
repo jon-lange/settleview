@@ -1,7 +1,8 @@
 """The OpenTelemetry pipeline end to end, in memory (tests/telemetry/conftest.py): what each instrumentation exports,
 that the sampler keeps the order path and drops polls, streams, health and Telegram, that logs carry trace ids, that the
-agent wake is a GenAI span with tool children and no content, that the app's gauges read the Runtime, and above all that
-no token, key, password, cookie, signature or query secret reaches an exporter (`pipe` checks after every test)."""
+agent wake is a GenAI span with tool children and no content, that the app's gauges read the Runtime, and that no header
+value, API key or SQL parameter is ever emitted (`pipe` checks after every test). Redaction of what is emitted (a token
+in a URL, a key in a log line) is the collector's: tests/telemetry/test_collector_e2e.py."""
 
 from __future__ import annotations
 
@@ -59,7 +60,7 @@ def _client_spans(pipe):
 
 
 # -- httpx ------------------------------------------------------------------------------------------------------------
-def test_httpx_spans_never_carry_the_bot_token_headers_or_query_secrets(pipe, server):
+def test_httpx_spans_carry_the_url_and_never_a_header(pipe, server):
     url = f"{server}/bot{TG_TOKEN}/getUpdates?offset=1&token={QUERY_SECRET}"
     with tracer.start_as_current_span("poll"):  # an internal root: its children are kept
         with httpx.Client() as c:
@@ -73,9 +74,8 @@ def test_httpx_spans_never_carry_the_bot_token_headers_or_query_secrets(pipe, se
     assert len(spans) == 2
     for s in spans:
         full = s.attributes.get("url.full") or s.attributes.get("http.url")
-        assert full is not None and "/bot<redacted>/getUpdates" in full and "offset=<redacted>" in full
-        assert s.attributes.get("http.request.header.authorization") == "<redacted>"
-        assert s.attributes.get("http.response.header.set_cookie") == "<redacted>"
+        assert full is not None and "/getUpdates" in full  # as sent: the collector redacts the token and query
+        assert not [k for k in s.attributes if ".header." in k]  # header capture is off
 
 
 def test_a_failed_request_records_the_error_without_the_token(pipe):
@@ -129,16 +129,15 @@ def _server_spans(pipe):
     return [s for s in pipe.spans() if s.kind == SpanKind.SERVER]
 
 
-def test_order_path_requests_are_traced_without_headers_or_query_values(pipe, api):
+def test_order_path_requests_are_traced_without_headers(pipe, api):
     r = api.post(f"/api/trading/prepare?pin=1234&token={QUERY_SECRET}", json={"stake": 1},
                  headers=SECRET_HEADERS)
     assert r.status_code == 200
     (s,) = _server_spans(pipe)
     assert s.name == "POST /api/trading/prepare"
     assert s.attributes.get("http.route") == "/api/trading/prepare"
-    assert s.attributes.get("url.query") == "pin=<redacted>&token=<redacted>"
-    assert s.attributes.get("http.request.header.authorization") == "<redacted>"
-    assert s.attributes.get("http.request.header.cookie") == "<redacted>"
+    assert s.attributes.get("url.query") == f"pin=1234&token={QUERY_SECRET}"  # the collector blanks each value
+    assert not [k for k in s.attributes if ".header." in k]
     assert not [x for x in pipe.spans() if x.name in ("http send", "http receive") or x.name.endswith((" send",
                                                                                                       " receive"))]
 
@@ -165,12 +164,12 @@ def test_sse_streams_are_never_traced():
 
 
 # -- logs -------------------------------------------------------------------------------------------------------------
-def test_logs_are_exported_scrubbed_and_carry_the_trace_id(pipe):
+def test_logs_are_exported_and_carry_the_trace_id(pipe):
     lg = logging.getLogger("btc_signal_engine.test_otel")
     lg.setLevel(logging.INFO)
     with tracer.start_as_current_span("work") as span:
-        lg.warning("calling https://api.telegram.org/bot%s/getUpdates with %s", TG_TOKEN, BEARER)
-        lg.info("db password=%s key %s", DB_PASSWORD, ANTHROPIC_KEY)
+        lg.warning("calling https://api.telegram.org/bot%s/getUpdates", TG_TOKEN)
+        lg.info("writer flushed %d rows", 3)
         try:
             raise ConnectionError(f"https://api.telegram.org/bot{TG_TOKEN}/getMe failed")
         except ConnectionError:
@@ -178,7 +177,6 @@ def test_logs_are_exported_scrubbed_and_carry_the_trace_id(pipe):
     recs = [r for r in pipe.logs() if "test_otel" in str(dict(r.attributes or {})) or r.trace_id]
     mine = [r for r in recs if r.trace_id == span.get_span_context().trace_id]
     assert len(mine) == 3
-    assert "bot<redacted>" in mine[0].body
     assert any("exception.stacktrace" in (r.attributes or {}) for r in mine)
 
 

@@ -28,6 +28,8 @@ services:
     depends_on: !reset {}
   rec-pm-settle:
     depends_on: !reset {}
+  otel-collector:
+    depends_on: !reset {}
   openobserve:
     # Its root password from the deploying shell (the image has no shell to read a secret file).
     env_file: !reset []

@@ -43,9 +43,8 @@ from btc_signal_engine.bootstrap import heartbeat, telemetry
 from btc_signal_engine.bootstrap.config import Settings
 from btc_signal_engine.bootstrap.logs import (
     EX_CONFIG,
-    install_scrubbing,
     log_to_stderr,
-    scrub_secrets,
+    mask_secrets,
     set_http_client_log_level,
 )
 
@@ -112,7 +111,7 @@ def main(argv: list[str] | None = None, *, settings: Settings | None = None) -> 
     except ValueError as exc:  # a bad setting (also a bad _FILE): say which, never a value
         log.error("configuration error: %s", exc)
         return EX_CONFIG
-    scrub_secrets(telemetry.secret_values(s))
+    mask_secrets(telemetry.secret_values(s))
     set_http_client_log_level(s.http_client_log_level)
     use_pg_timeouts(s.pg_timeouts)
     db = s.database if is_postgres(s.database) else s.research_path / rec.DB_NAME
@@ -124,11 +123,10 @@ def main(argv: list[str] | None = None, *, settings: Settings | None = None) -> 
         print(f"{a.name}: ok, would write {describe(db)}")
         return 0
     try:
-        tel = telemetry.setup(f"settleview-rec-{a.name}", secrets=telemetry.secret_values(s))
+        tel = telemetry.setup(f"settleview-rec-{a.name}")
     except ValueError as exc:  # a bad OTEL_* setting, or the SDK missing with an endpoint set
         log.error("configuration error: %s", exc)
         return EX_CONFIG
-    install_scrubbing()
     stop = StopFlag(a.stop_file)
     stop.install()
     alive = heartbeat.path(a.name)  # the healthcheck's liveness (`ops alive`), touched from the main loop

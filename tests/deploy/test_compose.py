@@ -25,7 +25,8 @@ SECRET_SETTINGS = ("BTCFLOW_POLYMARKET_KEY_ID", "BTCFLOW_POLYMARKET_SECRET_KEY",
                    "BTCFLOW_TELEGRAM_BOT_TOKEN", "BTCFLOW_KALSHI_KEY_ID", "BTCFLOW_TRADING_DEMO_KEY_ID",
                    "BTCFLOW_TRADING_PROD_KEY_ID", "BTCFLOW_DATABASE_PASSWORD", "POSTGRES_PASSWORD", "PGPASSWORD")
 PYTHON_SERVICES = ("migrate", "app", "rec-pm-quotes", "rec-pm-settle")
-ALL_SERVICES = ("postgres", "backup", "migrate", "app", "rec-pm-quotes", "rec-pm-settle", "openobserve", "tailscale")
+ALL_SERVICES = ("postgres", "backup", "migrate", "app", "rec-pm-quotes", "rec-pm-settle", "otel-collector", "openobserve",
+                "tailscale")
 SERVE = json.loads((ROOT / "deploy" / "tailscale" / "serve.json").read_text(encoding="utf-8"))
 
 
@@ -69,10 +70,9 @@ def test_no_secret_is_an_environment_value_or_interpolated(tmp_path):
     assert {k for k in q["environment"] if k.startswith("BTCFLOW_")} == {
         "BTCFLOW_DATABASE_URL", "BTCFLOW_DATABASE_PASSWORD_FILE", "BTCFLOW_POLYMARKET_KEY_ID_FILE",
         "BTCFLOW_POLYMARKET_SECRET_KEY_FILE"}
-    assert {s["source"] for s in q["secrets"]} == {"pg_recorder_password", "otlp_headers", "polymarket_key_id",
-                                                   "polymarket_secret_key"}
-    assert {s["source"] for s in services["rec-pm-settle"]["secrets"]} == {"pg_recorder_password", "otlp_headers"}
-    assert {s["source"] for s in services["migrate"]["secrets"]} == {"pg_app_password", "otlp_headers"}
+    assert {s["source"] for s in q["secrets"]} == {"pg_recorder_password", "polymarket_key_id", "polymarket_secret_key"}
+    assert {s["source"] for s in services["rec-pm-settle"]["secrets"]} == {"pg_recorder_password"}
+    assert {s["source"] for s in services["migrate"]["secrets"]} == {"pg_app_password"}
     assert services["migrate"]["environment"]["OTEL_SERVICE_NAME"] == "settleview-migrate"  # migration_failed alert
     assert "${BTCFLOW_POLYMARKET" not in COMPOSE  # nothing from `.env` interpolated into a service
 
@@ -89,8 +89,29 @@ def test_the_python_services_are_hardened(tmp_path):
     pg = services["postgres"]
     assert pg["read_only"] is True and pg["cap_drop"] == ["ALL"]
     assert set(pg["cap_add"]) == {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
-    for name in ("postgres", "backup", "openobserve"):
+    for name in ("postgres", "backup", "openobserve", "otel-collector"):
         assert services[name]["security_opt"] == ["no-new-privileges:true"], name
+
+
+def test_the_collector_is_opt_in_pinned_unprivileged_and_alone_holds_the_backend_token(tmp_path):
+    services = _config(tmp_path)["services"]
+    c = services["otel-collector"]
+    assert c["profiles"] == ["observability"] == services["openobserve"]["profiles"]
+    assert re.fullmatch(r"otel/opentelemetry-collector-contrib:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}", c["image"])
+    assert c["read_only"] is True and c["cap_drop"] == ["ALL"] and "cap_add" not in c
+    assert not c.get("ports")  # the services reach it as otel-collector:4318, inside the network only
+    assert [s["source"] for s in c["secrets"]] == ["openobserve_ingest_token"]
+    assert [x["target"] for x in c["configs"]] == ["/etc/otelcol-contrib/config.yaml"]
+    assert c["healthcheck"]["test"][:3] == ["CMD", "/otelcol-contrib", "validate"]
+    limits = c["deploy"]["resources"]["limits"]
+    assert limits["memory"] and limits["cpus"]
+    for name, svc in services.items():  # no other service holds a backend credential
+        if name != "otel-collector":
+            assert "openobserve_ingest_token" not in {s["source"] for s in svc.get("secrets") or ()}, name
+            assert "OTEL_EXPORTER_OTLP_HEADERS_FILE" not in (svc.get("environment") or {}), name
+    cfg = (ROOT / "deploy" / "otel-collector" / "config.yaml").read_text(encoding="utf-8")
+    for part in ("memory_limiter:", "redaction:", "transform:", "batch:", "health_check:", "basicauth/openobserve:"):
+        assert part in cfg, part
 
 
 def test_the_phone_port_host_address_is_a_variable_and_the_pc_and_agent_ports_stay_loopback(tmp_path):
@@ -110,7 +131,7 @@ def test_the_recorders_healthcheck_is_process_local_liveness(tmp_path):
 
 
 def test_text_checks():
-    assert "x-logging: &logging" in COMPOSE and COMPOSE.count("logging: *logging") == 5  # x-service + 4 services
+    assert "x-logging: &logging" in COMPOSE and COMPOSE.count("logging: *logging") == 6  # x-service + 5 services
     assert '"${BTCFLOW_PHONE_BIND:-0.0.0.0}:8000:8000"' in COMPOSE and '"127.0.0.1:8001:8001"' in COMPOSE
     assert 'ENTRYPOINT ["/usr/bin/tini", "--"]' in DOCKERFILE and "apt-get install -y --no-install-recommends tini" \
         in DOCKERFILE
