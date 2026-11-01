@@ -19,9 +19,9 @@
 </script>
 <link rel="stylesheet" href="../../web/style.css">
 </head>
-<body x-data>
+<body x-data="harnessShell">
 <main><div id="views"></div></main>
-<div class="sr-only" aria-live="polite" x-data x-text="$store.app.announcement"></div>
+<div class="sr-only" aria-live="polite" x-text="$store.app.announcement"></div>
 <script src="perps_fixtures.js"></script>
 <script>
   (function () {
@@ -32,7 +32,9 @@
     var panel = doc.getElementById('panel-perps');
     if (!panel) throw new Error('web/index.html has no #panel-perps');
     document.getElementById('views').appendChild(document.importNode(panel, true));
-    ['../../web/app.js', '../../web/perpchart.js', '../../web/views/perps.js', '../../web/vendor/alpine-3.14.9.min.js'].forEach(function (src) {
+    // Alpine's CSP build, as the app: the body's (empty) component is registered here, not written inline.
+    document.addEventListener('alpine:init', function () { Alpine.data('harnessShell', function () { return {}; }); });
+    ['../../web/app.js', '../../web/perpchart.js', '../../web/views/perps.js', '../../web/vendor/alpine-csp-3.14.9.min.js'].forEach(function (src) {
       document.write('<script src="' + src + '"><\/script>');
     });
   })();

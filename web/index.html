@@ -495,59 +495,59 @@
 <!-- ================= RECORD (design pass 2026-10-31): your results over today / the week / everything, from
      GET /api/record/summary (the Telegram daily summary's own computation), by rule; your trades on the Play market
      (Play's record view, moved here); the order settings; each market's trading mode ================= -->
-<section id="panel-record" class="pl rc" aria-label="Record" x-show="$store.app.view === 'record'" x-cloak x-data="recordView()">
+<section id="panel-record" class="pl rc" aria-label="Record" x-show="isRecordView" x-cloak x-data="recordView">
   <div class="nv-titlebar"><h1 class="nv-title">Record</h1></div>
   <div class="nv-seg rc-range" role="radiogroup" aria-label="Range">
     <template x-for="r in RANGES" :key="r">
-      <button type="button" role="radio" :aria-checked="rcRange === r ? 'true' : 'false'" @click="rcSet(r)" x-text="RANGE_NAMES[r]"></button>
+      <button type="button" role="radio" :aria-checked="rangeChecked" @click="rcPickRange" x-text="rangeName"></button>
     </template>
   </div>
-  <p class="pl-note amber" x-show="rcRangeUnknown != null" x-text="'The saved range (“' + rcRangeUnknown + '”) was not recognised, so Today is shown. Pick one to replace it.'" role="status"></p>
-  <p class="error-box" x-show="rcErr" x-text="'Could not load your record: ' + rcErr" role="alert"></p>
-  <p class="pl-note muted" x-show="!rcSum && !rcErr">Loading…</p>
+  <p class="pl-note amber" x-show="rangeUnknownShown" x-text="rangeUnknownText" role="status"></p>
+  <p class="error-box" x-show="rcErr" x-text="rcErrText" role="alert"></p>
+  <p class="pl-note muted" x-show="rcLoading">Loading…</p>
   <template x-if="rcSum">
     <div class="rc-sum">
       <div class="rc-card" aria-live="polite">
-        <span class="pl-eyebrow" x-text="RANGE_NAMES[rcSum.range] + ' · all venues'"></span>
-        <div class="rc-hero-row"><b class="rc-hero num" :class="tone(rcSum.net)" x-text="signed(rcSum.net)" data-flash></b><span class="num" x-text="tradesLine(rcSum)"></span></div>
+        <span class="pl-eyebrow" x-text="rcSumHead"></span>
+        <div class="rc-hero-row"><b class="rc-hero num" :class="rcNetTone" x-text="rcNetText" data-flash></b><span class="num" x-text="rcTradesLine"></span></div>
         <div class="rc-tiles num">
-          <div class="rc-you"><small>You</small><b :class="tone(rcSum.you.net)" x-text="signed(rcSum.you.net)"></b><span x-text="plural(rcSum.you.trades, 'trade')"></span></div>
-          <div class="rc-agent"><small>Agent</small><b :class="tone(rcSum.agent.net)" x-text="signed(rcSum.agent.net)"></b><span x-text="plural(rcSum.agent.trades, 'trade')"></span></div>
-          <div class="rc-api"><small>API</small><b x-text="money(rcSum.api.usd)"></b><span x-text="plural(rcSum.api.wakes, 'wake')"></span></div>
+          <div class="rc-you"><small>You</small><b :class="rcYouTone" x-text="rcYouNet"></b><span x-text="rcYouTrades"></span></div>
+          <div class="rc-agent"><small>Agent</small><b :class="rcAgentTone" x-text="rcAgentNet"></b><span x-text="rcAgentTrades"></span></div>
+          <div class="rc-api"><small>API</small><b x-text="rcApiUsd"></b><span x-text="rcApiWakes"></span></div>
         </div>
-        <small class="rc-foot">Closed trades after every fee, counted on the day they closed. <span x-text="dayLine(rcSum)"></span> Perps keep their own record on the Perps screen.</small>
+        <small class="rc-foot">Closed trades after every fee, counted on the day they closed. <span x-text="rcDayLine"></span> Perps keep their own record on the Perps screen.</small>
       </div>
       <div class="nv-seg rc-by" role="radiogroup" aria-label="Group results">
         <template x-for="b in BYS" :key="b">
-          <button type="button" role="radio" :aria-checked="rcBy === b ? 'true' : 'false'" @click="rcSetBy(b)" x-text="BY_NAMES[b]"></button>
+          <button type="button" role="radio" :aria-checked="byChecked" @click="rcPickBy" x-text="byName"></button>
         </template>
       </div>
-      <div class="rc-group rc-rules num" x-show="rcBy === 'rule'">
-        <template x-for="x in rcSum.by_rule" :key="x.rule">
-          <div class="rc-row"><span x-text="x.rule"></span> <span class="nv-sp"></span> <span class="rc-val" x-text="x.trades ? x.wins + '/' + x.trades + ' won · ' : 'no trades'"></span><span class="rc-val" :class="tone(x.net)" x-show="x.trades" x-text="signed(x.net)"></span></div>
+      <div class="rc-group rc-rules num" x-show="byRule">
+        <template x-for="x in rcRules" :key="x.rule">
+          <div class="rc-row"><span x-text="x.rule"></span> <span class="nv-sp"></span> <span class="rc-val" x-text="ruleWins"></span><span class="rc-val" :class="ruleTone" x-show="ruleTraded" x-text="ruleNet"></span></div>
         </template>
-        <div class="rc-row is-off" x-show="!rcSum.by_rule.length"><span>No rule ran or traded in this range.</span></div>
+        <div class="rc-row is-off" x-show="noRules"><span>No rule ran or traded in this range.</span></div>
       </div>
       <!-- by agent: which agents earn their keep, after API cost; Clone or Retire from here -->
-      <div class="rc-byagent" x-show="rcBy === 'agent'">
+      <div class="rc-byagent" x-show="byAgent">
         <div class="rc-group rc-agents num">
-          <template x-for="a in (rcSum.by_agent || [])" :key="a.agent_id || a.name">
-            <details class="rc-ag" @toggle="if (!$event.target.open && rcAsk === a.agent_id) rcAsk = ''">
-              <summary class="rc-row"><span class="rc-ag-t"><span class="rc-ag-name" x-text="a.name"></span><small x-text="agentLine(a)"></small></span><span class="nv-sp"></span>
-                <span class="rc-ag-r"><b :class="tone(a.net_after_api)" x-text="signed(a.net_after_api)"></b><small>after API</small></span></summary>
-              <div class="rc-ag-acts" x-show="a.agent_id">
-                <button type="button" class="rc-act" @click="rcClone(a)">Clone</button>
-                <button type="button" class="rc-act red" x-show="!a.archived && rcAsk !== a.agent_id" @click="rcAsk = a.agent_id" :disabled="rcPhone()">Retire</button>
-                <small x-show="!a.archived && rcPhone()">Retire on the PC.</small>
-                <span class="rc-ask" x-show="rcAsk === a.agent_id" role="alert"><span x-text="'Retire ' + a.name + '? It keeps its runs and cannot run again.'"></span>
-                  <button type="button" class="rc-act red" @click="rcRetire(a)" :disabled="!!rcBusy">Retire</button><button type="button" class="rc-act" @click="rcAsk = ''">Cancel</button></span>
+          <template x-for="a in rcAgents" :key="agentKey">
+            <details class="rc-ag" @toggle="rcAgentToggle">
+              <summary class="rc-row"><span class="rc-ag-t"><span class="rc-ag-name" x-text="a.name"></span><small x-text="agentLineText"></small></span><span class="nv-sp"></span>
+                <span class="rc-ag-r"><b :class="agentNetTone" x-text="agentNetText"></b><small>after API</small></span></summary>
+              <div class="rc-ag-acts" x-show="agentHasId">
+                <button type="button" class="rc-act" @click="rcCloneRow">Clone</button>
+                <button type="button" class="rc-act red" x-show="retireOffered" @click="rcAskRetire" :disabled="rcPhone">Retire</button>
+                <small x-show="retirePcOnly">Retire on the PC.</small>
+                <span class="rc-ask" x-show="retireAsking" role="alert"><span x-text="retireQuestion"></span>
+                  <button type="button" class="rc-act red" @click="rcRetireRow" :disabled="rcIsBusy">Retire</button><button type="button" class="rc-act" @click="rcCancelRetire">Cancel</button></span>
               </div>
             </details>
           </template>
-          <div class="rc-row is-off" x-show="!(rcSum.by_agent || []).length"><span>No agent ran or traded in this range.</span></div>
+          <div class="rc-row is-off" x-show="noAgents"><span>No agent ran or traded in this range.</span></div>
         </div>
-        <div class="rc-group" x-show="bestAgent()">
-          <button type="button" class="rc-row rc-clone-best" @click="rcClone(bestAgent())"><span x-text="'Clone the best agent (' + (bestAgent() ? bestAgent().name : '') + ')'"></span><span class="nv-sp"></span><span class="rc-chev" aria-hidden="true">›</span></button>
+        <div class="rc-group" x-show="bestAgent">
+          <button type="button" class="rc-row rc-clone-best" @click="rcCloneBest"><span x-text="cloneBestText"></span><span class="nv-sp"></span><span class="rc-chev" aria-hidden="true">›</span></button>
         </div>
         <p class="rc-foot" :class="rcMsgCls" x-show="rcMsg" x-text="rcMsg" role="status"></p>
         <small class="rc-foot">Ranked by net after API cost. A handful of trades is luck as much as skill; the counts are shown so you can tell. Retire: tap an agent.</small>
@@ -556,181 +556,181 @@
   </template>
   <p class="rc-gl">Your trades and settings</p>
   <!-- ===== your last N ===== -->
-  <details class="rc-group rc-disc pl-hist" id="rc-trades" @toggle="if ($event.target.open) loadScore()">
-    <summary><span x-text="'Your trades · ' + (venue ? tabName() : 'pick a market on Play')"></span><small class="num" x-show="att()" x-text="att() ? att().record.wins + '–' + att().record.losses + ' · ' + sUsd(att().record.pnl) : ''"></small></summary>
+  <details class="rc-group rc-disc pl-hist" id="rc-trades" @toggle="tradesToggle">
+    <summary><span x-text="tradesHead"></span><small class="num" x-show="att" x-text="attHead"></small></summary>
     <div class="pl-row">
       <b>Your last</b>
       <div class="pl-seg pl-seg-sm" role="radiogroup" aria-label="How many attempts">
-        <template x-for="n in ['5', '10', '20', 'all']" :key="n">
-          <button type="button" role="radio" :aria-checked="last === n" @click="setLast(n)" x-text="n === 'all' ? 'All' : n"></button>
+        <template x-for="n in LASTS" :key="n">
+          <button type="button" role="radio" :aria-checked="lastChecked" @click="pickLast" x-text="lastName"></button>
         </template>
       </div>
     </div>
     <div class="pl-seg pl-seg-sm" role="radiogroup" aria-label="Which venue">
-      <button type="button" role="radio" :aria-checked="!both" @click="setBoth(false)">This venue</button>
-      <button type="button" role="radio" :aria-checked="both" @click="setBoth(true)">Both</button>
+      <button type="button" role="radio" :aria-checked="notBoth" @click="setThisVenue">This venue</button>
+      <button type="button" role="radio" :aria-checked="both" @click="setBothVenues">Both</button>
     </div>
     <p class="error-box" x-show="sbError" x-text="sbError"></p>
-    <template x-if="att()">
+    <template x-if="att">
       <div>
         <p class="pl-recline">
-          <b class="num" x-text="att().record.wins + '–' + att().record.losses"></b>
-          <b class="num" :class="att().record.pnl >= 0 ? 'pl-up' : 'pl-down'" x-text="sUsd(att().record.pnl)"></b>
-          <small class="pl-streak" x-show="streakText()" x-text="streakText()"></small>
+          <b class="num" x-text="attWinLoss"></b>
+          <b class="num" :class="attPnlCls" x-text="attPnl"></b>
+          <small class="pl-streak" x-show="streakText" x-text="streakText"></small>
         </p>
-        <p class="pl-note muted" x-show="att().n" x-text="calLine()"></p>
-        <p class="muted" x-show="!att().n">No finished attempts yet.</p>
-        <template x-if="pnlChart()">
-          <svg class="pl-chart" :viewBox="'0 0 ' + W + ' ' + H" role="img" aria-label="Running P&L over these attempts; tap a dot for details">
-            <path :class="pnlChart().up ? 'pl-area-up' : 'pl-area-down'" :d="pnlChart().area"></path>
-            <line class="pl-zero" x1="0" :x2="W" :y1="pnlChart().zeroY" :y2="pnlChart().zeroY"></line>
-            <path class="pl-pnlln" :d="pnlChart().line"></path>
-            <g x-html="dotsSvg()" @click="pickDot($event)" style="cursor:pointer"></g>
+        <p class="pl-note muted" x-show="attN" x-text="calLine"></p>
+        <p class="muted" x-show="attNone">No finished attempts yet.</p>
+        <template x-if="pnlChart">
+          <svg class="pl-chart" :viewBox="chartViewBox" role="img" aria-label="Running P&L over these attempts; tap a dot for details">
+            <path :class="pnlAreaCls" :d="pnlArea"></path>
+            <line class="pl-zero" x1="0" :x2="W" :y1="pnlZeroY" :y2="pnlZeroY"></line>
+            <path class="pl-pnlln" :d="pnlLine"></path>
+            <g x-html="dotsSvg" @click="pickDot" style="cursor:pointer"></g>
           </svg>
         </template>
-        <p class="pl-pick" x-show="pick" role="status"><span x-text="pickWhen()"></span><span :class="pickVenueKnown() ? '' : 'pl-warn'" x-text="pickVenue()"></span><span x-text="pickRest()"></span></p>
+        <p class="pl-pick" x-show="pick" role="status"><span x-text="pickWhen"></span><span :class="pickVenueCls" x-text="pickVenue"></span><span x-text="pickRest"></span></p>
         <div class="pl-grid3">
-          <div><small>You won</small><b x-text="pct(attStats().won)"></b></div>
-          <div><small>Break-even</small><b x-text="pct(attStats().said)"></b></div>
-          <div><small>Edge</small><b :class="(attStats().edge || 0) >= 0 ? 'pl-up' : 'pl-down'" x-text="attStats().edge == null ? '—' : (attStats().edge > 0 ? '+' : '') + attStats().edge + ' pts'"></b></div>
+          <div><small>You won</small><b x-text="statWon"></b></div>
+          <div><small>Break-even</small><b x-text="statSaid"></b></div>
+          <div><small>Edge</small><b :class="statEdgeCls" x-text="statEdge"></b></div>
         </div>
-        <p class="muted pl-note" x-text="beNote()"></p>
-        <p class="muted pl-note" x-text="sb && sb.calls.note"></p>
+        <p class="muted pl-note" x-text="beNote"></p>
+        <p class="muted pl-note" x-text="callsNote"></p>
       </div>
     </template>
   </details>
 
   <details class="rc-group rc-disc" id="rc-orders">
-    <summary><span>Order settings</span><small x-text="ORDER_NAMES[orderMode]"></small></summary>
-    <label class="pl-check"><input type="checkbox" :checked="tpPrompt" @change="setTpPrompt($event.target.checked)"> Auto-sell prompt after buy</label>
+    <summary><span>Order settings</span><small x-text="orderName"></small></summary>
+    <label class="pl-check"><input type="checkbox" :checked="tpPrompt" @change="rcTpPromptChange"> Auto-sell prompt after buy</label>
     <small id="pl-otype">Order type</small>
     <div class="pl-seg pl-seg-sm pl-otype" role="radiogroup" aria-labelledby="pl-otype">
       <template x-for="m in ORDERS" :key="m">
-        <button type="button" role="radio" :aria-checked="orderMode === m ? 'true' : 'false'" @click="setOrder(m)" :disabled="busy || sliding" x-text="ORDER_NAMES[m] + (m === ORDER_DEFAULT ? ' (default)' : '')"></button>
+        <button type="button" role="radio" :aria-checked="orderChecked" @click="pickOrder" :disabled="orderLocked" x-text="orderLabel"></button>
       </template>
     </div>
-    <small x-show="orderMode === 'market'">Market fills at the best price on offer right now, like Kalshi's Quick Order and Polymarket's market buy. Anything not filled at once is cancelled; it never pays more than the ask plus your market protection (Settings → Trade limits).</small>
-    <p class="pl-note amber" x-show="orderUnknown != null" x-text="'The saved order type (“' + orderUnknown + '”) was not recognised, so Market (the default) is used. Pick one to replace it.'" role="status"></p>
-    <template x-if="orderMode === 'limit'">
+    <small x-show="orderMarket">Market fills at the best price on offer right now, like Kalshi's Quick Order and Polymarket's market buy. Anything not filled at once is cancelled; it never pays more than the ask plus your market protection (Settings → Trade limits).</small>
+    <p class="pl-note amber" x-show="orderUnknownShown" x-text="orderUnknownText" role="status"></p>
+    <template x-if="orderLimit">
       <div>
         <small>Max price: how far over the ask you will pay rather than miss the entry</small>
         <div class="pl-chips" role="radiogroup" aria-label="Max price over the ask">
           <template x-for="x in SLIPS" :key="x">
-            <button type="button" role="radio" class="pl-chipbtn" :aria-checked="slip === x ? 'true' : 'false'" :aria-pressed="slip === x ? 'true' : 'false'" @click="setSlip(x)" x-text="'+' + x + '¢'"></button>
+            <button type="button" role="radio" class="pl-chipbtn" :aria-checked="slipChecked" :aria-pressed="slipChecked" @click="pickSlip" x-text="slipLabel"></button>
           </template>
         </div>
-        <small x-text="'Default: +' + SLIP_DEFAULT + '¢ over the ask (used until you pick one).'"></small>
-        <p class="pl-note amber" x-show="slipUnknown != null" x-text="'The saved max price setting (“' + slipUnknown + '”) was not recognised, so +' + SLIP_DEFAULT + '¢ (the default) is used. Pick one to replace it.'" role="status"></p>
+        <small x-text="slipDefaultText"></small>
+        <p class="pl-note amber" x-show="slipUnknownShown" x-text="slipUnknownText" role="status"></p>
       </div>
     </template>
     <p class="muted pl-note">Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts.</p>
   </details>
 
   <p class="rc-gl">Mode for each venue</p>
-  <p class="error-box" x-show="rcModeErr" x-text="'Could not read the modes: ' + rcModeErr" role="alert"></p>
+  <p class="error-box" x-show="rcModeErr" x-text="rcModeErrText" role="alert"></p>
   <div class="rc-group rc-modes">
-    <template x-for="m in modeRows()" :key="m.key">
-      <details class="rc-disc rc-mode" @toggle="if ($event.target.open) modeOpen(m)">
-        <summary><span x-text="m.label"></span><small class="rc-modeval" :class="m.known ? '' : 'pl-warn'" x-text="m.word"></small></summary>
+    <template x-for="m in modeRows" :key="m.key">
+      <details class="rc-disc rc-mode" @toggle="modeToggle">
+        <summary><span x-text="m.label"></span><small class="rc-modeval" :class="modeValCls" x-text="m.word"></small></summary>
         <div class="rc-modebody">
-          <label class="field" :for="'rc-mode-' + m.key">Mode</label>
-          <select :id="'rc-mode-' + m.key" x-model="rcForms[m.key].mode">
+          <label class="field" :for="modeSelectId">Mode</label>
+          <select :id="modeSelectId" x-model="modeModel">
             <option value="shadow">Shadow (no money)</option>
-            <option value="sandbox" x-show="m.venue === 'kalshi'">Paper (Kalshi demo money)</option>
+            <option value="sandbox" x-show="modeKalshi">Paper (Kalshi demo money)</option>
             <option value="prod">Live (REAL MONEY)</option>
           </select>
-          <label class="field" :for="'rc-confirm-' + m.key" x-show="rcForms[m.key].mode === 'prod'">Type exactly: <b class="mono" x-text="PROD_CONFIRM"></b></label>
-          <input :id="'rc-confirm-' + m.key" type="text" autocomplete="off" spellcheck="false" x-show="rcForms[m.key].mode === 'prod'" x-model="rcForms[m.key].confirm" aria-label="Real-money confirmation">
-          <button type="button" class="pl-btn" @click="setModeFor(m)" :disabled="!canSetModeFor(m)">Switch mode</button>
-          <p class="pl-note" x-text="rcForms[m.key].msg" role="status"></p>
+          <label class="field" :for="modeConfirmId" x-show="modeProd">Type exactly: <b class="mono" x-text="PROD_CONFIRM"></b></label>
+          <input :id="modeConfirmId" type="text" autocomplete="off" spellcheck="false" x-show="modeProd" x-model="modeConfirmModel" aria-label="Real-money confirmation">
+          <button type="button" class="pl-btn" @click="setModeRow" :disabled="modeLocked">Switch mode</button>
+          <p class="pl-note" x-text="modeMsgText" role="status"></p>
         </div>
       </details>
     </template>
-    <div class="rc-row is-off" x-show="rcModes && !modeRows().length"><span>No markets on this server.</span></div>
+    <div class="rc-row is-off" x-show="noModes"><span>No markets on this server.</span></div>
   </div>
   <small class="rc-foot">Perps' mode is in the Perps settings (Kalshi → BTC Perps, the gear).</small>
 </section>
 </div>
 <!-- ================= PERPS (Kalshi's BTC perpetual; web/views/perps.js, chart web/perpchart.js) ================= -->
-<section id="panel-perps" class="pl pv" aria-label="Perps" x-show="$store.app.view === 'perps'" x-cloak x-data="perpsView()">
+<section id="panel-perps" class="pl pv" aria-label="Perps" x-show="isPerpsView" x-cloak x-data="perpsView">
   <!-- Layout: the user's approved Perps wireframe (2026-10-30), with the design pass (2026-10-31): Play's top
        (venue, the market picker, KILL, the money line), the hero price on the chart card, rows, the dock. -->
   <div class="pl-top">
     <div class="nv-row">
       <div class="nv-seg" role="radiogroup" aria-label="Venue">
-        <button type="button" role="radio" aria-checked="true">Kalshi<i class="pl-odot" x-show="pos()" role="img" aria-label="open position"></i></button>
-        <button type="button" role="radio" aria-checked="false" @click="goVenue('polymarket')" :disabled="sliding || busy">Polymarket</button>
+        <button type="button" role="radio" aria-checked="true">Kalshi<i class="pl-odot" x-show="pos" role="img" aria-label="open position"></i></button>
+        <button type="button" role="radio" aria-checked="false" @click="goPolymarket" :disabled="slideLocked">Polymarket</button>
       </div>
-      <button type="button" class="nv-gear" @click="openSheet()" aria-label="Settings" :aria-expanded="sheet ? 'true' : 'false'" aria-controls="pv-settings"><svg width="22" height="22" aria-hidden="true"><use href="#tb-gear"/></svg></button>
+      <button type="button" class="nv-gear" @click="openSheet" aria-label="Settings" :aria-expanded="sheetExpanded" aria-controls="pv-settings"><svg width="22" height="22" aria-hidden="true"><use href="#tb-gear"/></svg></button>
     </div>
     <div class="nv-hdr">
-      <div class="nv-picker" x-data="{ open: false }" @keydown.escape="open = false" @click.outside="open = false">
-        <button type="button" class="nv-pick" aria-haspopup="menu" :aria-expanded="open ? 'true' : 'false'" @click="open = !open" :disabled="sliding || busy" :aria-label="'Market: ' + pickerLabel() + '. Change market'">
-          <b><span x-text="pickerLabel()"></span><small aria-hidden="true">&#9662;</small></b>
-          <span class="nv-sub num" x-text="pickerSub()"></span>
+      <div class="nv-picker" x-data="menu" @keydown.escape="close" @click.outside="close">
+        <button type="button" class="nv-pick" aria-haspopup="menu" :aria-expanded="expanded" @click="toggle" :disabled="slideLocked" :aria-label="pickerAria">
+          <b><span x-text="pickerLabel"></span><small aria-hidden="true">&#9662;</small></b>
+          <span class="nv-sub num" x-text="pickerSub"></span>
         </button>
         <div class="nv-menu" role="menu" aria-label="Kalshi markets" x-show="open" x-cloak>
-          <button type="button" role="menuitemradio" aria-checked="false" @click="open = false; goVenue('kalshi')"><span>BTC 15m</span></button>
-          <button type="button" role="menuitemradio" aria-checked="true" @click="open = false"><span>BTC Perps</span><small x-show="v && !v.enabled">off</small><b class="nv-check" aria-hidden="true">&#10003;</b></button>
+          <button type="button" role="menuitemradio" aria-checked="false" @click="pickBtc15m"><span>BTC 15m</span></button>
+          <button type="button" role="menuitemradio" aria-checked="true" @click="close"><span>BTC Perps</span><small x-show="isOff">off</small><b class="nv-check" aria-hidden="true">&#10003;</b></button>
         </div>
       </div>
       <span class="nv-sp"></span>
-      <button type="button" class="pl-kill" :class="killed() ? 'is-on' : ''" :aria-pressed="killed() ? 'true' : 'false'"
-        :aria-label="killed() ? (resumeLocked() ? 'Kill switch is on. Turn it off on the PC' : 'Kill switch is on. Resume trading') : 'Kill switch: stop all new trading'" @click="toggleKill()" :disabled="killBusy || resumeLocked() || !v" x-text="killLabel()"></button>
+      <button type="button" class="pl-kill" :class="killCls" :aria-pressed="killPressed"
+        :aria-label="killAria" @click="toggleKill" :disabled="killLocked" x-text="killLabel"></button>
     </div>
-    <p class="nv-money num" x-show="on()"><span class="nv-pill" :class="pillCls()" :aria-label="pillAria()" x-text="pillWord()"></span><span :class="v && v.balance ? '' : 'pl-warn'" x-text="cashLine()"></span><span class="pv-live" :class="liveCls()" role="status" x-text="liveText()"></span></p>
+    <p class="nv-money num" x-show="on"><span class="nv-pill" :class="pillCls" :aria-label="pillAria" x-text="pillWord"></span><span :class="cashCls" x-text="cashLine"></span><span class="pv-live" :class="liveCls" role="status" x-text="liveText"></span></p>
   </div>
-  <p class="pl-killed" x-show="on() && killed()" x-cloak role="status"><b>Kill switch is on.</b> No new entries. Close, reduce and your stop and take profit still work.</p>
+  <p class="pl-killed" x-show="onKilled" x-cloak role="status"><b>Kill switch is on.</b> No new entries. Close, reduce and your stop and take profit still work.</p>
   <p class="pl-msg red" x-show="killMsg" x-text="killMsg" role="alert"></p>
-  <p class="error-box" x-show="error" x-text="'Could not load: ' + error" role="alert"></p>
+  <p class="error-box" x-show="error" x-text="errorText" role="alert"></p>
 
   <!-- ===== banners: one by priority, the rest folded into a count ===== -->
-  <div class="pv-banners" x-show="on() && banners().length" role="status">
-    <template x-for="(b, i) in shownBanners()" :key="b.code + i">
-      <p :class="bannerCls(b)"><span x-text="b.text"></span></p>
+  <div class="pv-banners" x-show="bannersShown" role="status">
+    <template x-for="(b, i) in shownBanners" :key="bannerKey">
+      <p :class="bannerRowCls"><span x-text="b.text"></span></p>
     </template>
-    <button type="button" class="pl-link pv-more" x-show="moreBanners() > 0" @click="allBanners = !allBanners" :aria-expanded="allBanners ? 'true' : 'false'"
-      x-text="allBanners ? 'Show fewer' : '+' + moreBanners() + ' more'"></button>
+    <button type="button" class="pl-link pv-more" x-show="hasMoreBanners" @click="toggleBanners" :aria-expanded="bannersExpanded"
+      x-text="bannersToggleText"></button>
   </div>
   <p class="pl-msg" x-show="msg" :class="msgCls" x-text="msg" role="status"></p>
 
   <!-- switched off: one card says why and what to do; nothing else on the screen -->
-  <div class="pl-choose nv-empty" x-show="v && !v.enabled" role="status">
+  <div class="pl-choose nv-empty" x-show="isOff" role="status">
     <svg width="34" height="34" aria-hidden="true"><use href="#sv-mark"/></svg>
     <h2>Perps are switched off</h2>
-    <p x-show="!v || (v.enabled_reason || '') !== 'Perps are switched off'" x-text="(v && v.enabled_reason) || 'The server sent no reason.'"></p>
+    <p x-show="offReasonShown" x-text="offReason"></p>
     <p>To trade Kalshi's BTC perpetual, turn perps on in the server's settings and restart it. BTC 15m and Polymarket work as usual.</p>
-    <button type="button" class="pl-choosebtn" @click="goVenue('kalshi')">Open BTC 15m</button>
+    <button type="button" class="pl-choosebtn" @click="goBtc15m">Open BTC 15m</button>
   </div>
-  <div class="pl-choose" x-show="on() && v.mode === 'off'" role="status">
+  <div class="pl-choose" x-show="tradingOff" role="status">
     <h2>Perps trading is off</h2>
     <p>Pick a mode to read your perps balance and stream the price.</p>
-    <button type="button" class="pl-choosebtn" @click="openSheet()">Choose a mode</button>
+    <button type="button" class="pl-choosebtn" @click="openSheet">Choose a mode</button>
   </div>
 
   <!-- ===== the outcome (R12: the server's sentence from recorded fills; tap to dismiss) ===== -->
-  <template x-if="on() && outcome()">
-    <button type="button" class="pl-card pl-outcome pv-outcome" @click="closeOutcome()" role="status">
-      <strong x-text="outcome().text"></strong>
-      <small x-text="'Recorded ' + BTC.fmt.time(outcome().at_ms) + ' · tap to dismiss'"></small>
+  <template x-if="outcomeShown">
+    <button type="button" class="pl-card pl-outcome pv-outcome" @click="closeOutcome" role="status">
+      <strong x-text="outcomeText"></strong>
+      <small x-text="outcomeAt"></small>
     </button>
   </template>
 
-  <p class="pv-checking" x-show="on() && v.unknown_order" role="status"><b>Checking whether your order went through…</b> New entries wait until Kalshi's answer is known.</p>
+  <p class="pv-checking" x-show="checkingOrder" role="status"><b>Checking whether your order went through…</b> New entries wait until Kalshi's answer is known.</p>
 
   <!-- ===== positions Settleview did not open (R17) ===== -->
-  <template x-for="(f, i) in (on() ? foreign() : [])" :key="'f' + i">
-    <div class="pl-card pv-foreign" :class="f.kind === 'app_isolated' ? '' : 'pv-foreign-x'">
-      <span class="pl-eyebrow" x-text="fHead(f)"></span>
-      <b class="num" x-text="fLine(f)"></b>
-      <small x-show="f.kind === 'app_isolated'">Manage it in Kalshi's app. It counts toward your limits.</small>
-      <template x-if="f.kind !== 'app_isolated'">
+  <template x-for="(f, i) in foreignRows" :key="foreignKey">
+    <div class="pl-card pv-foreign" :class="foreignCls">
+      <span class="pl-eyebrow" x-text="fHeadRow"></span>
+      <b class="num" x-text="fLineRow"></b>
+      <small x-show="fIsolated">Manage it in Kalshi's app. It counts toward your limits.</small>
+      <template x-if="fAdoptable">
         <div class="pv-adopt">
           <small>New entries are blocked until you adopt it; closing it here always works.</small>
-          <button type="button" class="pl-btn" x-show="adoptAsk !== i" @click="adoptAsk = i" :disabled="busy" x-text="'Adopt ' + cnt(Math.abs(f.size)) + ' contracts…'"></button>
-          <div class="pl-grid2" x-show="adoptAsk === i">
-            <button type="button" class="pl-btn pl-yes" @click="adopt(f, i)" :disabled="busy" x-text="'Adopt: ' + sideWord(fDir(f)) + ' ' + cnt(Math.abs(f.size)) + ' (on Kalshi)'"></button>
-            <button type="button" class="pl-btn" @click="adoptAsk = null" :disabled="busy">Cancel</button>
+          <button type="button" class="pl-btn" x-show="adoptNotAsked" @click="askAdopt" :disabled="busy" x-text="adoptAskText"></button>
+          <div class="pl-grid2" x-show="adoptAsked">
+            <button type="button" class="pl-btn pl-yes" @click="adoptRow" :disabled="busy" x-text="adoptText"></button>
+            <button type="button" class="pl-btn" @click="cancelAdopt" :disabled="busy">Cancel</button>
           </div>
         </div>
       </template>
@@ -738,44 +738,44 @@
   </template>
 
   <!-- ===== in a position: every parameter as a chip; stop and take profit open their form ===== -->
-  <div class="pl-params" x-show="on() && pos()" role="group" aria-label="Your position">
-    <template x-for="ch in pchips()" :key="ch.k">
+  <div class="pl-params" x-show="inPosition" role="group" aria-label="Your position">
+    <template x-for="ch in pchips" :key="ch.k">
       <span class="pl-pchip num" :class="ch.cls">
-        <template x-if="ch.tap"><button type="button" class="pl-pchip-btn" @click="setAct('protect')" :disabled="sliding || busy" x-text="ch.text + ' ›'"></button></template>
-        <template x-if="!ch.tap"><span x-text="ch.text"></span></template>
+        <template x-if="chTap"><button type="button" class="pl-pchip-btn" @click="actProtect" :disabled="slideLocked" x-text="chTapText"></button></template>
+        <template x-if="chNoTap"><span x-text="ch.text"></span></template>
       </span>
     </template>
   </div>
 
   <!-- ===== before entry: THE CALL (Play's lights as a lean, never an edge), target entry, the plan, the 15-min bar ===== -->
-  <div class="pl-card pl-verdict" :class="callCls()" x-show="on() && v.mode !== 'off' && !pos() && !outcome()">
+  <div class="pl-card pl-verdict" :class="callCls" x-show="callShown">
     <div class="pl-vhead">
       <div>
         <span class="pl-eyebrow">The call</span>
-        <strong x-text="pcall().headline"></strong>
-        <span class="pl-reason" x-text="pcall().reason"></span>
+        <strong x-text="callHeadline"></strong>
+        <span class="pl-reason" x-text="callReason"></span>
       </div>
-      <button type="button" class="pl-agree num" x-show="agreeText()" @click="$refs.why.open = !$refs.why.open" aria-controls="pv-why"
-        :aria-label="agreeText() + '. Show details'"><span x-text="agreeText()"></span><i aria-hidden="true">&#8250;</i></button>
+      <button type="button" class="pl-agree num" x-show="agreeText" @click="toggleWhy" aria-controls="pv-why"
+        :aria-label="agreeAria"><span x-text="agreeText"></span><i aria-hidden="true">&#8250;</i></button>
     </div>
     <div class="pl-tiles2 pl-tiles-in">
-      <div><small>Target entry</small><b class="num" x-text="targetPx()"></b><span class="num" x-text="targetSub()"></span></div>
-      <div class="pl-plan"><small x-text="planHead()"></small>
-        <p class="num"><b class="pl-up" x-text="planMove(1, 1)"></b> <span x-text="planWord(1, 1)"></span></p>
-        <p class="num"><b class="pl-up" x-text="planMove(5, 1)"></b> <span x-text="planWord(5, 1)"></span></p>
-        <p class="num"><b class="pl-down" x-text="planMove(1, -1)"></b> <span x-text="planWord(1, -1)"></span></p>
-        <span class="num pv-planliq" x-text="planLiq() + ' · after fees'"></span></div>
+      <div><small>Target entry</small><b class="num" x-text="targetPx"></b><span class="num" x-text="targetSub"></span></div>
+      <div class="pl-plan"><small x-text="planHead"></small>
+        <p class="num"><b class="pl-up" x-text="planUp1"></b> <span x-text="planUp1Word"></span></p>
+        <p class="num"><b class="pl-up" x-text="planUp5"></b> <span x-text="planUp5Word"></span></p>
+        <p class="num"><b class="pl-down" x-text="planDown1"></b> <span x-text="planDown1Word"></span></p>
+        <span class="num pv-planliq" x-text="planLiqLine"></span></div>
     </div>
     <div class="pl-trend">
-      <div class="pl-trend-line" role="status"><span x-text="marketHead()"></span></div>
+      <div class="pl-trend-line" role="status"><span x-text="marketHead"></span></div>
       <div class="pl-barwrap">
-        <div class="pl-bar" :class="rcall().mid_up == null ? 'pl-bar-none' : ''" role="img" :aria-label="'Kalshi 15-min market: UP ' + pct(rcall().mid_up)"><span :style="'width:' + upWidth()"></span></div>
-        <i class="pl-bar-fair" x-show="fairLeft() != null" :style="'left:' + fairLeft()" role="img" :aria-label="'Model ' + pct(rcall().fair_up) + ' UP'"></i>
+        <div class="pl-bar" :class="barCls" role="img" :aria-label="barAria"><span :style="upWidthStyle"></span></div>
+        <i class="pl-bar-fair" x-show="fairShown" :style="fairStyle" role="img" :aria-label="fairAria"></i>
       </div>
       <div class="pl-barlbl" aria-hidden="true">
-        <b class="pl-up" x-text="'▲ UP ' + pct(rcall().mid_up)"></b>
-        <span x-show="fairLeft() != null" :style="'left:' + fairLabelLeft()" x-text="'model ' + pct(rcall().fair_up)"></span>
-        <b class="pl-down" x-text="downPct() + ' ▼ DOWN'"></b>
+        <b class="pl-up" x-text="upLabel"></b>
+        <span x-show="fairShown" :style="fairLabelStyle" x-text="fairLabel"></span>
+        <b class="pl-down" x-text="downLabel"></b>
       </div>
     </div>
     <details id="pv-why" class="pl-why" x-ref="why">
@@ -786,251 +786,251 @@
   </div>
 
   <!-- ===== in a position: profit or loss now, and the distance to liquidation ===== -->
-  <div class="pl-card pl-chance pv-pos" :class="bandCls()" x-show="on() && pos()" role="group" aria-label="Profit or loss now">
+  <div class="pl-card pl-chance pv-pos" :class="bandCls" x-show="inPosition" role="group" aria-label="Profit or loss now">
     <span class="pl-eyebrow">Profit or loss now</span>
     <div class="pl-chance-row">
-      <strong class="pl-chance-big num" :class="pnlCls()" x-text="pos() ? sUsd(pos().unrealized_pnl) : '—'"></strong>
+      <strong class="pl-chance-big num" :class="pnlCls" x-text="pnlNow"></strong>
       <div class="pl-chance-side">
-        <b class="num" :class="pnlCls()" x-text="btcMove()"></b>
-        <span class="num" x-text="pnlSub()"></span>
+        <b class="num" :class="pnlCls" x-text="btcMove"></b>
+        <span class="num" x-text="pnlSub"></span>
       </div>
     </div>
-    <div class="pv-distrow"><span>Distance to liquidation</span><b class="num" :class="pos() && pos().band === 'red' ? 'pl-down' : pos() && pos().band === 'amber' ? 'pl-warn' : 'pl-up'" x-text="distText() + ' · ' + distWord()"></b></div>
-    <div class="pv-distbar" :style="distBg()" role="img" :aria-label="'Distance to liquidation: ' + distText()"><i x-show="distLeft() != null" :style="'left:' + distLeft()"></i></div>
-    <small class="num" x-text="'Liquidation BTC ' + (pos() ? btcPx(pos().liquidation_price) : '—') + ' (' + (pos() && pos().liquidation_source === 'kalshi' ? 'Kalshi' : 'estimate') + ') · next funding ' + fundingNext()"></small>
-    <small><span :class="trigCls()" x-text="'Stop / take profit: ' + trigState()"></span></small>
+    <div class="pv-distrow"><span>Distance to liquidation</span><b class="num" :class="distCls" x-text="distLine"></b></div>
+    <div class="pv-distbar" :style="distBg" role="img" :aria-label="distAria"><i x-show="distShown" :style="distLeftStyle"></i></div>
+    <small class="num" x-text="liqLine"></small>
+    <small><span :class="trigCls" x-text="trigStateLine"></span></small>
   </div>
 
   <!-- ===== the chart: this page's received marks, with the signal lights before entry ===== -->
-  <div class="pl-card pl-ptb pv-chartcard" x-show="on() && v.mode !== 'off'">
-    <span class="pl-eyebrow" x-text="'BTC perpetual · ' + (mk().ticker || '—')"></span>
-    <div class="pl-ptb-head"><b class="pl-ptb-btc pv-hero num" :aria-label="'Mark, as a BTC price: ' + btcPx(mark())" x-text="btcPx(mark())"></b><span class="pl-ptb-chip num" x-text="v && v.funding ? 'Funding ' + pctf(v.funding.rate, 4) + (v.funding.rate > 0 ? ' · longs pay' : v.funding.rate < 0 ? ' · shorts pay' : '') : 'Funding —'"></span></div>
-    <small class="pl-ptb-sub num" x-text="markLine()"></small>
-    <div class="pl-sigs" x-show="!pos()" role="group" aria-label="Signals: tap one to read what it means">
-      <template x-for="ch in sigChips()" :key="ch.key">
-        <button type="button" class="pl-sigchip num" :class="ch.cls" :aria-pressed="sigTip === ch.tip ? 'true' : 'false'" @click="sigTap(ch)" x-text="ch.text"></button>
+  <div class="pl-card pl-ptb pv-chartcard" x-show="tradingOn">
+    <span class="pl-eyebrow" x-text="chartHead"></span>
+    <div class="pl-ptb-head"><b class="pl-ptb-btc pv-hero num" :aria-label="heroAria" x-text="heroPx"></b><span class="pl-ptb-chip num" x-text="fundingChip"></span></div>
+    <small class="pl-ptb-sub num" x-text="markLine"></small>
+    <div class="pl-sigs" x-show="noPos" role="group" aria-label="Signals: tap one to read what it means">
+      <template x-for="ch in sigChips" :key="ch.key">
+        <button type="button" class="pl-sigchip num" :class="ch.cls" :aria-pressed="sigPressed" @click="sigTapRow" x-text="ch.text"></button>
       </template>
     </div>
-    <p class="pl-sigtip" x-show="sigTip && !pos()" x-text="sigTip" role="status"></p>
+    <p class="pl-sigtip" x-show="sigTipShown" x-text="sigTip" role="status"></p>
     <div class="pv-chartbox">
-      <canvas x-ref="pvchart" class="pv-chart" role="img" :aria-label="'Mark price chart: ' + px(mark())"></canvas>
-      <div class="pl-wempty" x-show="chartEmpty()">The chart starts with the next price update: only prices received while this screen is open are drawn.</div>
+      <canvas x-ref="pvchart" class="pv-chart" role="img" :aria-label="chartAria"></canvas>
+      <div class="pl-wempty" x-show="chartEmpty">The chart starts with the next price update: only prices received while this screen is open are drawn.</div>
     </div>
     <p class="pl-note red" x-show="chartErr" x-text="chartErr" role="alert"></p>
     <div class="pl-legend pv-legend"><span><i class="lg-entry"></i>Entry</span><span><i class="lg-liq"></i>Liquidation price</span><span><i class="lg-stop"></i>Stop loss</span><span><i class="lg-tp"></i>Take profit</span><span><i class="lg-amber"></i>Amber / red: near liquidation</span></div>
   </div>
 
   <!-- ===== in a position: keep holding vs close now, then the one-line advice (display only) ===== -->
-  <div class="pl-card pl-holdsell" x-show="on() && pos()" role="group" aria-label="Keep holding or close now">
+  <div class="pl-card pl-holdsell" x-show="inPosition" role="group" aria-label="Keep holding or close now">
     <div>
       <span class="pl-eyebrow">Keep holding</span>
-      <span class="num"><b class="pl-up" x-text="holdMove(1)"></b> <span x-text="holdUpWord()"></span></span>
-      <span class="num"><b class="pl-down" x-text="holdMove(-1)"></b> <span x-text="holdDnWord()"></span></span>
-      <span class="num" x-text="'funding so far ' + fundingSoFar()"></span>
+      <span class="num"><b class="pl-up" x-text="holdUp"></b> <span x-text="holdUpWord"></span></span>
+      <span class="num"><b class="pl-down" x-text="holdDown"></b> <span x-text="holdDnWord"></span></span>
+      <span class="num" x-text="fundingSoFarLine"></span>
     </div>
     <div>
       <span class="pl-eyebrow">Close now</span>
-      <b class="num" :class="closeTicket() && closeTicket().est_realized_pnl < 0 ? 'pl-down' : closeTicket() ? 'pl-up' : ''" x-text="closeNow()"></b>
-      <span class="num" x-text="closeSub()"></span>
+      <b class="num" :class="closeNowCls" x-text="closeNow"></b>
+      <span class="num" x-text="closeSub"></span>
     </div>
   </div>
-  <div class="pl-card pl-advline" x-show="on() && pos() && advice()" :class="advice() ? advice().cls : ''" role="status">
-    <p><b x-text="advice() ? advice().action : ''"></b> · <span x-text="advice() ? advice().text : ''"></span></p>
+  <div class="pl-card pl-advline" x-show="adviceShown" :class="adviceCls" role="status">
+    <p><b x-text="adviceAction"></b> · <span x-text="adviceText"></span></p>
   </div>
 
   <!-- ===== in a position: the reduce and stop / take-profit forms (the action itself is picked in the dock) ===== -->
-  <div class="pl-card" x-show="on() && pos() && (act === 'reduce' || act === 'protect')">
-    <template x-if="act === 'reduce'">
+  <div class="pl-card" x-show="formShown">
+    <template x-if="isReduce">
       <div class="pv-reduce">
         <span class="pl-eyebrow">Reduce by</span>
         <div class="pl-chips pv-chips4" role="radiogroup" aria-label="How much to reduce">
           <template x-for="f in REDUCE" :key="f">
-            <button type="button" role="radio" class="pl-chipbtn" :aria-checked="redPick === f ? 'true' : 'false'" :aria-pressed="redPick === f ? 'true' : 'false'" @click="setRed(f)" x-text="REDUCE_NAMES[f]"></button>
+            <button type="button" role="radio" class="pl-chipbtn" :aria-checked="redChecked" :aria-pressed="redChecked" @click="pickRed" x-text="redName"></button>
           </template>
-          <button type="button" role="radio" class="pl-chipbtn" :aria-checked="redPick === 'count' ? 'true' : 'false'" :aria-pressed="redPick === 'count' ? 'true' : 'false'" @click="setRed('count')">Count</button>
+          <button type="button" role="radio" class="pl-chipbtn" :aria-checked="redCountChecked" :aria-pressed="redCountChecked" @click="pickRedCount">Count</button>
         </div>
-        <label class="pl-amount" x-show="redPick === 'count'"><input type="text" inputmode="numeric" autocomplete="off" x-model="redCount" @input="edit()" aria-label="Contracts to reduce by"><span>contracts</span></label>
-        <p class="pl-note pl-overline" x-show="reduceCount().err" x-text="reduceCount().err"></p>
+        <label class="pl-amount" x-show="redByCount"><input type="text" inputmode="numeric" autocomplete="off" x-model="redCountModel" @input="edit" aria-label="Contracts to reduce by"><span>contracts</span></label>
+        <p class="pl-note pl-overline" x-show="reduceErr" x-text="reduceErr"></p>
       </div>
     </template>
-    <template x-if="act === 'protect'">
+    <template x-if="isProtect">
       <div class="pv-fields">
         <span class="pl-eyebrow">Stop loss and take profit</span>
-        <p class="pl-note pl-warn" x-show="trigEdited()">Kalshi's stop or take profit changed since this form was filled. <button type="button" class="pl-link" @click="fillTrig(); edit()">Reload them</button></p>
-        <label class="pv-field"><span>Stop loss (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="trigSl" @input="edit()" placeholder="none" aria-label="Stop loss price per contract"></span>
-          <small class="pl-down" x-show="trigSlWhy()" x-text="trigSlWhy()"></small><small class="num" x-show="!trigSlWhy()" x-text="trigSlFx()"></small></label>
-        <label class="pv-field"><span>Take profit (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="trigTp" @input="edit()" placeholder="none" aria-label="Take profit price per contract"></span>
-          <small class="pl-down" x-show="trigTpWhy()" x-text="trigTpWhy()"></small><small class="num" x-show="!trigTpWhy()" x-text="trigTpFx()"></small></label>
-        <button type="button" class="pl-link" @click="clearTrig()">Clear both (remove the stop and take profit)</button>
+        <p class="pl-note pl-warn" x-show="trigEdited">Kalshi's stop or take profit changed since this form was filled. <button type="button" class="pl-link" @click="reloadTrig">Reload them</button></p>
+        <label class="pv-field"><span>Stop loss (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="trigSlModel" @input="edit" placeholder="none" aria-label="Stop loss price per contract"></span>
+          <small class="pl-down" x-show="trigSlWhy" x-text="trigSlWhy"></small><small class="num" x-show="trigSlOk" x-text="trigSlFx"></small></label>
+        <label class="pv-field"><span>Take profit (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="trigTpModel" @input="edit" placeholder="none" aria-label="Take profit price per contract"></span>
+          <small class="pl-down" x-show="trigTpWhy" x-text="trigTpWhy"></small><small class="num" x-show="trigTpOk" x-text="trigTpFx"></small></label>
+        <button type="button" class="pl-link" @click="clearTrig">Clear both (remove the stop and take profit)</button>
         <small>Kalshi holds them and fires them on its own servers, for the whole position.</small>
       </div>
     </template>
   </div>
 
   <!-- ===== before entry: optional stop loss / take profit (Kalshi holds them) ===== -->
-  <details class="pl-card pv-opts" x-show="on() && v.mode !== 'off' && !pos()">
-    <summary><span>Stop loss / take profit</span><small x-text="(entrySl().v != null || entryTp().v != null) ? 'set' : 'optional · none'"></small></summary>
+  <details class="pl-card pv-opts" x-show="entryShown">
+    <summary><span>Stop loss / take profit</span><small x-text="entryOptsSummary"></small></summary>
     <div class="pv-fields">
-      <label class="pv-field"><span>Stop loss (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="slInput" @input="edit()" placeholder="none" aria-label="Stop loss price per contract"></span>
-        <small class="pl-down" x-show="entrySlWhy()" x-text="entrySlWhy()"></small><small class="num" x-show="!entrySlWhy()" x-text="entrySlFx()"></small></label>
-      <label class="pv-field"><span>Take profit (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="tpInput" @input="edit()" placeholder="none" aria-label="Take profit price per contract"></span>
-        <small class="pl-down" x-show="entryTpWhy()" x-text="entryTpWhy()"></small><small class="num" x-show="!entryTpWhy()" x-text="entryTpFx()"></small></label>
+      <label class="pv-field"><span>Stop loss (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="slInputModel" @input="edit" placeholder="none" aria-label="Stop loss price per contract"></span>
+        <small class="pl-down" x-show="entrySlWhy" x-text="entrySlWhy"></small><small class="num" x-show="entrySlOk" x-text="entrySlFx"></small></label>
+      <label class="pv-field"><span>Take profit (contract price)</span><span class="pl-amount"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="tpInputModel" @input="edit" placeholder="none" aria-label="Take profit price per contract"></span>
+        <small class="pl-down" x-show="entryTpWhy" x-text="entryTpWhy"></small><small class="num" x-show="entryTpOk" x-text="entryTpFx"></small></label>
     </div>
   </details>
 
   <!-- ===== the ticket on screen (the preview; the bound one while sliding): every number, one tap away ===== -->
-  <details class="pl-card pv-ticket" x-show="on() && (shown() || shownRefusal())" :open="!!shownRefusal()">
-    <summary><span x-text="ticketHead()"></span><small>every number</small></summary>
-    <p class="pl-note red" x-show="shownRefusal()" x-text="shownRefusal()" role="alert"></p>
-    <template x-if="shown()">
+  <details class="pl-card pv-ticket" x-show="ticketShown" :open="ticketOpen">
+    <summary><span x-text="ticketHead"></span><small>every number</small></summary>
+    <p class="pl-note red" x-show="shownRefusal" x-text="shownRefusal" role="alert"></p>
+    <template x-if="shown">
       <div>
-        <dl class="pl-rows"><template x-for="row in rows()" :key="row[0]"><div><dt x-text="row[0]"></dt><dd class="num" x-text="row[1]"></dd></div></template></dl>
-        <div class="pv-tchips" x-show="chips().length"><template x-for="ch in chips()" :key="ch"><span class="pv-tchip" x-text="ch"></span></template></div>
-        <small x-text="ticketAge()"></small>
+        <dl class="pl-rows"><template x-for="row in rows" :key="rowLabel"><div><dt x-text="rowLabel"></dt><dd class="num" x-text="rowValue"></dd></div></template></dl>
+        <div class="pv-tchips" x-show="hasChips"><template x-for="ch in chips" :key="ch"><span class="pv-tchip" x-text="ch"></span></template></div>
+        <small x-text="ticketAge"></small>
       </div>
     </template>
   </details>
   <!-- ===== rows: the position, then your record (the last closed positions, realized P&L from Kalshi's fills) ===== -->
-  <div class="rc-group pv-rows" x-show="on() && v.mode !== 'off' && !pos()">
+  <div class="rc-group pv-rows" x-show="entryShown">
     <div class="rc-row"><span>Position</span><span class="nv-sp"></span><span class="rc-val">None</span></div>
   </div>
-  <details class="rc-group rc-disc pl-hist" x-show="on() && v.mode !== 'off'" @toggle="recToggle($event.target.open)">
-    <summary><span>Your record</span><small class="num" x-text="recHead()"></small></summary>
-    <p class="pl-note red" x-show="recErr" x-text="'Could not load your record: ' + recErr" role="alert"></p>
-    <p class="pl-note muted" x-show="rec && rec.reason" x-text="rec && rec.reason"></p>
-    <p class="pl-note muted" x-show="rec && !rec.reason && !rec.rows.length">No closed perps positions yet in this mode.</p>
-    <ul class="pv-rec" x-show="rec && rec.rows && rec.rows.length">
-      <template x-for="r in (rec && rec.rows) || []" :key="r.id">
-        <li><span x-text="recLine(r)"></span><b class="num" :class="r.realized_pnl > 0 ? 'pl-up' : r.realized_pnl < 0 ? 'pl-down' : ''" x-text="sUsd(r.realized_pnl)"></b></li>
+  <details class="rc-group rc-disc pl-hist" x-show="tradingOn" @toggle="recToggleEvent">
+    <summary><span>Your record</span><small class="num" x-text="recHead"></small></summary>
+    <p class="pl-note red" x-show="recErr" x-text="recErrText" role="alert"></p>
+    <p class="pl-note muted" x-show="recReason" x-text="recReason"></p>
+    <p class="pl-note muted" x-show="recEmpty">No closed perps positions yet in this mode.</p>
+    <ul class="pv-rec" x-show="recHasRows">
+      <template x-for="r in recRows" :key="r.id">
+        <li><span x-text="recLineRow"></span><b class="num" :class="recPnlCls" x-text="recPnl"></b></li>
       </template>
     </ul>
-    <small x-show="rec && rec.rows && rec.rows.length" x-text="'Last ' + ((rec && rec.rows.length) || 0) + ' · after fees and funding'"></small>
+    <small x-show="recHasRows" x-text="recCountLine"></small>
   </details>
-  <p class="pl-note muted" x-show="on() && v.limits && v.limits.text" x-text="v && v.limits && v.limits.text"></p>
-  <p class="pl-note muted" x-show="on() && v.exchange && v.exchange.maintenance_note" x-text="v && v.exchange && v.exchange.maintenance_note"></p>
-  <p class="pl-note muted pv-wnote" x-show="on()" x-text="(v && v.warnings_note) || 'Warnings show only while this screen is open.'"></p>
+  <p class="pl-note muted" x-show="limitsNote" x-text="limitsNote"></p>
+  <p class="pl-note muted" x-show="maintenanceNote" x-text="maintenanceNote"></p>
+  <p class="pl-note muted pv-wnote" x-show="on" x-text="warningsNote"></p>
 
   <!-- ===== the dock: side, amount and leverage (entry / add), or the action (in a position); one slide ===== -->
-  <div class="pl-bottom" x-show="on() && v.mode !== 'off'">
-    <p class="pv-nostop" x-show="pos() && hasBanner('no_stop')" role="alert"><b>Position open, no stop on Kalshi.</b> <button type="button" class="pl-link" x-show="act !== 'close'" @click="setAct('close')">Close it</button></p>
-    <div class="pl-seg pl-seg-sm pv-acts" role="radiogroup" aria-label="What to do" x-show="pos()">
+  <div class="pl-bottom" x-show="tradingOn">
+    <p class="pv-nostop" x-show="noStopShown" role="alert"><b>Position open, no stop on Kalshi.</b> <button type="button" class="pl-link" x-show="notClosing" @click="actClose">Close it</button></p>
+    <div class="pl-seg pl-seg-sm pv-acts" role="radiogroup" aria-label="What to do" x-show="pos">
       <template x-for="a in DOCK_ACTS" :key="a">
-        <button type="button" role="radio" :aria-checked="act === a ? 'true' : 'false'" @click="setAct(a)" :disabled="sliding || busy" x-text="ACT_NAMES[a]"></button>
+        <button type="button" role="radio" :aria-checked="actChecked" @click="pickAct" :disabled="slideLocked" x-text="actName"></button>
       </template>
     </div>
-    <div class="pl-sidepick" role="radiogroup" aria-label="Long or short" x-show="!pos()">
-      <button type="button" role="radio" class="pl-sidebtn pl-buy-up" :class="sideNow() === 'long' ? 'on' : ''" :aria-checked="sideNow() === 'long' ? 'true' : 'false'" @click="pickSide('long')" x-text="sideLabel('long')"></button>
-      <button type="button" role="radio" class="pl-sidebtn pl-buy-down" :class="sideNow() === 'short' ? 'on' : ''" :aria-checked="sideNow() === 'short' ? 'true' : 'false'" @click="pickSide('short')" x-text="sideLabel('short')"></button>
+    <div class="pl-sidepick" role="radiogroup" aria-label="Long or short" x-show="noPos">
+      <button type="button" role="radio" class="pl-sidebtn pl-buy-up" :class="longCls" :aria-checked="longChecked" @click="pickLong" x-text="longLabel"></button>
+      <button type="button" role="radio" class="pl-sidebtn pl-buy-down" :class="shortCls" :aria-checked="shortChecked" @click="pickShort" x-text="shortLabel"></button>
     </div>
-    <div class="pv-sizing" x-show="kind() === 'entry' || kind() === 'add'">
-      <div class="pl-chips" role="group" :aria-label="pos() ? 'Collateral to add' : 'Collateral'">
+    <div class="pv-sizing" x-show="sizing">
+      <div class="pl-chips" role="group" :aria-label="collAria">
         <template x-for="x in CHIPS" :key="x">
-          <button type="button" class="pl-chipbtn" :aria-pressed="collOn(x) ? 'true' : 'false'" :disabled="collOff(x)" @click="pickColl(x)" x-text="'$' + x"></button>
+          <button type="button" class="pl-chipbtn" :aria-pressed="collPressed" :disabled="collDisabled" @click="pickCollRow" x-text="collLabel"></button>
         </template>
-        <button type="button" class="pl-chipbtn" :aria-pressed="otherOn() ? 'true' : 'false'" @click="pickOther()">Other</button>
+        <button type="button" class="pl-chipbtn" :aria-pressed="otherPressed" @click="pickOther">Other</button>
       </div>
-      <label class="pl-amount" x-show="otherOn()"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="collInput" @input="collAuto = false; edit()" @change="saveColl()" aria-label="Collateral in dollars"></label>
-      <p class="pl-note muted pl-avail" x-text="availHint()"></p>
-      <p class="pl-note amber" x-show="collUnknown != null" x-text="'The saved collateral (“' + collUnknown + '”) was not a dollar amount, so the amount starts empty.'"></p>
-      <div class="pv-levrow"><small>Leverage</small><b class="num" x-text="lev(levNow())"></b></div>
-      <input type="range" class="pl-range pv-lev" min="1" :max="levMax()" step="0.01" :value="levNow()" @input="setLev(Number($event.target.value))" :disabled="maxLev() == null || sliding || busy" aria-label="Leverage" :aria-valuetext="lev(levNow())">
-      <small class="num" x-text="levNote()"></small>
+      <label class="pl-amount" x-show="otherOn"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="collInputModel" @input="collTyped" @change="saveColl" aria-label="Collateral in dollars"></label>
+      <p class="pl-note muted pl-avail" x-text="availHint"></p>
+      <p class="pl-note amber" x-show="collUnknownShown" x-text="collUnknownText"></p>
+      <div class="pv-levrow"><small>Leverage</small><b class="num" x-text="levText"></b></div>
+      <input type="range" class="pl-range pv-lev" min="1" :max="levMax" step="0.01" :value="levNow" @input="levInput" :disabled="levLocked" aria-label="Leverage" :aria-valuetext="levText">
+      <small class="num" x-text="levNote"></small>
     </div>
-    <p class="pl-slideinfo num" x-show="dockLine()" x-text="dockLine()"></p>
-    <p class="pl-slideinfo pv-make" x-show="(kind() === 'entry' || kind() === 'add') && makeLine()" x-text="makeLine()"></p>
-    <p class="pl-slideinfo pv-atrisk" x-show="kind() === 'entry' || kind() === 'add'" x-text="worstLine()"></p>
-    <p class="pl-slideinfo pl-warn" x-show="!busy && !drag && !pulse && slideWhy()" x-text="slideWhy()"></p>
-    <div class="pl-slide" x-ref="pvtrack" :class="slideCls()">
-      <div class="pl-slide-fill" :style="'width:' + (slideX + 60) + 'px'"></div>
-      <span class="pl-slide-text" aria-live="polite"><span x-text="slideText()"></span><small x-show="dockLine2()" x-text="dockLine2()"></small></span>
-      <button type="button" class="pl-slide-knob" :style="'transform:translateX(' + slideX + 'px)'"
-        :aria-label="slideAria()" :disabled="!slideOk() && !sliding"
-        @pointerdown="slideStart($event)" @pointermove="slideMove($event)" @pointerup="slideEnd()" @pointercancel="slideReset()">&#8250;&#8250;</button>
+    <p class="pl-slideinfo num" x-show="dockLine" x-text="dockLine"></p>
+    <p class="pl-slideinfo pv-make" x-show="makeShown" x-text="makeLine"></p>
+    <p class="pl-slideinfo pv-atrisk" x-show="sizing" x-text="worstLine"></p>
+    <p class="pl-slideinfo pl-warn" x-show="slideWhyShown" x-text="slideWhy"></p>
+    <div class="pl-slide" x-ref="pvtrack" :class="slideCls">
+      <div class="pl-slide-fill" :style="fillStyle"></div>
+      <span class="pl-slide-text" aria-live="polite"><span x-text="slideText"></span><small x-show="dockLine2" x-text="dockLine2"></small></span>
+      <button type="button" class="pl-slide-knob" :style="knobStyle"
+        :aria-label="slideAria" :disabled="knobLocked"
+        @pointerdown="slideStart" @pointermove="slideMove" @pointerup="slideEnd" @pointercancel="slideReset">&#8250;&#8250;</button>
     </div>
   </div>
 
   <!-- ===== take profit and stop after an entry (optional; sits above the dock so the close slide stays usable) ===== -->
-  <div class="pl-sheet pl-tpsheet" x-show="tpSheet && pos()" x-cloak role="dialog" aria-labelledby="pv-tp-title">
+  <div class="pl-sheet pl-tpsheet" x-show="tpSheetShown" x-cloak role="dialog" aria-labelledby="pv-tp-title">
     <h2 id="pv-tp-title">Take profit and stop</h2>
     <small class="muted">Kalshi holds them and closes the whole position when BTC reaches either one.</small>
-    <label class="pl-check pl-slcheck"><input type="checkbox" x-model="tpOn"> Take profit</label>
-    <input type="range" class="pl-range" x-show="tpOn" :min="PCT_STEP" max="10" :step="PCT_STEP" :value="tpPct" @input="tpPct = Number($event.target.value)" aria-label="Take profit distance from the entry, in percent" :aria-valuetext="tpLabel()">
-    <p class="pl-tplabel" :class="tpOn ? 'pl-up' : 'muted'" x-text="tpLabel()"></p>
-    <p class="pl-note pl-down" x-show="tpWhyNow()" x-text="tpWhyNow()"></p>
-    <label class="pl-check pl-slcheck"><input type="checkbox" x-model="slOn"> Stop loss</label>
-    <input type="range" class="pl-range" x-show="slOn" :min="PCT_STEP" :max="slMax()" :step="PCT_STEP" :value="slPct" @input="slPct = Number($event.target.value)" aria-label="Stop loss distance from the entry, in percent" :aria-valuetext="slLabel()">
-    <p class="pl-tplabel" :class="slOn ? 'pl-down' : 'muted'" x-text="slLabel()"></p>
-    <p class="pl-note pl-down" x-show="slWhyNow()" x-text="slWhyNow()"></p>
+    <label class="pl-check pl-slcheck"><input type="checkbox" x-model="tpOnModel"> Take profit</label>
+    <input type="range" class="pl-range" x-show="tpOn" :min="PCT_STEP" max="10" :step="PCT_STEP" :value="tpPct" @input="tpPctInput" aria-label="Take profit distance from the entry, in percent" :aria-valuetext="tpLabel">
+    <p class="pl-tplabel" :class="tpLabelCls" x-text="tpLabel"></p>
+    <p class="pl-note pl-down" x-show="tpWhyNow" x-text="tpWhyNow"></p>
+    <label class="pl-check pl-slcheck"><input type="checkbox" x-model="slOnModel"> Stop loss</label>
+    <input type="range" class="pl-range" x-show="slOn" :min="PCT_STEP" :max="slMax" :step="PCT_STEP" :value="slPct" @input="slPctInput" aria-label="Stop loss distance from the entry, in percent" :aria-valuetext="slLabel">
+    <p class="pl-tplabel" :class="slLabelCls" x-text="slLabel"></p>
+    <p class="pl-note pl-down" x-show="slWhyNow" x-text="slWhyNow"></p>
     <p class="pl-msg red" x-show="tpMsg" x-text="tpMsg" role="alert"></p>
     <div class="pl-grid2">
-      <button type="button" class="pl-btn pl-yes" @click="tpSave()" :disabled="tpBusy || busy">Submit</button>
-      <button type="button" class="pl-btn" @click="tpClose()" :disabled="tpBusy">Close</button>
+      <button type="button" class="pl-btn pl-yes" @click="tpSave" :disabled="tpSaveLocked">Submit</button>
+      <button type="button" class="pl-btn" @click="tpClose" :disabled="tpBusy">Close</button>
     </div>
-    <label class="pl-check"><input type="checkbox" x-model="tpNoMore"> Don't show this again</label>
+    <label class="pl-check"><input type="checkbox" x-model="tpNoMoreModel"> Don't show this again</label>
   </div>
 
   <!-- ===== settings (the gear): mode, kill switch, entry options, warnings, theme; limits live in Play's sheet ===== -->
-  <div class="pl-dim" x-show="sheet" x-cloak @click="sheet = false"></div>
-  <div id="pv-settings" class="pl-sheet pl-set" x-show="sheet" x-cloak role="dialog" aria-modal="true" aria-labelledby="pv-set-title" @keydown.escape="sheet = false">
-    <div class="pl-row pv-sethead"><h2 id="pv-set-title">Perps settings</h2><button type="button" class="pl-btn" @click="sheet = false">Done</button></div>
+  <div class="pl-dim" x-show="sheet" x-cloak @click="closeSheet"></div>
+  <div id="pv-settings" class="pl-sheet pl-set" x-show="sheet" x-cloak role="dialog" aria-modal="true" aria-labelledby="pv-set-title" @keydown.escape="closeSheet">
+    <div class="pl-row pv-sethead"><h2 id="pv-set-title">Perps settings</h2><button type="button" class="pl-btn" @click="closeSheet">Done</button></div>
     <section class="pl-set-sec" aria-labelledby="pv-set-mode">
       <h3 id="pv-set-mode">Mode for perps trades</h3>
       <label class="field" for="pv-mode">Mode</label>
-      <select id="pv-mode" x-model="modeForm.mode">
-        <template x-for="m in modes()" :key="m"><option :value="m" x-text="modeName(m)"></option></template>
+      <select id="pv-mode" x-model="modeFormModel">
+        <template x-for="m in modes" :key="m"><option :value="m" x-text="modeNameRow"></option></template>
       </select>
-      <label class="field" for="pv-confirm" x-show="modeForm.mode === 'perp_prod'">Type exactly: <b class="mono" x-text="PROD_CONFIRM"></b></label>
-      <input id="pv-confirm" type="text" autocomplete="off" spellcheck="false" x-show="modeForm.mode === 'perp_prod'" x-model="modeForm.confirm" aria-label="Real-money confirmation">
-      <button type="button" class="pl-btn" @click="setMode()" :disabled="!canSetMode()">Switch mode</button>
+      <label class="field" for="pv-confirm" x-show="prodPicked">Type exactly: <b class="mono" x-text="PROD_CONFIRM"></b></label>
+      <input id="pv-confirm" type="text" autocomplete="off" spellcheck="false" x-show="prodPicked" x-model="modeConfirmModel" aria-label="Real-money confirmation">
+      <button type="button" class="pl-btn" @click="setMode" :disabled="modeLocked">Switch mode</button>
       <p x-text="modeMsg" role="status"></p>
     </section>
     <section class="pl-set-sec" aria-labelledby="pv-set-kill">
       <h3 id="pv-set-kill">Kill switch</h3>
-      <p class="pl-note" x-text="killed() ? 'On: no new entries anywhere.' : 'Off.'"></p>
-      <small>The KILL button at the top stops new trades on Kalshi, Polymarket and perps. Close, reduce and your stop and take profit still work.<span x-show="phone()"> Resume on the PC.</span></small>
+      <p class="pl-note" x-text="killNote"></p>
+      <small>The KILL button at the top stops new trades on Kalshi, Polymarket and perps. Close, reduce and your stop and take profit still work.<span x-show="phone"> Resume on the PC.</span></small>
     </section>
     <section class="pl-set-sec" aria-labelledby="pv-set-entry">
       <h3 id="pv-set-entry">How entries fill</h3>
       <div class="pl-seg pl-seg-sm" role="radiogroup" aria-label="How the entry fills">
         <template x-for="f in FILLS" :key="f">
-          <button type="button" role="radio" :aria-checked="fill === f ? 'true' : 'false'" @click="setFill(f)" :disabled="sliding || busy" x-text="FILL_NAMES[f] + (f === 'market' ? ' (default)' : '')"></button>
+          <button type="button" role="radio" :aria-checked="fillChecked" @click="pickFill" :disabled="slideLocked" x-text="fillLabel"></button>
         </template>
       </div>
-      <small x-show="fill === 'market'">Fills at the best prices on offer right now, up to the protective price shown as “at most $P”; anything not filled at once is cancelled.</small>
-      <small x-show="fill === 'all_or_nothing'">Fills the whole size at once up to the protective price, or nothing.</small>
-      <label class="pl-amount" x-show="fill === 'limit'"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="limitInput" @input="edit()" @change="saveLimit()" aria-label="Limit price per contract"></label>
-      <small x-show="fill === 'limit'">Fills only at your limit price or better; anything not filled at once is cancelled.</small>
-      <p class="pl-note amber" x-show="fillUnknown != null" x-text="'The saved fill option (“' + fillUnknown + '”) was not recognised, so Market (the default) is used. Pick one to replace it.'"></p>
-      <p class="pl-note amber" x-show="limitUnknown != null" x-text="'The saved limit price (“' + limitUnknown + '”) was not a price, so the field starts empty.'"></p>
+      <small x-show="fillMarket">Fills at the best prices on offer right now, up to the protective price shown as “at most $P”; anything not filled at once is cancelled.</small>
+      <small x-show="fillAon">Fills the whole size at once up to the protective price, or nothing.</small>
+      <label class="pl-amount" x-show="fillLimit"><span>$</span><input type="text" inputmode="decimal" autocomplete="off" x-model="limitInputModel" @input="edit" @change="saveLimit" aria-label="Limit price per contract"></label>
+      <small x-show="fillLimit">Fills only at your limit price or better; anything not filled at once is cancelled.</small>
+      <p class="pl-note amber" x-show="fillUnknownShown" x-text="fillUnknownText"></p>
+      <p class="pl-note amber" x-show="limitUnknownShown" x-text="limitUnknownText"></p>
       <small id="pv-band-l">Market protection: how far through the best price a market-style entry may fill</small>
       <div class="pl-chips pv-chips5" role="radiogroup" aria-labelledby="pv-band-l">
-        <button type="button" role="radio" class="pl-chipbtn" :aria-checked="band == null ? 'true' : 'false'" :aria-pressed="band == null ? 'true' : 'false'" @click="setBand(null)" x-text="bandName(null)"></button>
+        <button type="button" role="radio" class="pl-chipbtn" :aria-checked="bandDefaultChecked" :aria-pressed="bandDefaultChecked" @click="pickBandDefault" x-text="bandDefaultName"></button>
         <template x-for="b in BANDS" :key="b">
-          <button type="button" role="radio" class="pl-chipbtn" :aria-checked="band === b ? 'true' : 'false'" :aria-pressed="band === b ? 'true' : 'false'" @click="setBand(b)" x-text="bandName(b)"></button>
+          <button type="button" role="radio" class="pl-chipbtn" :aria-checked="bandChecked" :aria-pressed="bandChecked" @click="pickBand" x-text="bandNameRow"></button>
         </template>
       </div>
-      <p class="pl-note amber" x-show="bandUnknown != null" x-text="'The saved band (“' + bandUnknown + '”) was not recognised, so the default is used. Pick one to replace it.'"></p>
-      <label class="pl-check"><input type="checkbox" :checked="tpPrompt" @change="setTpPrompt($event.target.checked)"> Take-profit and stop prompt after an entry</label>
+      <p class="pl-note amber" x-show="bandUnknownShown" x-text="bandUnknownText"></p>
+      <label class="pl-check"><input type="checkbox" :checked="tpPrompt" @change="tpPromptChange"> Take-profit and stop prompt after an entry</label>
     </section>
     <section class="pl-set-sec" aria-labelledby="pv-set-warn">
       <h3 id="pv-set-warn">Warnings near liquidation</h3>
-      <small x-text="bandsLine()"></small>
+      <small x-text="bandsLine"></small>
     </section>
     <section class="pl-set-sec" aria-labelledby="pv-set-theme">
       <h3 id="pv-set-theme">Theme</h3>
       <fieldset class="pl-seg pl-theme">
         <legend>Theme</legend>
         <template x-for="m in THEMES" :key="m">
-          <label><input type="radio" name="pv-theme" :value="m" :checked="themeMode === m" @change="setTheme(m)"><span x-text="THEME_NAMES[m]"></span></label>
+          <label><input type="radio" name="pv-theme" :value="m" :checked="themeChecked" @change="pickTheme"><span x-text="themeName"></span></label>
         </template>
       </fieldset>
-      <p class="pl-note amber" x-show="themeUnknown != null" x-text="'The saved theme (“' + themeUnknown + '”) was not recognised, so System is used. Pick one to replace it.'" role="status"></p>
+      <p class="pl-note amber" x-show="themeUnknownShown" x-text="themeUnknownText" role="status"></p>
       <p class="pl-note amber" x-show="themeMsg" x-text="themeMsg" role="status"></p>
     </section>
     <section class="pl-set-sec" aria-labelledby="pv-set-lim">
       <h3 id="pv-set-lim">Trade limits and phone access</h3>
       <small>One set for every venue, perps included (the per-day limit is one total).</small>
-      <button type="button" class="pl-btn" @click="openPlaySettings()">Open them</button>
+      <button type="button" class="pl-btn" @click="openPlaySettings">Open them</button>
     </section>
   </div>
 </section>
