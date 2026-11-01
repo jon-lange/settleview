@@ -78,6 +78,10 @@ add host-specific behaviour (Windows-only scripts, `C:\` paths, arch-specific de
   checkout <sha>` (a commit on `origin/main`) in the deploy checkout, `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t
   settleview:local .`, `docker compose up -d`
   (a restart of `app` ends agent sessions: only between sessions). Build from the real-case path (`Documents`).
+  A release is deployed by tag@digest instead: `SETTLEVIEW_IMAGE=ghcr.io/jon-lange/settleview:X.Y.Z@sha256:...`,
+  `cosign verify`, `docker compose pull` and `up -d`; rollback is the same with the previous Release's reference
+  (docs/operations.md, "Releases and deploying by digest"). The owner makes releases (`scripts/release.py`, then the
+  tag push). Agents never push tags or images.
   Secrets are files in `./secrets` (compose secrets), never `.env` lines; the one-time move is
   `python deploy/secrets_from_env.py` (docs/operations.md, "Docker: secrets as files").
 - Agents and scripts never connect to the live database for writes; research reads use the `settleview_research`

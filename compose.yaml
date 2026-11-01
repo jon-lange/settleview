@@ -79,7 +79,10 @@ x-hardening: &hardening
 
 x-service: &service
   <<: *hardening
-  image: settleview:local
+  # The image every Python service runs (migrate, app, the recorders): the local build settleview:local unless
+  # SETTLEVIEW_IMAGE names a release as tag@digest, ghcr.io/jon-lange/settleview:X.Y.Z@sha256:..., after `cosign
+  # verify` (docs/operations.md, "Releases and deploying by digest"). Never a tag alone, never `latest`.
+  image: ${SETTLEVIEW_IMAGE:-settleview:local}
   build:
     context: .
     args:

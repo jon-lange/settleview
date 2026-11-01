@@ -729,6 +729,9 @@ which runs Ruff and lint-imports inside it and the container tools from the host
 python scripts/dev.py quality              # everything, as below; any scripts/quality.py arguments after it
 python scripts/dev.py quality --only ruff  # or imports, hadolint, shellcheck, trivy-image, trivy-config, trivy-fs, trivy
 python scripts/dev.py quality --only trivy --image settleview:local    # scan an image you already built
+# one platform of a registry image, read from the registry (TRIVY_USERNAME / TRIVY_PASSWORD when private), plus its
+# CycloneDX SBOM: what the release workflow runs on the pushed digest
+python scripts/quality.py --only trivy-image --image ghcr.io/jon-lange/settleview@sha256:... --platform linux/arm64 --sbom sbom.cdx.json
 ```
 
 It exits non-zero when any gate fails. Ruff and lint-imports run from the project's environment (the dev container;
@@ -802,6 +805,10 @@ docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t settleview:local .
 docker compose up -d
 ```
 
+That is the local-build path, and it keeps working (compose's image is `${SETTLEVIEW_IMAGE:-settleview:local}`). A
+**release** is deployed by its signed digest instead, with no build on the host: "Releases and deploying by digest"
+below, and one command to roll back.
+
 **Docker**: with the commit checked out as above, build and `docker compose up -d` (or `docker compose up -d --build`
 with `GIT_SHA=$(git rev-parse HEAD)` in the shell; either way the image is labelled with its commit:
 `org.opencontainers.image.revision`, and telemetry's `service.version`). Compose stops the old app with SIGTERM (a clean shutdown,
@@ -856,6 +863,154 @@ At start the app writes its process id to `<data dir>/app.pid` and deletes the f
 Exit codes: 0 stopped cleanly (or no app is running), 1 still running, 2 stopped by the fallback, 3 **cannot tell**: there is no valid pid file but some `python -m btc_signal_engine` is running (an app started before pid files existed, or with another data folder). Nothing was done; do not check out new code until the app is stopped by hand.
 
 Every exit that passes through Python logs `process exiting (pid …, up … s)`. An exit without that line was a forced kill. Every 10 minutes the app logs `memory: private bytes …`.
+
+## Releases and deploying by digest
+
+A release is a semver tag `vX.Y.Z` on a commit of `main`. The tag push runs `.github/workflows/release.yml`, which
+builds the one image (the same Dockerfile, linux/amd64 + linux/arm64, `GIT_SHA` = the tagged commit), pushes it to
+the private GitHub Container Registry package `ghcr.io/jon-lange/settleview`, scans it, signs it and makes the GitHub
+Release. A host then runs that exact image by its digest (`ghcr.io/jon-lange/settleview@sha256:...`) after checking
+its signature: no build on the host, and every host runs the bytes that were scanned. The tags `X.Y.Z` and
+`sha-<short>` exist for people to find an image; a deploy never names a tag, and there is no `latest`.
+
+### Versioning and making a release
+
+Versions start at 0.1.0 (`pyproject.toml`); the next one is a patch (fixes), minor (features) or major (an
+incompatible change: a setting, route or deploy step that needs action) bump. Everything user-visible goes under
+"## [Unreleased]" in CHANGELOG.md as it lands; a release closes that section. In the dev clone, on an up-to-date
+`main`:
+
+```bash
+git fetch origin && git status                       # main, clean, containing origin/main
+python scripts/release.py prepare 0.1.0 --dry-run    # or patch | minor | major (from the newest v*.*.* tag)
+python scripts/release.py prepare 0.1.0              # CHANGELOG "Unreleased" -> "[0.1.0] - <today>", pyproject.toml
+                                                     # and uv.lock's own entry -> 0.1.0, commit "Release v0.1.0", tag
+git push origin main                                 # the release commit first (the tag must be on origin/main)
+SETTLEVIEW_ALLOW_TAGS=1 git push origin v0.1.0       # PowerShell: $env:SETTLEVIEW_ALLOW_TAGS=1; git push origin v0.1.0
+```
+
+`scripts/release.py` (standard library) refuses a dirty tree, a branch other than `main`, a `main` behind
+`origin/main`, an existing tag, a version not newer than the last release, and an empty Unreleased section; it never
+pushes. The pre-push hook refuses every tag push unless `SETTLEVIEW_ALLOW_TAGS=1` is set for that one push (and
+`archive/*` tags always); release tags are the only tags pushed. In PowerShell, `Remove-Item Env:SETTLEVIEW_ALLOW_TAGS`
+afterwards. `python scripts/release.py notes 0.1.0` prints a version's section (the Release's notes).
+
+### What the release workflow does
+
+| Job | Permissions (`GITHUB_TOKEN`; nothing at the workflow level) | What |
+|---|---|---|
+| `plan` | `contents: read` | `release.py plan`: the tag is `vX.Y.Z`, equals pyproject.toml's version, has a CHANGELOG section, and its commit is on `origin/main`; on `main`, a `sha-<short>` image only; any other ref fails |
+| `build` | `contents: read`, `packages: write` | `docker/metadata-action` (tags `X.Y.Z` and `sha-<short>`, `latest=false`; the OCI labels and annotations), then `docker/build-push-action` for linux/amd64 + linux/arm64 with `pull` and `no-cache` (from scratch, so the Dockerfile's `apt-get upgrade` takes today's Debian fixes); the index digest is the output |
+| `scan` | `contents: read`, `packages: read` | `scripts/quality.py --only trivy-image` on the **pushed digest**, each platform read from GHCR (the gate's policy: fixable HIGH / CRITICAL and secrets fail; `.trivyignore` applies); the same run writes each platform's CycloneDX SBOM |
+| `sign` | `contents: read`, `packages: write`, `id-token: write` | cosign v3.1.3 keyless: signs the index digest and each platform's manifest, attests each SBOM (`--type cyclonedx`) on its platform manifest, then runs the deploy's `cosign verify` and `verify-attestation` |
+| `release` (tags only) | `contents: write` | the GitHub Release: the CHANGELOG section, the digest, the exact verify command, the two SBOMs as assets |
+
+Nothing is signed before the scan passed, and no Release exists for an image that could not be verified. Actions are
+pinned by commit SHA (as `ci.yml`), cosign by release (`cosign-release`), Trivy by digest (`scripts/quality.py`).
+Run by hand (Actions, "Release", "Run workflow"): on a `vX.Y.Z` tag it rebuilds that release (a new digest with the
+day's security fixes; the Release's notes and SBOMs are replaced; the old digest stays in GHCR, still signed); on
+`main` it builds, scans and signs `sha-<short>` only (no Release), for a staging trial.
+
+**Keyless signing in public.** Sigstore's Fulcio issues a short-lived certificate for the workflow's OIDC identity and
+the signature is recorded in the public Rekor transparency log: the repository's name, the workflow path, the tag, the
+commit sha and the image digest become public there (no code, no image content).
+
+**Why `main` is not pushed on every commit.** The package is private, so its storage counts against the account's
+GitHub Packages quota (500 MB on the free plan; the image is about 320 MB compressed per platform, and each commit adds
+its new layers), untagged versions pile up and need a cleanup policy, and the arm64 build under QEMU adds tens of
+minutes per push. CI already builds both platforms on every push without pushing; a deploy should name a release; and
+the hand-run `main` build gives staging a signed `sha-<short>` digest when it is wanted. Revisit if staging needs
+every commit.
+
+### Once per deploy host (the owner)
+
+1. **A read-only registry token.** GitHub, Settings, Developer settings, Personal access tokens (classic): a token
+   with only `read:packages`, an expiry, named for the host. (The GHCR package is private: a package first pushed by
+   this repository's workflow with `GITHUB_TOKEN` inherits the repository's visibility and access. If it ever shows
+   as public, set it back to private in the package's settings.) Keep the token in a file outside any checkout, then:
+   ```bash
+   docker login ghcr.io -u jon-lange --password-stdin < /path/to/ghcr-read-token
+   # PowerShell: Get-Content C:\path\to\ghcr-read-token | docker login ghcr.io -u jon-lange --password-stdin
+   ```
+   Docker keeps it in its credential store; cosign and `docker pull` use it from there. Renew it before it expires.
+2. **cosign v3.1.3** on the PATH (the version the workflow signs with): the binary for your OS from the sigstore/cosign
+   GitHub release `v3.1.3`, checked against that release's checksums file.
+
+### Deploy a release
+
+The deploy history is the registry and GitHub Releases: each Release names its image as tag@digest. A deploy pins
+that reference, verifies it with cosign, and lets compose pull and start it. In the deploy checkout (between agent
+sessions, as any app restart):
+
+```bash
+git -C <dev clone> fetch origin --tags
+cd <deploy checkout> && git checkout v0.1.0          # detached: compose.yaml and the deploy files of that release
+export SETTLEVIEW_IMAGE=ghcr.io/jon-lange/settleview:0.1.0@sha256:<digest from the Release>
+cosign verify "$SETTLEVIEW_IMAGE" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/jon-lange/settleview/.github/workflows/release.yml@refs/tags/v0.1.0
+docker compose run --rm --no-deps backup bash /usr/local/bin/settleview-backup --once   # a dump first, if it migrates
+docker compose pull migrate app rec-pm-quotes rec-pm-settle
+docker compose up -d                                 # the migrate job (alembic upgrade head), then the services
+docker compose ps -a                                 # migrate Exited (0); app, rec-pm-quotes, rec-pm-settle healthy
+```
+
+Then put the same `SETTLEVIEW_IMAGE=...` line in `.env` yourself (the owner's file; no tool writes it), so a later
+plain `docker compose up -d` keeps that image; without it compose falls back to the local build `settleview:local`.
+In PowerShell: `$env:SETTLEVIEW_IMAGE = "ghcr.io/..."`, and `` ` `` for the line continuations. The digest decides
+what runs (the tag in front of it is for people); `cosign verify` fails unless that digest was signed by this
+repository's release workflow for that tag. Any release of this repository:
+`--certificate-identity-regexp '^https://github\.com/jon-lange/settleview/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'`;
+a hand-run `main` build (staging) is signed as `...release.yml@refs/heads/main`. Only a tag: `docker buildx imagetools
+inspect ghcr.io/jon-lange/settleview:0.1.0` (the `Digest:` line).
+
+| Variable | Purpose |
+|---|---|
+| `SETTLEVIEW_IMAGE` | The image compose runs for `migrate`, `app` and both recorders. Unset: `settleview:local` (a local build). A release: `ghcr.io/jon-lange/settleview:X.Y.Z@sha256:...` (tag@digest, after `cosign verify`); never a tag alone, never `latest`. |
+
+### Rolling back
+
+A rollback is a deploy of the previous release: take its tag@digest from its GitHub Release (Releases list them all,
+newest first), check that its code knows the database's schema, then the same commands as above.
+
+```bash
+cd <deploy checkout> && git checkout v0.0.9
+export SETTLEVIEW_IMAGE=ghcr.io/jon-lange/settleview:0.0.9@sha256:<digest from that Release>
+cosign verify "$SETTLEVIEW_IMAGE" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/jon-lange/settleview/.github/workflows/release.yml@refs/tags/v0.0.9
+# Does that release's Alembic know the database's revision? (Alembic's own version table and its own `show`)
+rev=$(docker compose exec -T postgres psql -U postgres -d settleview -At -c "select version_num from app.alembic_version")
+docker run --rm --network none --entrypoint alembic "$SETTLEVIEW_IMAGE" show "$rev"   # "Can't locate revision": stop
+docker compose pull migrate app rec-pm-quotes rec-pm-settle && docker compose up -d
+```
+
+and the `.env` line back to that reference.
+
+**Migrations are forward-only.** A release's migrations run once, at its deploy (the `migrate` job's `alembic upgrade
+head`). A database migrated by a newer release has a revision the older code does not know: `alembic show` above
+says "Can't locate revision", the older `migrate` job fails the same way, and the older app refuses to start on it
+(exit 75; "Postgres: migrations as a one-off job"), so the stack refuses that rollback rather than run on a schema
+it does not know. Then:
+
+- **Roll forward** (preferred): fix, release `vX.Y.Z+1`, deploy it.
+- **Restore** the dump taken before the migrating deploy ("Postgres: restore"), then roll back: everything written
+  since (fills, journal, quotes) is lost from the database; orders and positions live on the venues and are
+  reconciled at start.
+- **Downgrade** the schema with the newer image's Alembic (`alembic downgrade <the older release's head>`), then roll
+  back: a reviewed, manual step, never automatic. Every migration has a `downgrade()`, but most lose data:
+
+| Migrations | `downgrade()` does | Safe to cross? |
+|---|---|---|
+| 0011, 0020, 0022 | drops an index | yes: no data lost |
+| 0004, 0008, 0010, 0012, 0015, 0019 | drops columns (book sizes, quote source, BTC stop, audit actor, agent pause code, perp order legs) | loses those columns' values |
+| 0009, 0016 | drops columns and tables (strategy modes; agent ids and `agents`) | loses them |
+| 0002, 0003, 0005, 0006, 0007, 0013, 0014, 0017, 0021 | drops whole tables (Kalshi live, backtests, coach, trading, perps, agents, `trades_archive`, agent wake inputs) | loses them: never on a live database |
+| 0018 | `setup_key` text back to bigint (Postgres) | a non-numeric key becomes NULL |
+| 0001 | drops everything | never |
+
+A rollback between two releases with the same schema head (the common case) needs none of this. The non-obvious parts
+of the release tooling:
+[docs/solutions/2026-11-01-release-engineering-gotchas.md](solutions/2026-11-01-release-engineering-gotchas.md).
 
 ## Where it runs: one section per host
 

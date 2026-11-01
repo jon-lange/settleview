@@ -137,3 +137,15 @@ def test_migrations_run_as_a_one_off_job_the_app_waits_for(tmp_path):
     assert app["environment"]["BTCFLOW_DB_MIGRATE"] == "check"  # and never migrates itself
     for name in ("rec-pm-quotes", "rec-pm-settle"):
         assert "migrate" not in services[name]["depends_on"], name  # their own tables; trading's schema is not theirs
+
+
+def test_the_python_services_run_a_local_build_or_the_digest_in_settleview_image(tmp_path):
+    """P3 #4: deploy by digest. Unset, every Python service runs the local build; set, all of them run that image."""
+    (tmp_path / "default").mkdir()
+    services = _config(tmp_path / "default")["services"]
+    assert {services[s]["image"] for s in PYTHON_SERVICES} == {"settleview:local"}
+    ref = "ghcr.io/jon-lange/settleview@sha256:" + "e" * 64
+    (tmp_path / "pinned").mkdir()
+    services = _config(tmp_path / "pinned", SETTLEVIEW_IMAGE=ref)["services"]
+    assert {services[s]["image"] for s in PYTHON_SERVICES} == {ref}
+    assert services["postgres"]["image"] == services["backup"]["image"] == "postgres:17.10-bookworm"

@@ -3,6 +3,7 @@
     python scripts/quality.py                       # everything: ruff, imports, hadolint, shellcheck, trivy (builds the image)
     python scripts/quality.py --only ruff           # one tool, or several: --only ruff,shellcheck
     python scripts/quality.py --only trivy --image settleview:local   # scan an image you already built (no build)
+    python scripts/quality.py --only trivy-image --image REPO@sha256:... --platform linux/arm64 --sbom out.cdx.json
 
 Tools (exit code non-zero when any of them fails; each one's own output is shown as is):
   ruff          `ruff check .` (pyproject.toml [tool.ruff]); from this Python's environment (the dev container's, or
@@ -12,7 +13,10 @@ Tools (exit code non-zero when any of them fails; each one's own output is shown
   hadolint      the Dockerfiles (the app image's and deploy/dev/'s), in the official hadolint container
   shellcheck    deploy/**/*.sh at severity warning and the git hooks in .githooks/ at every severity, in the
                 official ShellCheck container
-  trivy-image   the app image: vulnerabilities with a fix (HIGH, CRITICAL) and secrets
+  trivy-image   the app image: vulnerabilities with a fix (HIGH, CRITICAL) and secrets. --platform scans one platform
+                of a registry image (read from the registry, not the local Docker; credentials from TRIVY_USERNAME /
+                TRIVY_PASSWORD when set, passed by name only); --sbom FILE also writes its CycloneDX SBOM (the
+                release workflow: .github/workflows/release.yml)
   trivy-config  misconfigurations (HIGH, CRITICAL) in the Dockerfile, compose.yaml and deploy/
   trivy-fs      secrets in the repository (never .env*, secrets/, *.pem, compose.override.yaml or data/)
   trivy         all three Trivy scans
@@ -135,7 +139,7 @@ def trivy(a, args: list[str], name: str) -> int:
         base = [docker(), "run", "--rm", "-v", f"{a.trivy_cache}:/root/.cache", *src_mount(), "-w", "/src",
                 "--mount", f"type=bind,source={out},target=/out"]
         if name == "trivy-image":
-            base += ["-v", "/var/run/docker.sock:/var/run/docker.sock"]
+            base += ["-v", "/var/run/docker.sock:/var/run/docker.sock", *registry_env()]
         ignore = ["--ignorefile", "/src/.trivyignore"] if (ROOT / ".trivyignore").is_file() else []
         code = run([*base, TRIVY, *args, *ignore, "--exit-code", "1", "--format", "json", "--output",
                     f"/out/{name}.json"])
@@ -154,15 +158,49 @@ def trivy(a, args: list[str], name: str) -> int:
         shutil.rmtree(out, ignore_errors=True)
 
 
+def registry_env() -> list[str]:
+    """A private registry's credentials for Trivy, by name only (never a value on the command line)."""
+    return [x for name in ("TRIVY_USERNAME", "TRIVY_PASSWORD") if os.environ.get(name) for x in ("-e", name)]
+
+
+def image_source(a) -> list[str]:
+    # One platform of a (multi-arch) registry image, read from the registry itself: the pushed digest, not whatever a
+    # local Docker holds under that name.
+    return ["--image-src", "remote", "--platform", a.platform] if a.platform else []
+
+
 def check_trivy_image(a) -> int:
     image = a.image
     if image is None:
+        if a.platform or a.sbom:
+            say("--platform and --sbom need --image (an image in a registry)")
+            return 1
         image = a.tag
         say(f"building {image} from this checkout (--image NAME scans an existing image instead)")
         if run([docker(), "build", "--build-arg", "GIT_SHA=quality", "-t", image, str(ROOT)]) != 0:
             return 1
-    return trivy(a, ["image", "--quiet", "--scanners", "vuln,secret", "--severity", SEVERITY, "--ignore-unfixed",
-                     image], "trivy-image")
+    code = trivy(a, ["image", "--quiet", "--scanners", "vuln,secret", "--severity", SEVERITY, "--ignore-unfixed",
+                     *image_source(a), image], "trivy-image")
+    if a.sbom:
+        code = sbom(a, image) or code
+    return code
+
+
+def sbom(a, image: str) -> int:
+    """The image's CycloneDX SBOM (every OS and Python package), written to --sbom. Not a gate: it fails only when
+    Trivy cannot read the image."""
+    dest = Path(a.sbom).resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    say(f"SBOM (CycloneDX) of {image}{f' {a.platform}' if a.platform else ''} -> {dest}")
+    cmd = [docker(), "run", "--rm", "-v", f"{a.trivy_cache}:/root/.cache", "-v",
+           "/var/run/docker.sock:/var/run/docker.sock", *registry_env(), "--mount",
+           f"type=bind,source={dest.parent},target=/out", TRIVY, "image", "--quiet", "--format", "cyclonedx",
+           *image_source(a), "--output", f"/out/{dest.name}", image]
+    code = run(cmd)
+    if code == 0 and not dest.is_file():
+        say("Trivy wrote no SBOM")
+        return 1
+    return code
 
 
 def check_trivy_config(a) -> int:
@@ -204,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--only", help=f"comma-separated: {', '.join([*TOOLS, *GROUPS])}")
     p.add_argument("--image", help="trivy-image: scan this existing image instead of building one")
+    p.add_argument("--platform", help="trivy-image: one platform (linux/amd64, linux/arm64) of a registry --image")
+    p.add_argument("--sbom", help="trivy-image: also write the image's CycloneDX SBOM to this file")
     p.add_argument("--tag", default="settleview:quality", help="trivy-image: the tag to build (default %(default)s)")
     p.add_argument("--trivy-cache", default="settleview-quality-trivy-cache",
                    help="Docker volume for Trivy's database (default %(default)s)")
