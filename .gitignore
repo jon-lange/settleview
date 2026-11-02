@@ -50,6 +50,7 @@ compose.override.yaml
 settleview-stack.json
 
 # Eval run output and the error-analysis pack (redacted, but the user's own trading history): never committed
+evals/logs/
 evals/results/
 evals/review/*
 !evals/review/README.md

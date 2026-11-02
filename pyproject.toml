@@ -66,6 +66,26 @@ otel = [
   "wrapt==2.5.1",  # pulled by the instrumentations; pinned
   "asgiref==3.12.1",  # pulled by the ASGI instrumentation; pinned
 ]
+# Agent evals (evals/; docs/plans/2026-10-31-1900-agent-evals-plan.md): Inspect AI, the UK AI Security Institute's
+# eval framework (user-approved 2026-11-01). 0.3.281 (2026-10-15) is the newest release older than two weeks. Its
+# Anthropic provider runs on the `anthropic` pin above. In the dev image (every extra) and CI, not in the app image.
+# The transitive pins below are the newest releases older than two weeks (a resolve picked newer ones). Inspect's
+# boto3/botocore pin python-dateutil < 3, so the lock holds python-dateutil 2.9.0.post0 (was 4.0.0).
+evals = [
+  "inspect-ai==0.3.281",
+  "aiobotocore==3.9.2",  # pulled by inspect-ai (s3fs); pinned
+  "boto3==1.43.106",  # pulled by inspect-ai; pinned (aiobotocore 3.9.2 needs botocore < 1.43.107)
+  "botocore==1.43.106",  # pulled by boto3; pinned
+  "s3transfer==0.19.2",  # pulled by boto3; pinned
+  "brotli==1.2.0",  # pulled by httpx[brotli] (inspect-ai); pinned
+  "brotlicffi==1.2.0.2",  # pulled by httpx[brotli]; pinned
+  "jsonpatch==1.35",  # pulled by inspect-ai; pinned
+  "jsonpointer==3.2.1",  # pulled by jsonpatch; pinned
+  "jsonpath-ng==1.11.0",  # pulled by inspect-ai; pinned
+  "platformdirs==4.13.4",  # pulled by inspect-ai; pinned
+  "soupsieve==3.0.3",  # pulled by beautifulsoup4 (inspect-ai); pinned
+  "zipp==4.1.1",  # pulled by inspect-ai; pinned
+]
 dev = [
   "pytest==9.2.0",
   "hypothesis==6.170.13",

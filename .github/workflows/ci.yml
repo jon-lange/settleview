@@ -246,7 +246,7 @@ jobs:
 
       - name: Install the project, dev tools and the Postgres driver
         run: |
-          uv export --locked --extra dev --extra postgres --extra otel --no-emit-project --format requirements.txt -o /tmp/requirements.txt
+          uv export --locked --extra dev --extra postgres --extra otel --extra evals --no-emit-project --format requirements.txt -o /tmp/requirements.txt
           if ! uv pip install --python .venv --require-hashes --no-deps -r /tmp/requirements.txt; then
             echo "::warning::Install failed (likely no ta-lib wheel); installing the TA-Lib C library and retrying"
             curl -fsSL -o /tmp/ta-lib.deb https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib_0.6.4_amd64.deb

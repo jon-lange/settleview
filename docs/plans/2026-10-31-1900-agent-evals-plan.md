@@ -1,7 +1,7 @@
 # Agent evals: proving the agents play the game like a careful human (draft)
 
 Status: DRAFT for the user to shape (user 2026-10-31: "I can help define eval best practices, I'd like those in
-place"). Builds on the trust north star (docs/plans/2026-10-31-0010-feat-multi-agent-plan.md, "Trust" T1–T4): conduct
+place"). Stage 1 runs on Inspect AI since 2026-11-01 (see "Decided" below and evals/README.md). Builds on the trust north star (docs/plans/2026-10-31-0010-feat-multi-agent-plan.md, "Trust" T1–T4): conduct
 is graded apart from P&L. Stage 1 is built (see "Build order" below and evals/README.md). Sections marked **[USER]**
 are where your best practices go.
 
@@ -31,11 +31,20 @@ Decided (user, 2026-10-31, after docs/research/2026-10-31-agent-evals-guidance.m
   with a version label and a changelog line; the app loads the deployed version; in-app edits become drafts exported
   for review. Files are shaped so a later sync to a prompt registry (Langfuse-style: versions, labels such as
   `production`/`staging`, rollback) is a one-way push, not a redesign.
-- **Format: TOML + JSONL** (stdlib `tomllib`; no new package).
+- **Format: TOML + JSONL** (stdlib `tomllib`; no new package). *Superseded 2026-11-01: JSONL only, Inspect's
+  dataset format.*
 - **Judge: a second vendor** (a different model family, to avoid self-preference). Needs the vendor choice, an API key
   in a secret file, and that vendor's official SDK package approved by the user before it is added.
 - **Budget: $300/month cap** for eval API spend, enforced by the pipeline runner (per-run budget, stop at the cap).
 - **Framework: plain pytest + a small in-repo harness** (research recommendation; no new packages).
+  *Superseded 2026-11-01 (user): "not reinventing the wheel and following well architected frameworks and best
+  practices, dont hand roll what we can get off the shelf and if you are making up a standard you are doing it
+  wrong."* The evals run on **Inspect AI** (UK AISI; `inspect-ai` in the `evals` extra). Items are Inspect `Sample`s
+  (JSONL), pipelines are `@task`s, trials are epochs (pass^k: the `min` reducer), the 13 graders are `@scorer`s,
+  the fake model is `mockllm`, the live one Inspect's Anthropic provider, the budget uses Inspect's `cost_limit` /
+  `token_limit`, results are Inspect logs (`inspect view`), the judge is the `grader` model role. The house rules
+  below are method and still bind; they are implemented on Inspect's primitives (evals/README.md, "Our concepts on
+  Inspect").
 - **Process from the research:** error analysis first (the user reads ~100 wakes and notes the first failure of each);
   outcome → trajectory → step grading; code graders own every safety verdict; one binary judge per failure mode,
   validated against the user's labels (TPR/TNR ≥ 0.90 on a held-out split) before it counts; pass^k for safety;
@@ -196,7 +205,9 @@ Stage 1 is built (branch `feat/evals`, 2026-10-31; how to run it: [evals/README.
    - [x] Error-analysis pack for the user (`python -m evals.review --n 100`): 100 stratified wakes from the final
      SQLite snapshot plus a label sheet (`evals/review/`, gitignored). **Next: the user labels it** (see
      evals/review/README.md). Its failure modes decide the next graders and the first judge.
-2. [~] Deterministic graders + golden set + CI job: 13 code graders, each with a mutation check (house rule 1),
+2. [~] Deterministic graders + golden set + CI job (moved onto Inspect AI 2026-11-01: `evals/tasks.py@pr` and
+   `@mutants` run on mockllm in `tests/evals`; the description below is the stage-1 design, the names are now
+   Inspect's): 13 code graders, each with a mutation check (house rule 1),
    enforced by tests and by every run. Golden v0 has 20 items (12 real frozen, 8 crafted simulated with reference
    solutions and mutants) plus a 2-item adversarial stub. `pipelines/pr.toml` runs under the fake model in
    `tests/evals`, so CI exercises it for free. The harness has two modes (frozen: recorded results, unrecorded
@@ -211,7 +222,7 @@ Stage 1 is built (branch `feat/evals`, 2026-10-31; how to run it: [evals/README.
    and results per attack task.
 5. [ ] Rubric judge (second vendor; needs the vendor, key and SDK approval) with the human-labelled calibration set.
 6. [ ] Report card in the Agents tab and the Assist → Auto promotion rule (the same grader library on live wakes:
-   `python -m evals grade <export.jsonl>` is its offline form).
+   the `recorded` task, `evals/tasks.py@recorded -T file=<export.jsonl>`, is its offline form).
 
 Findings from stage 1:
 

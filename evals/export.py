@@ -357,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--label", default=None, help="the snapshot's name in each item (default: the file stem)")
     ap.add_argument("--salt-file", default=None, help="a file holding the pseudonym salt (keep it out of git)")
     ap.add_argument("--split", action="store_true",
-                    help="--out is a directory: one <journal id>.jsonl per wake (golden frames)")
+                    help="--out is a directory: one <journal id>.jsonl per wake (golden frames: evals/datasets/frames)")
     a = ap.parse_args(argv)
     ids = [int(x) for x in a.ids.split(",") if x.strip()]
     if not ids and not a.all:

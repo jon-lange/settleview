@@ -945,6 +945,7 @@ docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest                
 docker compose -f deploy/dev/compose.yaml --profile postgres down                 # ... then remove that Postgres
 docker compose -f deploy/dev/compose.yaml run --rm dev pre-commit run --all-files # the quality gates (below)
 docker compose -f deploy/dev/compose.yaml run --rm research python scripts/experiments.py report  # research, below
+docker compose -f deploy/dev/compose.yaml run --rm dev python -m evals eval evals/tasks.py@pr  # evals, below
 docker compose -f deploy/dev/compose.yaml run --rm dev bash                       # a shell, or any command
 docker compose -f deploy/dev/compose.yaml --profile "*" down --volumes            # remove the whole dev project
 ```
@@ -981,13 +982,22 @@ The scripts open every database they only read with SQLite `mode=ro` (the rule);
 second, independent guard for the app's data. The live stack keeps its data in Postgres and its own volumes, never in
 a checkout's `data/`.
 
-**Evals**: `pytest tests/evals` (what CI runs), `python -m evals run|graders|grade ...`, `python -m evals.export
-...`, `python -m evals.review ...`, in the dev container. The checkout is read-write (results go to `evals/results/`,
-packs to `evals/review/`, both git-ignored) and `data/` is read-only, so `--source data/btcflow.db` works. A live run
-uses the `evals` service (profile `evals`), which passes `ANTHROPIC_API_KEY` from the host's environment by name; a
-key file is mounted read-only for that run with the standard flag:
-`docker compose -f deploy/dev/compose.yaml run --rm -v <file>:/run/secrets/anthropic_api_key:ro evals python -m evals
-run ... --live --api-key-file /run/secrets/anthropic_api_key`.
+**Evals** (Inspect AI: evals/README.md): `pytest tests/evals` (what CI runs); `python -m evals eval|report|log ...`,
+the Inspect CLI behind a guard that refuses to start while a `.env` would be found (Inspect loads one into the
+environment); `python -m evals.export ...` and `python -m evals.review ...`; all in the dev container. The log
+viewer needs the one port a dev command publishes, on loopback only:
+`docker compose -f deploy/dev/compose.yaml run --rm -p 127.0.0.1:7575:7575 dev python -m evals view --host 0.0.0.0`,
+then http://127.0.0.1:7575. The checkout is read-write (logs go to `evals/logs/`, packs to `evals/review/`, both
+git-ignored; keep the logs: they are the $300/month ledger) and `data/` is read-only, so `--source data/btcflow.db`
+works. A live run uses the `evals` service (profile `evals`), which passes `ANTHROPIC_API_KEY` from the host's
+environment by name; Inspect's Anthropic provider reads only that variable, so a key file is mounted read-only and
+read into it for that run: `docker compose -f deploy/dev/compose.yaml run --rm -v
+<file>:/run/secrets/anthropic_api_key:ro evals sh -c 'ANTHROPIC_API_KEY="$(cat /run/secrets/anthropic_api_key)" exec
+python -m evals eval evals/tasks.py@nightly --model anthropic/claude-haiku-5-5 -T budget_usd=5'`.
+
+`uv lock` cannot run in the dev container while pyproject.toml and uv.lock disagree (the image installs `--locked`,
+and `pull_policy: build` rebuilds it first). After a pin change, re-lock with the uv of the existing image:
+`docker run --rm -v "<checkout>:/w" -w /w -e UV_CACHE_DIR=/tmp/uv --entrypoint uv settleview-dev:local lock`.
 
 **README screenshots** (`docs/images/`) come from the dev container only: `tests/e2e/test_design_pass.py` and
 `tests/e2e/test_fleet_ui.py` write them on every full run, so a screen change is re-captured with

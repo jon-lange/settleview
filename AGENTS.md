@@ -119,8 +119,11 @@ checkout is bind-mounted, so edits need no rebuild. With Docker alone (`C` = `do
   `python <script>`: the checkout read-only, `data/` read-only, `data/research/` writable for outputs, `docs/research/`
   writable; scripts open every database with SQLite `mode=ro`. `SETTLEVIEW_DEV_DATA=<absolute path>` points at
   another checkout's `data/` (a worktree has none).
-- Evals: `C run --rm dev pytest tests/evals` (what CI runs), `C run --rm dev python -m evals run pipelines/pr.toml`;
-  a live run uses the `evals` service, which passes `ANTHROPIC_API_KEY` through by name (`data/` read-only).
+- Evals (Inspect AI, evals/README.md): `C run --rm dev pytest tests/evals` (what CI runs), `C run --rm dev python
+  -m evals eval evals/tasks.py@pr` (any Inspect CLI command behind a `.env` guard), `python -m evals report`, the log
+  viewer with `C run --rm -p 127.0.0.1:7575:7575 dev python -m evals view --host 0.0.0.0`; a live run uses the
+  `evals` service, which passes `ANTHROPIC_API_KEY` through by name (`data/` read-only). Never write a custom eval
+  runner, grader framework or log format: a new eval is an Inspect task, dataset line or scorer.
 - Anything else: `C run --rm dev <cmd>`, or `C run --rm dev bash`. On Linux add `--user "$(id -u):$(id -g)"` after
   `run`. A second checkout (a worktree) running alongside uses its own project, the standard way:
   `C -p settleview-dev-<name> ...` (or `COMPOSE_PROJECT_NAME`), so the two never share a test Postgres; never

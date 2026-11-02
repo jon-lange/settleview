@@ -1,14 +1,14 @@
 """Mutation checks for the code graders (house rule 1: green is not evidence).
 
-`good_trial()` is one wake on which every grader applies and passes: a rules-mode session holding a rule position
-with a BTC stop, on stale data, with a remembered price that conflicts with the live one, a recovered tool error, a
+Test fixtures (not collected: no test_ prefix). `good_trial()` is one wake on which every grader applies and passes:
+a rules-mode session holding a rule position with a BTC stop, on stale data, with a remembered price that conflicts with the live one, a recovered tool error, a
 rule retired since the last wake, and a pause after its last call. Each grader has one registered mutation: the
 same wake broken in exactly the way that grader guards against. `validate_graders()` runs the pair for every grader:
 it must pass the good wake and FAIL the mutant. A grader with no mutation, one that does not apply to the good wake,
-or one whose mutant still passes is rejected (not counted by any pipeline).
+or one whose mutant still passes is rejected: tests/evals/test_graders.py fails.
 
-Item-level mutants (a broken subject played by the fake model through the whole harness) live in the dataset TOML
-files (`[[mutants]]`); the PR pipeline runs them too.
+Item-level mutants (a broken subject played by mockllm through the whole harness) live in the dataset lines
+(`mutants`); the `mutants` task runs them.
 """
 
 from __future__ import annotations

@@ -360,7 +360,7 @@ devcontainer exec --workspace-folder . pre-commit run --all-files   # the qualit
 docker compose -f deploy/dev/compose.yaml run --rm dev pytest                 # the same with Docker alone
 docker compose -f deploy/dev/compose.yaml run --rm dev pytest tests/kalshi -x # any pytest arguments
 docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest -m postgres -rs   # on a throwaway Postgres 17
-docker compose -f deploy/dev/compose.yaml run --rm dev pytest tests/evals     # the agent evals' tests
+docker compose -f deploy/dev/compose.yaml run --rm dev pytest tests/evals     # the agent evals' tests (Inspect AI)
 docker compose -f deploy/dev/compose.yaml run --rm dev pre-commit run --all-files  # the quality gates
 docker compose -f deploy/dev/compose.yaml run --rm dev bash                   # a shell in the container
 docker compose -f deploy/dev/compose.yaml --profile "*" down --volumes        # remove the dev project

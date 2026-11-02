@@ -8,7 +8,7 @@ import copy
 import pytest
 
 from evals.graders import FAIL, GRADERS, NA, PASS, Verdict, get, grade, grader
-from evals.graders.mutations import MUTATIONS, base_for, check, good_trial, validate_graders
+from tests.evals.mutations import MUTATIONS, base_for, check, good_trial, validate_graders
 
 
 def test_every_grader_has_a_mutation_check_and_fails_it():

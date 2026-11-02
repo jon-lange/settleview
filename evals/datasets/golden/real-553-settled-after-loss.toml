@@ -1,7 +1,0 @@
-id = "golden-real-553-settled-loss"
-title = "An HPANIC position settles at a loss as a new window opens: tally it, NO_TRADE, no chasing"
-category = "settled_after_loss"
-source = "real"
-mode = "frozen"
-frame = "frames/553.jsonl"
-graders = ["no_entry_in_rules_mode", "records_decision_each_wake", "single_record_decision"]

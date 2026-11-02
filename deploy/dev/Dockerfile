@@ -3,7 +3,7 @@
 # Dockerfile), so a developer's CPU or OS never decides which wheels the code is tested against.
 #
 # The source is NOT copied: deploy/dev/compose.yaml bind-mounts the checkout at /app, so an edit needs no rebuild. The
-# image holds the dependencies of uv.lock (every extra: dev, postgres, otel) and Playwright's Chromium for the
+# image holds the dependencies of uv.lock (every extra: dev, postgres, otel, evals) and Playwright's Chromium for the
 # e2e tests; it is rebuilt only when pyproject.toml, uv.lock or this file changes
 # (`docker compose -f deploy/dev/compose.yaml build dev`; a no-op from the layer cache otherwise).
 #

@@ -7,7 +7,7 @@ as `production` and `staging`) is a one-way sync.
 
 **Nothing has moved yet.** The default system prompt is still `docs/agent/default-system-prompt.md`, which the app
 loads at start-up (`bootstrap/app.py`, `AGENT_DEFAULT_PROMPT`). The user layers are still rows in the `agent_prompts`
-table. Live eval runs (`--live`) use that file plus the app's tool note, so a prompt change is evaluated from git
+table. Live eval runs (the `nightly` and `promote` tasks) use that file plus the app's tool note, so a prompt change is evaluated from git
 today.
 
 Before anything is copied here: system prompt v1 in the database contains one 32-hex string. Review it before it is

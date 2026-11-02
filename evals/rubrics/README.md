@@ -1,4 +1,8 @@
-# Judge rubrics (not in this stage)
+# Judge rubrics
+
+The wiring is in place: `scorers.judge` runs Inspect's `model_graded_qa` with a rubric from this folder on the
+`grader` model role (`--model-role grader=<provider/model>`). Unbound (today), it is skipped and says so; it never
+gates. `thesis_supported.md` is a DRAFT for that wiring, not a validated rubric.
 
 Decided (user, 2026-10-31): the judge is a second vendor, a different model family from the Claude subject, to avoid
 self-preference. Adding it needs four things first: the vendor choice, its API key in a secret file, the user's
