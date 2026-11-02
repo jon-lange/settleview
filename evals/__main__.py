@@ -10,8 +10,8 @@ Inspect loads a `.env` file from the working directory or any parent into the en
 
 from __future__ import annotations
 
+import importlib.util
 import os
-import shutil
 import sys
 
 from evals import REPO, budget
@@ -53,11 +53,12 @@ def main(argv: list[str] | None = None) -> int:
         md, verdict = summary(path)
         print(md)
         return 1 if verdict["status"] == "FAIL" else 0
-    exe = shutil.which("inspect")
-    if exe is None:
+    # Inspect from this interpreter's own environment (`python -m inspect_ai`), not whichever `inspect` script is first
+    # on PATH: an environment that is not activated (CI's .venv) has its scripts off PATH.
+    if importlib.util.find_spec("inspect_ai") is None:
         print("the Inspect CLI is not installed (the `evals` extra)", file=sys.stderr)
         return 2
-    os.execv(exe, [exe, *args])  # noqa: S606 - the installed Inspect CLI, argv passed through unchanged
+    os.execv(sys.executable, [sys.executable, "-m", "inspect_ai", *args])  # noqa: S606 - argv passed through unchanged
     return 0  # not reached
 
 
