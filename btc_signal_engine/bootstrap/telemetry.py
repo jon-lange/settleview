@@ -313,10 +313,12 @@ class Telemetry:
         gauge("settleview.perps.connected", "1", "1 while the Kalshi perps stream is connected (perps on only).",
               lambda: perps("connected"))
 
-        coverage_ttl = {"at": 0.0, "v": None}
+        # "at" starts unset, not 0.0: time.monotonic() counts from host boot, so a 0.0 start skipped every read for
+        # the first COVERAGE_TTL_S after a reboot (a fresh CI runner, a restarted host) and left the gauges empty.
+        coverage_ttl: dict[str, Any] = {"at": None, "v": None}
 
         def coverage():
-            if time.monotonic() - coverage_ttl["at"] > COVERAGE_TTL_S:
+            if coverage_ttl["at"] is None or time.monotonic() - coverage_ttl["at"] > COVERAGE_TTL_S:
                 coverage_ttl["v"] = rt.recorder_watch.rolling_coverage(int(time.time() * 1000))
                 coverage_ttl["at"] = time.monotonic()
             return coverage_ttl["v"]

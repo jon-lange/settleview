@@ -31,8 +31,9 @@ from tests.telemetry.conftest import (ANTHROPIC_KEY, BEARER, COOKIE, DB_PASSWORD
 
 OTLP = os.environ.get("SETTLEVIEW_E2E_OTLP", "")
 O2 = os.environ.get("SETTLEVIEW_E2E_O2", "")
-pytestmark = pytest.mark.skipif(not (OTLP and O2), reason="needs the throwaway collector and OpenObserve "
-                                                          "(tests/telemetry/collector_e2e.compose.yaml)")
+pytestmark = [pytest.mark.collector_e2e,
+              pytest.mark.skipif(not (OTLP and O2), reason="needs the throwaway collector and OpenObserve "
+                                                           "(tests/telemetry/collector_e2e.compose.yaml)")]
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICES = ("settleview-app", "settleview-rec-pm-quotes", "settleview-rec-pm-settle", "settleview-migrate")

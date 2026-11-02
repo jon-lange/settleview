@@ -148,6 +148,7 @@ pythonpath = ["."]
 addopts = "-q"
 markers = [
   "e2e: browser end-to-end tests (tests/e2e; skipped without a browser; leave out with -m \"not e2e\")",
+  "collector_e2e: through a throwaway OpenTelemetry Collector and OpenObserve (tests/telemetry/test_collector_e2e.py; skipped without them; leave out with -m \"not collector_e2e\")",
   "script(*steps): the e2e app's scripted model turns (tests/e2e/conftest.py)",
   "peer(ip): the e2e page's requests arrive from this address, as a phone's do (tests/e2e/server.py)",
   "unpaired: the e2e page is this PC's browser before pairing (no PC cookie; tests/e2e/conftest.py)",
