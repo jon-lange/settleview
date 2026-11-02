@@ -78,7 +78,7 @@ evals = [
   "boto3==1.43.106",  # pulled by inspect-ai; pinned (aiobotocore 3.9.2 needs botocore < 1.43.107)
   "botocore==1.43.106",  # pulled by boto3; pinned
   "s3transfer==0.19.2",  # pulled by boto3; pinned
-  "brotli==1.2.0",  # pulled by httpx[brotli] (inspect-ai); pinned
+  "brotli==1.2.1",  # pulled by httpx[brotli] (inspect-ai); pinned
   "brotlicffi==1.2.0.2",  # pulled by httpx[brotli]; pinned
   "jsonpatch==1.35",  # pulled by inspect-ai; pinned
   "jsonpointer==3.2.1",  # pulled by jsonpatch; pinned
