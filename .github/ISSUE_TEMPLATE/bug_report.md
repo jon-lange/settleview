@@ -23,14 +23,15 @@ A clear description of the bug. Include the exact message the app showed, word f
 
 **Where**
 - Screen / route (for example `#play`, `/api/play/now`):
-- Venue and window (Kalshi 15 min, Polymarket 15 min, Polymarket 5 min):
+- Venue and window (Kalshi 15 min, Kalshi BTC Perps, Polymarket 15 min, Polymarket 5 min):
 - Trading mode (shadow / sandbox / production):
-- Device (PC browser, phone over LAN):
+- Device (PC browser, phone over LAN, phone over Tailscale):
 
 **Environment**
+- How it runs (Docker Compose, or a host install without Docker):
 - OS and CPU (for example Windows 11 ARM64, Ubuntu 24.04 x86_64):
-- Python version (`python --version`):
-- Commit (`git rev-parse --short HEAD`):
+- Release or commit (for example `0.1.0`, or `git rev-parse --short HEAD`):
+- Host install only: Python version (`python --version`):
 
 **Logs**
 Relevant log lines, with any secrets, ids, balances and addresses removed.

@@ -34,7 +34,7 @@ flowchart LR
   tg <-- long polling, outbound only --> core
 ```
 
-LAN or VPN only: the app is never exposed to the internet. Keys live in `.env` and never leave the process.
+LAN or VPN only: the app is never exposed to the internet. Keys live in secret files (`./secrets` with Docker; `.env` without) and never leave the process.
 
 ## 2. Services (how it runs)
 
@@ -44,7 +44,7 @@ One image, one process per service, the same on Windows, Linux and macOS. With D
 ```mermaid
 flowchart LR
   subgraph host [Docker host · compose.yaml]
-    app[app<br/>python -m btc_signal_engine<br/>127.0.0.1:8000]
+    app[app<br/>python -m btc_signal_engine<br/>8000 phones · 127.0.0.1:8001 PC · 127.0.0.1:8002 agents]
     rq[rec-pm-quotes<br/>python -m btc_signal_engine.recorders pm-quotes]
     rs[rec-pm-settle<br/>python -m btc_signal_engine.recorders pm-settle]
     subgraph pg [postgres · 17.10 · not published]

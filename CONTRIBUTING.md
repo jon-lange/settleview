@@ -77,8 +77,7 @@ pre-commit run --all-files                 # in the dev container: the quality g
                                            # hook on the runner (pre-commit/action), then Trivy
 ```
 
-and the quality gates (Ruff, import contracts, Hadolint, ShellCheck and Trivy, as CI runs them):
-[docs/operations.md, "Quality gates"](docs/operations.md#quality-gates-ruff-trivy-hadolint-shellcheck).
+Details of the quality gates and how CI runs them: [docs/operations.md, "Quality gates"](docs/operations.md#quality-gates).
 
 - Keep the layers: `domain/` is pure (no I/O), `application/` talks to the outside only through ports,
   `adapters/` do the I/O, and `bootstrap/` wires everything. Only `adapters/` may import the venue SDKs.
@@ -120,8 +119,8 @@ Trading ideas are tested with `scripts/experiments.py` and recorded in
 ## Commit style
 
 - One logical change per commit.
-- The subject line says what changed and why it matters, in plain words (for example: "Polymarket feed health judges
-  only markets needed now"). Add a body when the reason isn't obvious from the subject.
+- The subject line is a Conventional Commit (above) that says what changed and why it matters, in plain words (for
+  example: "fix: Polymarket feed health judges only markets needed now"). Add a body when the reason isn't obvious from the subject.
 - Mention any test or live check you ran that isn't part of the test suite.
 - Never commit secrets, local data (`data/`), logs or virtual environments.
 

@@ -1,4 +1,4 @@
-# Agent guide — Settleview (repo: btc-flow-engine, to be renamed settleview)
+# Agent guide — Settleview (repo: jon-lange/settleview; the Python package is still `btc_signal_engine`)
 
 Instructions for coding agents (Codex, Claude Code, others) working in this repo. Read this first, then
 `docs/research/LEARNINGS.md` before proposing or testing any trading idea.
