@@ -10,8 +10,9 @@
 
 - [ ] `pytest` passes in the dev container (`docker compose -f deploy/dev/compose.yaml run --rm dev pytest`, or
       `devcontainer exec --workspace-folder . pytest`).
-- [ ] The quality gates pass: `pre-commit run --all-files` in the dev container (gitleaks, Ruff, ShellCheck, hadolint,
-      actionlint, the layer contracts in `.importlinter`; docs/operations.md, "Quality gates"), and CI's Trivy.
+- [ ] The quality gates pass: `pre-commit run --all-files` in the dev container (gitleaks, Ruff, ShellCheck,
+      actionlint, the layer contracts in `.importlinter`; hadolint runs in the host's commit hook and in CI;
+      docs/operations.md, "Quality gates"), and CI's lint job and Trivy.
 - [ ] The title is a Conventional Commit (`feat: ...`, `fix: ...`; CONTRIBUTING.md): release-please writes the
       changelog from it.
 - [ ] Tests added or updated for changed behaviour, and they need no network, keys or local database.

@@ -37,6 +37,9 @@ x-data: &data
 x-env: &env
   PYTHONDONTWRITEBYTECODE: "1"
   PYTEST_ADDOPTS: "-p no:cacheprovider"  # no .pytest_cache in the checkout (or in a read-only one)
+  # pre-commit's standard skip: the hadolint hook runs hadolint's image, and this container has no Docker by design;
+  # the host's commit hook and CI (pre-commit/action on the runner) lint the Dockerfiles (.pre-commit-config.yaml).
+  SKIP: hadolint-docker
 
 x-dev: &dev
   image: settleview-dev:local

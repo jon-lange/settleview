@@ -32,8 +32,9 @@ Hexagonal layout (`domain/` pure, `application/` uses ports, `adapters/` do I/O,
    no-reply address as author and committer (this clone's `user.email`; check it in a new worktree). pre-commit's git
    hooks (`pre-commit install`; `.pre-commit-config.yaml`) run gitleaks (`.gitleaks.toml`: secrets, private keys,
    Gmail addresses, Windows profile paths) on every commit and push; never bypass them with `--no-verify`. A
-   placeholder line carries `gitleaks:allow`. The one allowed skip: `SKIP=hadolint` on a host without hadolint, after
-   `pre-commit run --all-files` passed in the dev container.
+   placeholder line carries `gitleaks:allow`. A push runs only gitleaks (the branch's history). hadolint runs from
+   its official image (`hadolint-docker`); the dev container has no Docker, so its compose services set
+   `SKIP=hadolint-docker` (the host's commit hook and CI lint the Dockerfiles). That is the only skip.
 
 ## Docs are part of done
 
@@ -53,7 +54,8 @@ This repo is meant to be published on GitHub with a best-in-class product, marke
 
 Any change to code, the image (Dockerfile, compose, `deploy/`), the workflows or dependencies is finished only when the
 quality gates are green (user, 2026-10-31): `pre-commit run --all-files` in the dev container (gitleaks, Ruff,
-ShellCheck, hadolint, actionlint and the import contracts, `.pre-commit-config.yaml`; CI's `lint` job runs the same),
+ShellCheck, actionlint and the import contracts, `.pre-commit-config.yaml`; hadolint runs in the host's commit hook;
+CI's `lint` job runs every hook, hadolint included, with `pre-commit/action` on the runner),
 and CI's Trivy scans of the image, the config and the repository (`aquasecurity/trivy-action`, ci.yml). Fix a finding
 rather than silencing it; a `# noqa` names the rule and the reason, a `.trivyignore` entry has a reason, a date and an
 expiry (docs/operations.md, "Quality gates"). Don't run `ruff format` over the codebase: that one-time reformat is its

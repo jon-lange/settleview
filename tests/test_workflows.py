@@ -124,10 +124,14 @@ def test_release_workflow_least_privilege(tmp_path):
 def test_ci_quality_gates_are_pre_commit_and_trivy(tmp_path):
     doc = _parse(ROOT / ".github" / "workflows" / "ci.yml", tmp_path)
     lint = doc["jobs"]["lint"]
-    (gate,) = [st for st in lint["steps"] if st.get("uses", "").startswith("devcontainers/ci@")]
-    assert gate["with"]["runCmd"] == "pre-commit run --all-files --show-diff-on-failure"  # in the dev container
+    # pre-commit's own action on the runner (it has Docker for hadolint-docker), with its default `--all-files`
+    (gate,) = [st for st in lint["steps"] if st.get("uses", "").startswith("pre-commit/action@")]
+    assert "extra_args" not in gate.get("with", {})
     checkout = next(st for st in lint["steps"] if st.get("uses", "").startswith("actions/checkout@"))
     assert checkout["with"]["fetch-depth"] == 0  # gitleaks reads every commit of the branch
+    # The dev container's build through Compose's Bake reads the CLI's own Dockerfile outside the context.
+    (suite,) = [st for st in doc["jobs"]["test"]["steps"] if st.get("uses", "").startswith("devcontainers/ci@")]
+    assert suite["env"]["BUILDX_BAKE_ENTITLEMENTS_FS"] == "0"
     trivy = [st for st in doc["jobs"]["trivy"]["steps"] if st.get("uses", "").startswith("aquasecurity/trivy-action@")]
     gates = {st["with"]["scan-type"]: st["with"] for st in trivy if st["with"].get("exit-code") == "1"}
     assert set(gates) == {"image", "config", "fs"}

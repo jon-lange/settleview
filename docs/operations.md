@@ -937,7 +937,10 @@ wrapper script; the dev container is two standard files:
   [`@devcontainers/cli`](https://github.com/devcontainers/cli) (`devcontainer up --workspace-folder .`, then
   `devcontainer exec --workspace-folder . <cmd>`). CI's `test` job runs the suite in it with the official
   `devcontainers/ci` action. It uses the `dev` service below (`dockerComposeFile`), keeps it running, maps the image's
-  `dev` user to the host user on Linux (`updateRemoteUserUID`) and forwards no port.
+  `dev` user to the host user on Linux (`updateRemoteUserUID`) and forwards no port. With Docker Compose v5 (builds
+  through Buildx Bake) the CLI's build needs `BUILDX_BAKE_ENTITLEMENTS_FS=0` in its environment: the CLI writes its
+  features Dockerfile outside the build context and Bake refuses to read it otherwise (`--allow=fs.read`, Buildx's
+  docs); CI's `test` job sets it on that step.
 - `deploy/dev/compose.yaml` (plain Docker Compose): the services, mounts and profiles; also the no-tooling way in,
   with Docker alone. The image (`deploy/dev/Dockerfile`) is the production base (`python:3.13.18-slim-trixie`, the
   same digest as the root Dockerfile), uv, every extra of `pyproject.toml` (`dev`, `postgres`, `otel`) from the hashed
@@ -1017,9 +1020,9 @@ Images from another browser or OS (fonts and anti-aliasing differ) are not commi
 ## Quality gates
 
 The gates are [pre-commit](https://pre-commit.com) hooks (`.pre-commit-config.yaml`), each from the tool's own
-hook repository pinned to a commit, plus Trivy in CI with Aqua's official action. One command runs every hook, in the
-dev container locally and in CI (`.github/workflows/ci.yml`, job `lint`, runs the same command there through
-devcontainers/ci):
+hook repository pinned to a commit, plus Trivy in CI with Aqua's official action. One command runs every hook: in the
+dev container locally, on the host, and in CI (`.github/workflows/ci.yml`, job `lint`: pre-commit's own
+`pre-commit/action` directly on the GitHub runner, which has Docker for the hadolint hook):
 
 ```bash
 pre-commit run --all-files --show-diff-on-failure   # in the dev container (devcontainer exec --workspace-folder . ...)
@@ -1034,9 +1037,14 @@ pre-commit install                                  # on the host, once per clon
 ```
 
 It exits non-zero when any hook fails. pre-commit builds each hook's own environment once (in the dev project's
-`pre-commit-cache` volume; Go for gitleaks and actionlint is fetched by pre-commit itself); hadolint is the official
-release binary in the dev image (sha256-checked), because hadolint's official hook runs the one on PATH; the image
-trusts `/app` and `/git` as git safe directories (the checkout belongs to the host user).
+`pre-commit-cache` volume; Go for gitleaks and actionlint is fetched by pre-commit itself); the image trusts `/app`
+and `/git` as git safe directories (the checkout belongs to the host user).
+
+Stages (pre-commit's `default_stages` / `stages`): every hook runs on commit and in `run --all-files`; a push runs
+only `gitleaks-history`, so a push needs no host tool but pre-commit. hadolint runs from its official image
+(`hadolint-docker`, pinned by tag and digest), so it needs Docker where it runs: the host's commit hook and CI. The dev
+container has no Docker by design, so its compose services set `SKIP=hadolint-docker` (pre-commit's standard skip;
+pre-commit prints the hook as Skipped).
 
 | Hook | Tool (pin) | What fails it |
 |---|---|---|
@@ -1044,13 +1052,13 @@ trusts `/app` and `/git` as git safe directories (the checkout belongs to the ho
 | `gitleaks-history` | gitleaks v8.30.1 | the same in any commit of the branch (on push, in `run --all-files` and CI); `.gitleaks.toml`, docs/PUBLISHING.md |
 | `ruff-check` | Ruff 0.17.1 (astral-sh/ruff-pre-commit; the `dev` extra pins the same) | any finding of the rules in `pyproject.toml` `[tool.ruff]`: pyflakes, pycodestyle errors, bugbear, pyupgrade, bandit (`S`), async, simplify |
 | `shellcheck` | ShellCheck 0.10.0 (shellcheck-py) | a warning or error in a shell script (`deploy/**/*.sh`) |
-| `hadolint` | hadolint 2.12.0 (official hook; binary in the dev image) | a warning or error in `Dockerfile` or `deploy/dev/Dockerfile` |
+| `hadolint-docker` | hadolint 2.12.0 (official Docker hook; `ghcr.io/hadolint/hadolint:v2.12.0@sha256:...`; skipped in the dev container) | a warning or error in `Dockerfile` or `deploy/dev/Dockerfile` |
 | `actionlint` | actionlint 1.7.12 (official hook) | an error in a workflow under `.github/workflows/` |
 | `lint-imports` | import-linter 2.15 (uv.lock's version) | a broken contract in `.importlinter` (the layers; no I/O in domain and application; the Kalshi SDK only in the adapters; the supervisor never loads the app) |
 
 `tests/test_precommit_config.py` checks that the hook repositories are pinned by commit and that each tool's version
-matches its other pin (pyproject.toml, uv.lock, the dev Dockerfile). To move a hook: `pre-commit autoupdate --freeze
---repo <url>` in the dev container, then the matching pin elsewhere, then the gates.
+matches its other pin (pyproject.toml, uv.lock; hadolint's image tag is the hook repository's). To move a hook:
+`pre-commit autoupdate --freeze --repo <url>` in the dev container, then the matching pin elsewhere, then the gates.
 
 **Trivy** (CI's `trivy` job and the release workflow's `scan` job; `aquasecurity/trivy-action`, pinned by commit,
 running Trivy v0.76.0, its database cached by the action):

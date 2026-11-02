@@ -16,13 +16,14 @@ concurrency:
 # Actions are pinned by full commit SHA (the version in the comment): a moved tag cannot change what runs here.
 
 jobs:
-  # The quality gates: pre-commit's hooks (.pre-commit-config.yaml: gitleaks over the whole history, Ruff, ShellCheck,
-  # hadolint, actionlint, the import contracts) in the dev container, exactly as `pre-commit run --all-files` runs
-  # there locally; then Trivy (the next job). The `.venv` in the jobs below is the runner's own throwaway environment
-  # (uv, Python 3.13 on Linux); locally nothing makes one: the same commands run in the dev container (.devcontainer/,
-  # deploy/dev/; the `test` job runs there).
+  # The quality gates: every pre-commit hook (.pre-commit-config.yaml: gitleaks over the whole history, Ruff,
+  # ShellCheck, hadolint, actionlint, the import contracts) with pre-commit's own action, `pre-commit run --all-files`,
+  # directly on the runner: it has Docker, which hadolint's official hook (hadolint-docker) runs, and the dev container
+  # deliberately has not (it skips that one hook; the `test` job runs there). Then Trivy (the next job). The `.venv` in
+  # the jobs below is the runner's own throwaway environment (uv, Python 3.13 on Linux); locally nothing makes one: the
+  # same commands run in the dev container (.devcontainer/, deploy/dev/).
   lint:
-    name: Quality gates (pre-commit in the dev container)
+    name: Quality gates (pre-commit)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -41,15 +42,14 @@ jobs:
       - name: Lock file matches pyproject.toml (uv lock --check)
         run: uv lock --check
 
-      # The action uses an installed `devcontainer` and otherwise installs the newest 0.x: pin the CLI (as the test job).
-      - name: Install the Dev Containers CLI (pinned)
-        run: npm install -g @devcontainers/cli@0.89.0
-
-      - name: pre-commit run --all-files (in the dev container, devcontainers/ci)
-        uses: devcontainers/ci@513af61f4de4f75d37e4438f184ba4358f0fc1ca  # v0.3.1900000450
+      # pre-commit/action runs `python -m pip install pre-commit`, so it needs a Python of its own (its README).
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          push: never
-          runCmd: pre-commit run --all-files --show-diff-on-failure
+          python-version: "3.13"
+
+      # `pre-commit run --show-diff-on-failure --all-files`; the hook environments are cached by the action.
+      - name: pre-commit run --all-files (pre-commit/action)
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
 
   trivy:
     # The app image (vulnerabilities with a fix, HIGH and CRITICAL, and secrets), the Dockerfiles' misconfigurations and
@@ -112,6 +112,11 @@ jobs:
           scanners: secret
           exit-code: "1"
 
+      # Trivy writes `output` into an existing directory only (it does not create one).
+      - name: The SARIF directory
+        if: success() || failure()
+        run: mkdir -p sarif
+
       - name: SARIF of the image scan (the same scan, for code scanning)
         if: success() || failure()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
@@ -149,7 +154,7 @@ jobs:
           skip-setup-trivy: true
           scan-type: fs
           scan-ref: .
-          skip-dirs: .cache
+          skip-dirs: .cache,sarif
           scanners: secret
           format: sarif
           output: sarif/trivy-fs.sarif
@@ -198,8 +203,16 @@ jobs:
       # The OpenTelemetry tests, none may be skipped (the scrubbing tests fail if a
       # token, key, cookie, signature or query secret reaches an exporter; the GenAI one runs the bundled Claude Code
       # CLI against a local fake API); then the whole suite.
+      # The CLI builds the service from a Dockerfile it writes outside the build context (its features layer, in its
+      # temp folder). Compose builds through Buildx Bake, which refuses to read a file outside the context without an
+      # `--allow=fs.read=...` entitlement that neither Compose nor the CLI passes; BUILDX_BAKE_ENTITLEMENTS_FS=0 is
+      # Buildx's documented switch for that check (docs.docker.com, `docker buildx bake`, "--allow"), for this build
+      # only. (The CLI's "Could not parse image name" line for the tag@digest FROM is a warning: it pulls by digest and
+      # goes on; 0.90.0 fixes it.)
       - name: Tests in the dev container (devcontainers/ci)
         uses: devcontainers/ci@513af61f4de4f75d37e4438f184ba4358f0fc1ca  # v0.3.1900000450
+        env:
+          BUILDX_BAKE_ENTITLEMENTS_FS: "0"
         with:
           push: never
           runCmd: |

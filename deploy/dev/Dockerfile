@@ -50,22 +50,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends docker-cli dock
     && rm -rf /var/lib/apt/lists/* \
     && git config --system --add safe.directory /app && git config --system --add safe.directory /git
 
-# hadolint for pre-commit's official hadolint hook (it runs the hadolint on PATH): the official release binary, pinned
-# by version and by each architecture's sha256 (hadolint's own .sha256 files). The version is .pre-commit-config.yaml's.
-ARG TARGETARCH
-ARG HADOLINT_VERSION=2.12.0
-RUN case "$TARGETARCH" in \
-      amd64) arch=x86_64; sum=56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010 ;; \
-      arm64) arch=arm64; sum=5798551bf19f33951881f15eb238f90aef023f11e7ec7e9f4c37961cb87c5df6 ;; \
-      *) echo "no hadolint binary for $TARGETARCH" >&2; exit 1 ;; \
-    esac \
-    && python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/usr/local/bin/hadolint')" \
-       "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-${arch}" \
-    && echo "$sum  /usr/local/bin/hadolint" | sha256sum -c - \
-    && chmod 0755 /usr/local/bin/hadolint
-
 # pre-commit's hook environments (Ruff, ShellCheck, gitleaks, actionlint, import-linter) live in the dev project's
-# cache volume (deploy/dev/compose.yaml), so they are built once, not on every run.
+# cache volume (deploy/dev/compose.yaml), so they are built once, not on every run. hadolint is not among them: its
+# hook runs hadolint's image, which needs Docker, and this container has none (compose.yaml: SKIP=hadolint-docker).
 ENV PRE_COMMIT_HOME=/cache/pre-commit
 
 # The project itself, editable and without dependencies: its metadata only (the code at /app is the bind mount).

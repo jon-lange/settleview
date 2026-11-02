@@ -1,16 +1,24 @@
 # The quality gates and the secret scan, run by pre-commit (https://pre-commit.com; a dev dependency in uv.lock).
 #
-#   pre-commit run --all-files     # the whole gate: in the dev container (docs/operations.md, "Quality gates"), and CI
+#   pre-commit run --all-files     # the whole gate: on the host, in the dev container and in CI (pre-commit/action on
+#                                  # the GitHub runner, ci.yml); docs/operations.md, "Quality gates"
 #   pre-commit install             # once per clone: the git hooks below on every commit and push
 #
+# Stages (pre-commit's `default_stages` / `stages`): every hook runs on commit and in `run --all-files`; a push runs
+# only gitleaks over the branch's history, so a push needs nothing on the host but pre-commit itself.
+# hadolint runs from its official image (the `hadolint-docker` hook): a host needs Docker, not a hadolint binary. The
+# dev container has no Docker by design, so its compose services set SKIP=hadolint-docker (pre-commit's standard
+# skip); the host's commit hook and CI lint the Dockerfiles.
+#
 # Every hook repository is pinned to a commit SHA (the release tag in the comment; `pre-commit autoupdate --freeze`
-# writes the same form). Versions match the tools' other pins: Ruff == pyproject.toml's dev extra, import-linter ==
-# uv.lock's, hadolint == the binary in deploy/dev/Dockerfile (tests/test_precommit_config.py checks them).
+# writes the same form), and hadolint's image to that tag and its multi-arch digest. Versions match the tools' other
+# pins: Ruff == pyproject.toml's dev extra, import-linter == uv.lock's, hadolint's image == the hook repository's tag
+# (tests/test_precommit_config.py checks them).
 # Trivy (the image, the config and the repository) is not a hook: CI runs it (aquasecurity/trivy-action, ci.yml).
-# docs/operations.md, "Quality gates".
 
 minimum_pre_commit_version: "4.0.0"
 default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]  # a hook without its own `stages` never runs on push
 
 repos:
   # Secrets and personal data (.gitleaks.toml: gitleaks' default rules plus Gmail addresses and Windows profile
@@ -26,7 +34,7 @@ repos:
         name: Detect hardcoded secrets (the branch's history)
         entry: gitleaks git --redact --verbose --log-opts=HEAD
         always_run: true
-        stages: [pre-commit, pre-push, manual]
+        stages: [pre-commit, pre-push]
 
   # Ruff: pyproject.toml's [tool.ruff] (bugs and security smells; `ruff format` is not run yet).
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -41,12 +49,13 @@ repos:
       - id: shellcheck
         args: [--severity=warning]
 
-  # The Dockerfiles (the app image's and the dev container's). hadolint's official hook runs the hadolint on PATH:
-  # the dev container has it (deploy/dev/Dockerfile, the official release binary, sha256-checked).
+  # The Dockerfiles (the app image's and the dev container's), with hadolint's official Docker hook. Its own entry names
+  # the image with no tag (whatever `latest` is); `entry` pins it to this rev's version and multi-arch digest.
   - repo: https://github.com/hadolint/hadolint
     rev: b3555ba9c2bfd9401e79f2f0da68dd1ae38e10c7  # frozen: v2.12.0
     hooks:
-      - id: hadolint
+      - id: hadolint-docker
+        entry: ghcr.io/hadolint/hadolint:v2.12.0@sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e hadolint
 
   # The GitHub Actions workflows (.github/workflows/).
   - repo: https://github.com/rhysd/actionlint

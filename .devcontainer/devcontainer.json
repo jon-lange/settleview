@@ -1,7 +1,9 @@
 // The dev container, by the Dev Containers spec (https://containers.dev/implementors/json_reference/): VS Code
 // ("Reopen in Container"), GitHub Codespaces, and headless with the official CLI (@devcontainers/cli):
-//   devcontainer up --workspace-folder .
+//   BUILDX_BAKE_ENTITLEMENTS_FS=0 devcontainer up --workspace-folder .
 //   devcontainer exec --workspace-folder . pytest
+// (Compose builds through Buildx Bake, which refuses the Dockerfile the CLI writes outside the build context unless
+// that Buildx setting turns its filesystem-entitlement check off; ci.yml sets it for the same build.)
 // CI runs the suite in it with devcontainers/ci (.github/workflows/ci.yml). It is deploy/dev/compose.yaml's `dev`
 // service (compose project `settleview-dev`, never the live `settleview`; no published port; data/ read-only); the
 // same file runs without any of this tooling: `docker compose -f deploy/dev/compose.yaml run --rm dev pytest`.

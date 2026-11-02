@@ -17,7 +17,7 @@ plain Docker Compose (`deploy/dev/compose.yaml`). You need [Docker](https://docs
 - the official CLI ([`@devcontainers/cli`](https://github.com/devcontainers/cli)), headless:
 
   ```bash
-  devcontainer up --workspace-folder .
+  BUILDX_BAKE_ENTITLEMENTS_FS=0 devcontainer up --workspace-folder .   # docs/operations.md, "Development and tests"
   devcontainer exec --workspace-folder . pytest
   ```
 
@@ -43,10 +43,10 @@ its default rules plus `@gmail.com` addresses and Windows user-profile paths) re
 personal detail; a made-up placeholder carries `gitleaks:allow` on its line. Commit as your GitHub no-reply address
 (`git config user.email <id>+<user>@users.noreply.github.com`; GitHub → Settings → Emails, where "Block command line
 pushes that expose my email" should be on). Details and machine-local patterns:
-[docs/PUBLISHING.md](docs/PUBLISHING.md#secret-and-personal-data-scanning). hadolint is a system binary (in the dev
-container): a host without it fails the hadolint hook on a commit that changes a Dockerfile; run
-`pre-commit run --all-files` in the dev container first, then `SKIP=hadolint git commit ...` (pre-commit's own
-skip).
+[docs/PUBLISHING.md](docs/PUBLISHING.md#secret-and-personal-data-scanning). A push needs nothing on the host but
+pre-commit (only gitleaks runs). hadolint runs from its official image (the `hadolint-docker` hook), so a commit that
+changes a Dockerfile needs Docker on the host, not a hadolint binary. The dev container has no Docker by design: its
+compose services set `SKIP=hadolint-docker` (pre-commit's own skip), and the host's hook and CI lint the Dockerfiles.
 
 ## Commit messages: Conventional Commits
 
@@ -73,7 +73,8 @@ pytest                                     # in the dev container: the suite (e2
 docker compose -f deploy/dev/compose.yaml run --rm dev-pg pytest -m postgres -rs   # Postgres tests (throwaway 17)
 docker compose -f deploy/dev/compose.yaml --profile postgres down                  # ... then remove that Postgres
 pre-commit run --all-files                 # in the dev container: the quality gates (gitleaks, Ruff, ShellCheck,
-                                           # hadolint, actionlint, import contracts); CI runs it too, then Trivy
+                                           # actionlint, import contracts; hadolint on the host); CI runs every
+                                           # hook on the runner (pre-commit/action), then Trivy
 ```
 
 and the quality gates (Ruff, import contracts, Hadolint, ShellCheck and Trivy, as CI runs them):

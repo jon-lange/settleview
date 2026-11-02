@@ -44,8 +44,12 @@ def test_every_hook_repository_is_pinned_by_commit():
 def test_hook_versions_match_the_other_pins():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert f'"ruff=={_frozen("https://github.com/astral-sh/ruff-pre-commit")}"' in pyproject
-    dev_image = (ROOT / "deploy" / "dev" / "Dockerfile").read_text(encoding="utf-8")
-    assert f"ARG HADOLINT_VERSION={_frozen('https://github.com/hadolint/hadolint')}\n" in dev_image
+    (hadolint,) = [r for r in _config()["repos"] if r["repo"] == "https://github.com/hadolint/hadolint"]
+    (docker_hook,) = hadolint["hooks"]
+    assert docker_hook["id"] == "hadolint-docker"
+    # the official hook's entry names the image untagged (`latest`): the entry pins the rev's tag and a digest
+    assert re.fullmatch(rf"ghcr\.io/hadolint/hadolint:v{re.escape(_frozen(hadolint['repo']))}@sha256:[0-9a-f]{{64}} "
+                        r"hadolint", docker_hook["entry"])
     (local,) = [r for r in _config()["repos"] if r["repo"] == "local"]
     (imports,) = [h for h in local["hooks"] if h["id"] == "lint-imports"]
     assert imports["additional_dependencies"] == [f"import-linter=={_lock_version('import-linter')}"]
@@ -56,12 +60,24 @@ def test_hooks_cover_the_gates_and_both_git_hooks():
     cfg = _config()
     assert cfg["default_install_hook_types"] == ["pre-commit", "pre-push"]
     ids = {h.get("alias", h["id"]) for r in cfg["repos"] for h in r["hooks"]}
-    assert ids == {"gitleaks", "gitleaks-history", "ruff-check", "shellcheck", "hadolint", "actionlint",
+    assert ids == {"gitleaks", "gitleaks-history", "ruff-check", "shellcheck", "hadolint-docker", "actionlint",
                    "lint-imports"}
     hooks = {h.get("alias", h["id"]): h for r in cfg["repos"] for h in r["hooks"]}
     history = hooks["gitleaks-history"]
     assert {"pre-commit", "pre-push"} <= set(history["stages"]) and history["always_run"] is True
     assert history["entry"].startswith("gitleaks git --redact")
+    # A push runs gitleaks' history scan only (it needs no host tool but pre-commit); every hook runs on commit.
+    assert cfg["default_stages"] == ["pre-commit"]
+    on_push = {name for name, h in hooks.items() if "pre-push" in h.get("stages", cfg["default_stages"])}
+    assert on_push == {"gitleaks-history"}
+
+
+def test_the_dev_container_skips_only_the_docker_hook():
+    """It has no Docker by design (deploy/dev/Dockerfile); the host's hook and CI's pre-commit/action run hadolint."""
+    dev = yaml.safe_load((ROOT / "deploy" / "dev" / "compose.yaml").read_text(encoding="utf-8"))
+    for name in ("dev", "dev-pg", "evals", "research"):
+        env = dev["services"][name].get("environment") or dev["x-env"]
+        assert env["SKIP"] == "hadolint-docker", name
 
 
 def _gitleaks_rules() -> dict[str, dict]:
