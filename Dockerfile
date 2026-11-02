@@ -6,7 +6,7 @@
 # (linux/amd64 + linux/arm64; resolved 2026-10-31, built by Docker Official Images 2026-10-28), so every build starts
 # from the same bytes. To refresh it (when Trivy reports a fixed base package, or for a new Python patch):
 #   docker buildx imagetools inspect python:3.13.18-slim-trixie     # the "Digest:" line; replace tag and digest here
-FROM python:3.13.18-slim-trixie@sha256:76baad6037690d6e8c4397fbcaef17bca6f19eecef822b708fe8fa3417d30bb5
+FROM python:3.14.7-slim-trixie@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
     BTCFLOW_DB_PATH=/data/btcflow.db BTCFLOW_RESEARCH_DIR=/research BTCFLOW_API_HOST=0.0.0.0 BTCFLOW_API_PORT=8000 \
