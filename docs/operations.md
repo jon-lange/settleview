@@ -946,7 +946,7 @@ wrapper script; the dev container is two standard files:
   docs); CI's `test` job sets it on that step.
 - `deploy/dev/compose.yaml` (plain Docker Compose): the services, mounts and profiles; also the no-tooling way in,
   with Docker alone. The image (`deploy/dev/Dockerfile`) is the production base (`python:3.13.18-slim-trixie`, the
-  same digest as the root Dockerfile), uv, every extra of `pyproject.toml` (`dev`, `postgres`, `otel`) from the hashed
+  same digest as the root Dockerfile), uv, every extra of `pyproject.toml` (`dev`, `postgres`, `otel`, `evals`) from the hashed
   `uv.lock`, and Playwright's Chromium with its system libraries; the checkout is bind-mounted at `/app`, so an edit
   needs no rebuild. Every `run` builds first (`pull_policy: build`: a no-op from the layer cache unless the lock or
   the Dockerfile changed). `PYTEST_ADDOPTS=-p no:cacheprovider` keeps `.pytest_cache` out of the checkout.
@@ -971,7 +971,7 @@ On Linux add `--user "$(id -u):$(id -g)"` after `run`, so files written into the
 terminal is attached (a script, an agent).
 
 Isolation from the live stack: the compose project is `settleview-dev` (the file's top-level `name:`), so its
-containers, network and volume (`settleview-dev_uv-cache`) are its own, and no service publishes a port. The test
+containers, network and volumes (`settleview-dev_uv-cache`, `settleview-dev_pre-commit-cache`) are its own, and no service publishes a port. The test
 Postgres keeps its data on tmpfs, has a dev-only password, and `down` removes it. The image has the docker CLI and
 compose plugin for `tests/deploy/test_compose.py` (`docker compose config` only); no Docker socket is mounted. A
 second checkout (a git worktree) used at the same time takes its own project the standard way, `-p
@@ -1216,7 +1216,7 @@ A release is a semver tag `vX.Y.Z` on a commit of `main`, made by
 [release-please](https://github.com/googleapis/release-please) (`googleapis/release-please-action` in
 `.github/workflows/release.yml`; `release-please-config.json`, `.release-please-manifest.json`). The same workflow run
 then builds the one image (the same Dockerfile, linux/amd64 + linux/arm64, `GIT_SHA` = the release commit), pushes it
-to the private GitHub Container Registry package `ghcr.io/jon-lange/settleview`, scans it, signs it and adds it to the
+to the GitHub Container Registry package `ghcr.io/jon-lange/settleview`, scans it, signs it and adds it to the
 GitHub Release. A host then runs that exact image by its digest (`ghcr.io/jon-lange/settleview@sha256:...`) after
 checking its signature: no build on the host, and every host runs the bytes that were scanned. The tags `X.Y.Z` and
 `sha-<short>` exist for people to find an image; a deploy never names a tag, and there is no `latest`.
@@ -1265,7 +1265,7 @@ commit sha and the image digest become public there (no code, no image content).
 `release.yml@refs/heads/main` (release-please runs on the push to `main`); a rebuild by hand of a tag as
 `release.yml@refs/tags/vX.Y.Z`. The digest from the Release is what a deploy trusts.
 
-**Why `main` is not pushed on every commit.** The package is private, so its storage counts against the account's
+**Why `main` is not pushed on every commit.** While the package is private, its storage counts against the account's
 GitHub Packages quota (500 MB on the free plan; the image is about 320 MB compressed per platform, and each commit adds
 its new layers), untagged versions pile up and need a cleanup policy, and the arm64 build under QEMU adds tens of
 minutes per push. CI already builds both platforms on every push without pushing; a deploy should name a release; and
@@ -1274,10 +1274,9 @@ every commit.
 
 ### Once per deploy host (the owner)
 
-1. **A read-only registry token.** GitHub, Settings, Developer settings, Personal access tokens (classic): a token
-   with only `read:packages`, an expiry, named for the host. (The GHCR package is private: a package first pushed by
-   this repository's workflow with `GITHUB_TOKEN` inherits the repository's visibility and access. If it ever shows
-   as public, set it back to private in the package's settings.) Keep the token in a file outside any checkout, then:
+1. **A read-only registry token** (needed while the GHCR package is private; a public package pulls without a login).
+   GitHub, Settings, Developer settings, Personal access tokens (classic): a token with only `read:packages`, an
+   expiry, named for the host. Keep the token in a file outside any checkout, then:
    ```bash
    docker login ghcr.io -u jon-lange --password-stdin < /path/to/ghcr-read-token
    # PowerShell: Get-Content C:\path\to\ghcr-read-token | docker login ghcr.io -u jon-lange --password-stdin
@@ -1324,8 +1323,8 @@ A rollback is a deploy of the previous release: take its tag@digest from its Git
 newest first), check that its code knows the database's schema, then the same commands as above.
 
 ```bash
-cd <deploy checkout> && git checkout v0.0.9
-export SETTLEVIEW_IMAGE=ghcr.io/jon-lange/settleview:0.0.9@sha256:<digest from that Release>
+cd <deploy checkout> && git checkout vX.Y.Z           # the previous release
+export SETTLEVIEW_IMAGE=ghcr.io/jon-lange/settleview:X.Y.Z@sha256:<digest from that Release>
 cosign verify "$SETTLEVIEW_IMAGE" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity https://github.com/jon-lange/settleview/.github/workflows/release.yml@refs/heads/main
 # Does that release's Alembic know the database's revision? (Alembic's own version table and its own `show`)
@@ -1352,6 +1351,7 @@ it does not know. Then:
 | Migrations | `downgrade()` does | Safe to cross? |
 |---|---|---|
 | 0011, 0020, 0022 | drops an index | yes: no data lost |
+| 0023 | drops the audit's append-only trigger | yes: no data lost |
 | 0004, 0008, 0010, 0012, 0015, 0019 | drops columns (book sizes, quote source, BTC stop, audit actor, agent pause code, perp order legs) | loses those columns' values |
 | 0009, 0016 | drops columns and tables (strategy modes; agent ids and `agents`) | loses them |
 | 0002, 0003, 0005, 0006, 0007, 0013, 0014, 0017, 0021 | drops whole tables (Kalshi live, backtests, coach, trading, perps, agents, `trades_archive`, agent wake inputs) | loses them: never on a live database |
@@ -1507,9 +1507,10 @@ with `BTCFLOW_TRADING_PROD_KEY_PATH=/run/keys/prod` in `.env`. Windows-only sett
 (`BTCFLOW_AGENT_CLI_PATH`, `BTCFLOW_DB_PATH`, `BTCFLOW_API_HOST`) do not belong in a container's env: compose sets
 what it needs, and the Linux image bundles the agent CLI.
 
-`compose.yaml` runs five services: `postgres` and `backup` (the official `postgres:17.10` image) and, from one app
-image, `app`, `rec-pm-quotes`, `rec-pm-settle`; `otel-collector` and `openobserve` only with `--profile
-observability` (see "Observability"). First start: `python deploy/postgres/make_secrets.py` once (see "Postgres"); run it again after an
+`compose.yaml` runs five long-running services: `postgres` and `backup` (the official `postgres:17.10` image) and, from one app
+image, `app`, `rec-pm-quotes`, `rec-pm-settle`, plus the one-off `migrate` job ("Postgres: migrations as a one-off
+job"); `otel-collector` and `openobserve` only with `--profile observability` (see "Observability"), `tailscale` only
+with `--profile tailscale` ("Phones over HTTPS (Tailscale)"). First start: `python deploy/postgres/make_secrets.py` once (see "Postgres"); run it again after an
 update that adds a secret file (it keeps every existing one). Each service's memory and CPU limits: "Resource limits
 and Postgres settings".
 
@@ -1585,7 +1586,7 @@ python deploy/secrets_from_env.py                # moves each value to its file,
 docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t settleview:local .
 docker compose up -d                             # recreates the services with the secrets mounted
 docker compose ps                                # all healthy; the app logs no configuration error
-docker inspect settleview-app-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -c _FILE=   # 9: 7 venue / API keys, the database password, the OTLP headers
+docker inspect settleview-app-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -c _FILE=   # 8: 7 venue / API keys and the database password
 ```
 
 `secrets_from_env.py` writes each value to its file, reads it back, and only then replaces the `.env` line by a
@@ -1724,7 +1725,8 @@ Not tried yet; the image and services are built for it. The rules that matter on
    port (8000) on the network. Pair the browser you administer from: `docker compose exec app python -m
    btc_signal_engine.ops pair-pc` (from another machine, through an SSH tunnel to the server's 8001).
 
-The image runs Python 3.13 (`python:3.13-slim`), and CI builds it on every push (no push to a registry). Its
+The image runs Python 3.13 (`python:3.13.18-slim-trixie`, pinned by digest), and CI builds it on every push without
+pushing it (releases push it to GHCR: "Releases and deploying by digest"). Its
 `HEALTHCHECK` calls `/api/health` on loopback inside the container every 30 s; `docker compose ps` shows `healthy`
 once the app answers.
 
