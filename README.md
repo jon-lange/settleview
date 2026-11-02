@@ -51,6 +51,7 @@ tests/e2e/test_design_pass.py tests/e2e/test_fleet_ui.py` there), and only image
 Three tabs: **Play** (`/#play`), **Agents** (`/#agent`) and **Record** (`/#record`). Play is the main screen:
 
 - **Venue and window**: Kalshi (15 min) or Polymarket US (15 min or 5 min), picked at the top and remembered.
+  Kalshi's BTC perpetual (BTC Perps) is in the same picker, off unless you turn it on (`BTCFLOW_PERPS_ENABLED`).
 - **The call**: a plain "enter / wait" verdict for the current window.
 - **Price-to-beat chart**: live BTC against the window's strike, with the gap to the strike, signal chips, and odds
   and level overlays.
@@ -122,8 +123,10 @@ toolkit stays in `scripts/` and `docs/research/`.
 
 ## Requirements
 
-- **Python 3.13** (the project pins `>=3.13,<3.14`).
-- [uv](https://docs.astral.sh/uv/) for the environment and installs.
+- **Docker** with Compose (Docker Desktop on Windows and macOS, Docker Engine on Linux). This is the default way to
+  run Settleview and to develop it.
+- Without Docker only: **Python 3.13** (the project pins `>=3.13,<3.14`). [uv](https://docs.astral.sh/uv/) is needed
+  only to change a dependency pin (the hashed `uv.lock`).
 - A modern browser. A phone on the same network if you want phone access.
 - Optional: API keys for Kalshi and/or Polymarket US (only needed for sandbox or production trading and the account
   view; shadow mode needs no keys).
@@ -135,7 +138,7 @@ toolkit stays in `scripts/` and `docs/research/`.
 | The dev container (Linux, the production base image; any host with Docker, amd64 or arm64) | development: the full test suite with the browser tests in Chromium, the Postgres tests, the quality gates, research scripts, evals and the README screenshots (`.devcontainer/`, `deploy/dev/`) |
 | Linux (ubuntu-latest, x64) | CI: the full test suite, import contracts, the Docker image and `docker compose config` |
 | Linux, macOS, Windows (x64) | CI: the supervisor, `ops stop`, recorder and settings tests on all three |
-| Docker (Linux containers) | CI builds the image and smoke-starts every compose service's entry point |
+| Docker (Linux containers) | CI builds the image for amd64 and arm64, checks `compose.yaml`, smoke-starts the app's and the recorders' entry points, and runs a staging stack with a read-only smoke suite |
 | Postgres 17 | CI: the full test suite again with the database on Postgres, empty-to-head migrations on both databases, the SQLite → Postgres copy tool, and a backup and restore drill of the compose stack |
 
 Docker Desktop on Windows and macOS runs the same Linux containers; the dev container runs there too. A host install
@@ -150,10 +153,10 @@ on Azure Container Apps or AWS with managed Postgres; see docs/operations.md, "D
 Docker (Docker Desktop on Windows and macOS).
 
 ```bash
-git clone <this repo> settleview
+git clone https://github.com/jon-lange/settleview.git
 cd settleview
-cp .env.example .env                      # then edit it: keys, TZ=<your IANA zone>, BTCFLOW_ALLOWED_HOSTS=<this PC's LAN IP>
-python deploy/postgres/make_secrets.py    # one random password per database role, in ./secrets (git-ignored)
+cp .env.example .env                      # then edit it (settings only, no keys): TZ=<your IANA zone>, BTCFLOW_PUBLIC_URL=http://<this PC's LAN IP>:8000
+python deploy/postgres/make_secrets.py    # ./secrets (git-ignored): database passwords, and empty files for your API keys
 docker build -t settleview:local .
 docker compose up -d                      # app, postgres, rec-pm-quotes, rec-pm-settle, backup
 docker compose ps                         # every service "healthy" after a minute
@@ -162,7 +165,9 @@ docker compose exec app python -m btc_signal_engine.ops pair-pc   # once: a one-
 
 Open the link it prints (**http://localhost:8001/pair?code=...**) on this PC and press Pair: that browser is the PC
 from then on (no PIN; a port alone never is). Phones use **http://<this PC's LAN IP>:8000** with the PIN (set it on
-the PC's Phone access card; `BTCFLOW_PUBLIC_URL` in `.env` makes the card show that address). Kalshi key files are
+the PC's Phone access card; `BTCFLOW_PUBLIC_URL` in `.env` makes the card show that address). API keys (Polymarket
+US, Kalshi key ids, Anthropic, Telegram) go in their files in `./secrets`, never in `.env` (docs/operations.md,
+"Docker: secrets as files"); an empty file leaves that feature off, so shadow mode needs none. Kalshi key files are
 mounted read-only from a git-ignored `compose.override.yaml` (docs/operations.md, "Docker: key files"). Moving an
 existing SQLite install in: `ops migrate-sqlite-to-pg` (docs/operations.md).
 
@@ -254,7 +259,7 @@ about 30 minutes) for the research tools.
 ## Phone access
 
 1. In `.env`, set `BTCFLOW_API_HOST=0.0.0.0` and restart the app.
-2. On the PC, open the settings sheet (the gear on the Play screen) and use the **Phone access** card to set a 4–8
+2. On the PC, open the settings sheet (the gear on the Play screen) and use the **Phone access** card to set a 6–8
    digit PIN. Until a PIN is set, every request from another device is refused. The card shows the phone URL
    (`http://<PC LAN address>:8000/#play`). It only works from the PC itself.
 3. Allow the port through the firewall on your **private** network profile only. On Windows (PowerShell as
@@ -319,7 +324,8 @@ Guards that apply in every mode:
   enforces a series allow-list, a notional cap and a signing allow-list. The SDK's own retries are off, so our retry
   loop is the only one. Polymarket US calls use the official `polymarket_us` SDK for everything.
 
-There is no auto-approve and no bot: every order is a slide you make.
+There is no unbounded bot: every order is a slide you make, a proposal you approve, or an Auto agent's order inside
+the limits of a session you started.
 
 ## Architecture
 
@@ -335,6 +341,7 @@ A hexagonal layout, enforced by [import-linter](https://import-linter.readthedoc
   - `adapters/coinbase/`: the BTC trade feed and backfill.
   - `adapters/sqlite/`: storage and migrations, one code path for SQLite and Postgres (the name is historical).
   - `adapters/http/`: the FastAPI routes and phone access.
+  - `adapters/anthropic/`, `adapters/agent_sdk/`: Agent mode's model calls; `adapters/telegram/`: the Telegram bot.
 - `btc_signal_engine/bootstrap/`: settings and wiring.
 - `web/`: the front end (`web/views/play.js` is the Play screen and Record, `web/views/agent.js` the Agents tab).
 
@@ -353,7 +360,8 @@ it, and plain Docker Compose runs it with no other tooling. The first run builds
 runs reuse it:
 
 ```bash
-devcontainer up --workspace-folder .                    # the official CLI (@devcontainers/cli), headless
+devcontainer up --workspace-folder .                    # the official CLI (@devcontainers/cli), headless; with Docker
+                                                        # Compose v5 prefix BUILDX_BAKE_ENTITLEMENTS_FS=0 (docs/operations.md)
 devcontainer exec --workspace-folder . pytest           # the whole suite, browser tests and import contracts included
 devcontainer exec --workspace-folder . pre-commit run --all-files   # the quality gates
 
@@ -394,9 +402,9 @@ scripts/experiments.py report` (outputs go to new files under `data/research/` a
 ## Project status
 
 - Personal project, in active use by its author. Expect breaking changes.
-- Venues: Kalshi BTC 15-minute; Polymarket US BTC 15- and 5-minute.
-- Planned: renaming the repository and Python package (`btc_signal_engine`) to Settleview; adding the
-  trading settings to `.env.example`; moving the database to Postgres in its own container.
+- Venues: Kalshi BTC 15-minute (and, opt-in, Kalshi's BTC perpetual); Polymarket US BTC 15- and 5-minute.
+- Planned: renaming the Python package (`btc_signal_engine`) to Settleview; adding the trading settings to
+  `.env.example`.
 
 ## Contributing
 
