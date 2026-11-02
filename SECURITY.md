@@ -10,7 +10,8 @@ Include what you found, how to reproduce it, and what an attacker could do with 
 maintained in spare time, so there is no fixed response time, but reports are taken seriously and you will be
 credited in the advisory unless you ask not to be.
 
-There are no versioned releases; fixes go to the default branch.
+Releases are tagged `vX.Y.Z` (see the repository's Releases page). Fixes land on the default branch and ship in the
+next release.
 
 ## Scope and design assumptions
 
@@ -24,7 +25,8 @@ Settleview is a **local, single-user app**. Read reports in light of how it is m
   (compose profile `tailscale`, Tailscale Serve inside your tailnet, never Funnel); proxy headers are applied only
   from the sidecar's fixed address (`BTCFLOW_FORWARDED_ALLOW_IPS`). On the LAN port the PIN and session cookie travel
   in clear text. **Never expose it to the internet** (no port forwarding, no public reverse proxy, no Funnel).
-- **Keys stay local.** Venue API keys are read from your `.env` and from key files on your disk. They are never
+- **Keys stay local.** API keys are read from secret files in `./secrets` (Docker) or your `.env` (a host install
+  without Docker), and Kalshi's private keys from key files on your disk. They are never
   written to the database, logged, or sent to the browser. Never commit `.env` or `*.pem` files.
 
 In scope, for example:
@@ -46,7 +48,7 @@ Out of scope:
 ## Threat model: the trading audit
 
 `trading_audit` records every approval, order, refusal, fill and limit change with who did it (`pc`, `phone:...`,
-`agent:...`, `system`). STRIDE note for it (the rest of the threat model is planned with P3 item 7):
+`agent:...`, `system`). STRIDE note for it (the rest of the threat model is not written up yet):
 
 - **Tampering.** On Postgres the app's role may only `SELECT` and `INSERT` audit rows; the table, its trigger and the
   schema `app` belong to a no-login role (`deploy/postgres/audit.sql`), and a trigger refuses `UPDATE`, `DELETE` and
