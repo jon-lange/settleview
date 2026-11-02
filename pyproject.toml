@@ -83,7 +83,7 @@ evals = [
   "jsonpatch==1.35",  # pulled by inspect-ai; pinned
   "jsonpointer==3.2.1",  # pulled by jsonpatch; pinned
   "jsonpath-ng==1.11.0",  # pulled by inspect-ai; pinned
-  "platformdirs==4.13.4",  # pulled by inspect-ai; pinned
+  "platformdirs==4.13.5",  # pulled by inspect-ai; pinned
   "soupsieve==3.0.3",  # pulled by beautifulsoup4 (inspect-ai); pinned
   "zipp==4.1.1",  # pulled by inspect-ai; pinned
 ]
