@@ -5,6 +5,20 @@ writes this file from the [Conventional Commits](https://www.conventionalcommits
 release (CONTRIBUTING.md); don't edit it by hand. Below the releases is the hand-written history before release-please
 (to 2026-11-01, in the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format).
 
+## 0.1.0 (2026-11-02)
+
+
+### Features
+
+* **evals:** agent evals run on Inspect AI instead of the in-repo harness ([8a06a1d](https://github.com/jon-lange/settleview/commit/8a06a1d7ca0e267f97d77bb502d5be47e84576fa))
+
+
+### Bug Fixes
+
+* **ci:** run the dev container as the host uid under Compose; lint imports without a cache ([881f1db](https://github.com/jon-lange/settleview/commit/881f1dbe0f207474cba59fcba2c8c2dd50b04962))
+* **evals:** start Inspect from this interpreter, not the first `inspect` on PATH ([e3d3650](https://github.com/jon-lange/settleview/commit/e3d36503b42228c2dd12dba19b2dd3262d49d27b))
+* **telemetry:** read recorder coverage on the first export after a reboot ([6f6571a](https://github.com/jon-lange/settleview/commit/6f6571a913b694a7fecfcfda9223694d4f59a460))
+
 ## [Before release-please] (history to 2026-11-01)
 
 ### Added
