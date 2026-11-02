@@ -45,8 +45,11 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/build/pyproject.toml \
 # The docker CLI and its compose plugin (Debian's) for tests/deploy/test_compose.py, which only resolves compose files
 # (`docker compose config`): no daemon and no socket are ever given to this container. git for pre-commit (the quality
 # gates, .pre-commit-config.yaml); the bind-mounted checkout belongs to the host user, so git trusts /app explicitly.
+# shellcheck (Debian trixie's 0.10.0, the shellcheck-py hook's version) on PATH for the actionlint hook, which lints
+# each workflow `run:` script with the shellcheck it finds there and silently skips that check without one (the
+# GitHub runner has it, so CI caught SC2086 that the dev container's run had passed).
 # hadolint ignore=DL3008
-RUN apt-get update && apt-get install -y --no-install-recommends docker-cli docker-compose git \
+RUN apt-get update && apt-get install -y --no-install-recommends docker-cli docker-compose git shellcheck \
     && rm -rf /var/lib/apt/lists/* \
     && git config --system --add safe.directory /app && git config --system --add safe.directory /git
 

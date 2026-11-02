@@ -202,7 +202,9 @@ jobs:
 
       # The OpenTelemetry tests, none may be skipped (the scrubbing tests fail if a
       # token, key, cookie, signature or query secret reaches an exporter; the GenAI one runs the bundled Claude Code
-      # CLI against a local fake API); then the whole suite.
+      # CLI against a local fake API); then the whole suite. The collector end-to-end tests (marker collector_e2e) are
+      # left out by name, not skipped: they run only beside their throwaway collector and OpenObserve
+      # (tests/telemetry/collector_e2e.compose.yaml).
       # The CLI builds the service from a Dockerfile it writes outside the build context (its features layer, in its
       # temp folder). Compose builds through Buildx Bake, which refuses to read a file outside the context without an
       # `--allow=fs.read=...` entitlement that neither Compose nor the CLI passes; BUILDX_BAKE_ENTITLEMENTS_FS=0 is
@@ -217,7 +219,7 @@ jobs:
           push: never
           runCmd: |
             set -e
-            pytest tests/telemetry -rs > /tmp/otel.txt 2>&1 || { cat /tmp/otel.txt; exit 1; }
+            pytest tests/telemetry -m "not collector_e2e" -rs > /tmp/otel.txt 2>&1 || { cat /tmp/otel.txt; exit 1; }
             cat /tmp/otel.txt
             if grep -q SKIPPED /tmp/otel.txt; then echo "OpenTelemetry tests were skipped"; exit 1; fi
             pytest
@@ -342,7 +344,8 @@ jobs:
       - name: Check the Swarm stack publishes no PC-only port
         run: |
           for profile in "" "--profile observability" "--profile tailscale"; do
-            python3 deploy/swarm/render_stack.py $profile --out /tmp/settleview-stack.json
+            read -ra args <<< "$profile"
+            python3 deploy/swarm/render_stack.py "${args[@]}" --out /tmp/settleview-stack.json
             docker stack config -c /tmp/settleview-stack.json > /tmp/settleview-stack.yaml
             if grep -En 'published: "?(8001|8002|5080)"?$' /tmp/settleview-stack.yaml; then
               echo "the Swarm stack publishes a PC-only port"; exit 1

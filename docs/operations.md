@@ -1053,7 +1053,7 @@ pre-commit prints the hook as Skipped).
 | `ruff-check` | Ruff 0.17.1 (astral-sh/ruff-pre-commit; the `dev` extra pins the same) | any finding of the rules in `pyproject.toml` `[tool.ruff]`: pyflakes, pycodestyle errors, bugbear, pyupgrade, bandit (`S`), async, simplify |
 | `shellcheck` | ShellCheck 0.10.0 (shellcheck-py) | a warning or error in a shell script (`deploy/**/*.sh`) |
 | `hadolint-docker` | hadolint 2.12.0 (official Docker hook; `ghcr.io/hadolint/hadolint:v2.12.0@sha256:...`; skipped in the dev container) | a warning or error in `Dockerfile` or `deploy/dev/Dockerfile` |
-| `actionlint` | actionlint 1.7.12 (official hook) | an error in a workflow under `.github/workflows/` |
+| `actionlint` | actionlint 1.7.12 (official hook) | an error in a workflow under `.github/workflows/`, including a ShellCheck finding in a `run:` script: actionlint uses the `shellcheck` on PATH (the dev image's Debian 0.10.0, the GitHub runner's) and skips that check without one, so a host without ShellCheck checks less than the dev container and CI |
 | `lint-imports` | import-linter 2.15 (uv.lock's version) | a broken contract in `.importlinter` (the layers; no I/O in domain and application; the Kalshi SDK only in the adapters; the supervisor never loads the app) |
 
 `tests/test_precommit_config.py` checks that the hook repositories are pinned by commit and that each tool's version
