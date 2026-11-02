@@ -46,12 +46,21 @@ def _mounts(svc: dict) -> dict[str, dict]:
 
 def test_devcontainer_uses_the_dev_compose_service_and_forwards_no_port():
     dc = _devcontainer()
-    assert dc["dockerComposeFile"] == ["../deploy/dev/compose.yaml"]
+    assert dc["dockerComposeFile"] == ["../deploy/dev/compose.yaml", "compose.yaml"]  # the service, then the overlay
     assert dc["service"] == "dev" and dc["runServices"] == ["dev"] and dc["workspaceFolder"] == "/app"
     assert dc["overrideCommand"] is True  # the service's own command runs the suite once and exits
     assert dc["remoteUser"] == "dev" and dc["updateRemoteUserUID"] is True  # the host user's uid on Linux
     assert not {"forwardPorts", "appPort", "portsAttributes", "mounts", "runArgs"} & set(dc)
     assert dc["otherPortsAttributes"] == {"onAutoForward": "ignore"}
+
+
+def test_the_overlay_only_makes_up_run_the_image_the_cli_built():
+    """`updateRemoteUserUID` points `up` at an image with `dev` remapped to the host uid; the base file's
+    `pull_policy: build` would rebuild the service under that name (uid 10001 again: CI could not write the checkout)."""
+    overlay = (ROOT / ".devcontainer" / "compose.yaml").read_text(encoding="utf-8")
+    body = [line for line in overlay.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    assert body == ["services:", "  dev:", "    pull_policy: never"]
+    assert "pull_policy: build" in DEV_COMPOSE.read_text(encoding="utf-8")  # plain `docker compose run` builds first
 
 
 def test_own_project_no_port_no_env_file():

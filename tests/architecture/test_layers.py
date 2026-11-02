@@ -9,4 +9,5 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_layer_contracts_hold(monkeypatch):
     monkeypatch.chdir(ROOT)
-    assert lint_imports(config_filename=str(ROOT / ".importlinter")) == 0
+    # no_cache: as the pre-commit hook (`lint-imports --no-cache`), nothing is written into the checkout.
+    assert lint_imports(config_filename=str(ROOT / ".importlinter"), no_cache=True) == 0

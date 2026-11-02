@@ -937,8 +937,11 @@ wrapper script; the dev container is two standard files:
   [`@devcontainers/cli`](https://github.com/devcontainers/cli) (`devcontainer up --workspace-folder .`, then
   `devcontainer exec --workspace-folder . <cmd>`). CI's `test` job runs the suite in it with the official
   `devcontainers/ci` action. It uses the `dev` service below (`dockerComposeFile`), keeps it running, maps the image's
-  `dev` user to the host user on Linux (`updateRemoteUserUID`) and forwards no port. With Docker Compose v5 (builds
-  through Buildx Bake) the CLI's build needs `BUILDX_BAKE_ENTITLEMENTS_FS=0` in its environment: the CLI writes its
+  `dev` user to the host user on Linux (`updateRemoteUserUID`) and forwards no port. Its overlay,
+  `.devcontainer/compose.yaml`, sets `pull_policy: never`: the CLI builds the image and the remapped one on top, and
+  the base file's `pull_policy: build` would make its `up` rebuild the service under the remapped image's name (the
+  container would run as uid 10001 and could not write a checkout owned by another uid, as on a GitHub runner). With
+  Docker Compose v5 (builds through Buildx Bake) the CLI's build needs `BUILDX_BAKE_ENTITLEMENTS_FS=0` in its environment: the CLI writes its
   features Dockerfile outside the build context and Bake refuses to read it otherwise (`--allow=fs.read`, Buildx's
   docs); CI's `test` job sets it on that step.
 - `deploy/dev/compose.yaml` (plain Docker Compose): the services, mounts and profiles; also the no-tooling way in,

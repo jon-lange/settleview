@@ -9,7 +9,8 @@
 // same file runs without any of this tooling: `docker compose -f deploy/dev/compose.yaml run --rm dev pytest`.
 {
   "name": "Settleview dev",
-  "dockerComposeFile": ["../deploy/dev/compose.yaml"],
+  // The service file, then this folder's overlay (compose.yaml: `up` runs the image the CLI built and remapped).
+  "dockerComposeFile": ["../deploy/dev/compose.yaml", "compose.yaml"],
   "service": "dev",
   "runServices": ["dev"],
   "workspaceFolder": "/app",

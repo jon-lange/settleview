@@ -1,0 +1,9 @@
+# The Dev Containers overlay on deploy/dev/compose.yaml (devcontainer.json lists both in `dockerComposeFile`; Compose
+# merges them in that order). The CLI builds the `dev` image itself, then, on Linux (`updateRemoteUserUID`), builds an
+# image on top of it with `dev` remapped to the host uid/gid and points the service at that image for `up`. The base
+# file's `pull_policy: build` (right for plain `docker compose run`) would make that `up` build the service again and
+# tag the result with the remapped image's name, so the container would run as uid 10001 and could not write the
+# checkout where the host user is someone else (a GitHub runner, uid 1001). Here `up` uses the image the CLI made.
+services:
+  dev:
+    pull_policy: never
