@@ -81,7 +81,7 @@ evals = [
   "brotli==1.2.0",  # pulled by httpx[brotli] (inspect-ai); pinned
   "brotlicffi==1.2.1.0",  # pulled by httpx[brotli]; pinned
   "jsonpatch==1.35",  # pulled by inspect-ai; pinned
-  "jsonpointer==3.2.1",  # pulled by jsonpatch; pinned
+  "jsonpointer==3.3",  # pulled by jsonpatch; pinned
   "jsonpath-ng==1.11.0",  # pulled by inspect-ai; pinned
   "platformdirs==4.13.5",  # pulled by inspect-ai; pinned
   "soupsieve==3.0.3",  # pulled by beautifulsoup4 (inspect-ai); pinned
