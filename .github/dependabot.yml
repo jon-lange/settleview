@@ -1,0 +1,43 @@
+# Dependabot version updates (security updates are separate and are not delayed by the cooldown).
+# cooldown: a release must be 14 days old before Dependabot proposes it, matching the project's rule that pinned
+# versions are at least two weeks old (AGENTS.md). Commit messages follow Conventional Commits for release-please.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "build(deps)"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "ci(deps)"
+
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /deploy/dev
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: "build(deps)"
