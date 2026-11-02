@@ -1,8 +1,8 @@
 # Publishing (for the owner)
 
-Since 2026-11-01 the private GitHub repository (`origin`, `jon-lange/settleview`) is the source of truth, and its
-`main` is the project's history. Going public later means flipping the repository's visibility on GitHub after the
-checklist below; there is no separate public copy to build.
+Since 2026-11-01 the GitHub repository (`origin`, `jon-lange/settleview`) is the source of truth, and its `main` is
+the project's history. It started private; going public meant flipping its visibility on GitHub after the checklist
+below (kept as the record of what was checked, and for re-checking). There is no separate public copy.
 
 ## How a change reaches GitHub
 
@@ -66,7 +66,7 @@ Then, with the config in `.gitleaks.toml` (gitleaks' default rules, extended):
 private"* and *"Block command line pushes that expose my email"*: GitHub then refuses any push whose commits carry the
 private address. Commits use the no-reply address (step 2 above).
 
-**Tags**: release tags are made by release-please on GitHub (docs/operations.md, "Releases"); nobody pushes a tag by
+**Tags**: release tags are made by release-please on GitHub (docs/operations.md, "Releases and deploying by digest"); nobody pushes a tag by
 hand, and there is no local-only tag to protect.
 
 `git commit --no-verify` / `git push --no-verify` skip the hooks. Don't, except for a reviewed false positive, and say
@@ -120,7 +120,7 @@ Search the tracked files and the pushed history and fix what you find:
     client order and trigger ids replaced consistently; prices, sizes and timestamps are real).
   - No hard-coded bot name: the Telegram bot's username is `BTCFLOW_TELEGRAM_BOT_USERNAME` or Telegram's `getMe`.
   - Tests use made-up people and bots (`@alex_example`, `@example_settleview_bot`).
-  - Known exception, reviewed: `evals/datasets/golden/frames/*.jsonl` are redacted real agent wakes (the export's
+  - Known exception, reviewed: `evals/datasets/frames/*.jsonl` are redacted real agent wakes (the export's
     deny-list scan); their text includes per-rule $1 tallies the agent wrote. Re-check before adding new frames.
 
 ### 3. Check what is tracked
@@ -128,8 +128,6 @@ Search the tracked files and the pushed history and fix what you find:
 - `git status --ignored`: `.env`, `*.pem`, `data/`, `*.log`, `*.egg-info/` and any `.venv*/` left from before the dev
   container must show as ignored.
 - `git ls-files`: nothing unexpected (no databases, logs, key files, screenshots with account data).
-- The `Dockerfile` uses Python 3.12, but the project needs 3.13. Fix or remove it and `compose.yaml` before
-  publishing.
 - **Licence** (decided 2026-11-01): PolyForm Noncommercial 1.0.0 (`LICENSE`, the official text with the line
   `Required Notice: Copyright (c) 2026 Jon Lange`; `pyproject.toml` `license = "PolyForm-Noncommercial-1.0.0"`, the
   SPDX id; the image label says the same). Source-available, not OSI open source: free for noncommercial use;
@@ -161,11 +159,9 @@ links below.
 
 ## Later
 
-- Rename the repository folder and Python package from `btc-flow-engine` / `btc_signal_engine` to `settleview` (the
-  distribution name in `pyproject.toml` is already `settleview`). Update imports, `.importlinter`, the tests, the
-  Dockerfile and the docs together.
-- Add screenshots to `docs/images/` (light and dark, phone and desktop) and link them from the README. Take them in
-  shadow mode, and make sure no balance, position, order id, LAN address or PIN is visible.
+- Rename the Python package from `btc_signal_engine` to `settleview` (the GitHub repository and the distribution name
+  in `pyproject.toml` are already `settleview`). Update imports, `.importlinter`, the tests, the Dockerfile and the
+  docs together.
 
 ## Support links (at the public flip; user 2026-11-01)
 
