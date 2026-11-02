@@ -106,7 +106,7 @@ Azure Monitor, CloudWatch or any OTLP backend in the cloud ([docs/operations.md]
 SLO alerts as code: 17 OpenObserve alerts (feeds per venue, the database writer, dead letters, dropped venue data,
 event-loop stalls, refused approvals, agent spend vs budget, recorder coverage, restarts, a silent service, a failed
 migration) reach your phone through a separate Telegram alerts bot, each with a runbook link, once per incident and
-once when resolved ([Alerting](docs/operations.md#alerting)).
+once when resolved ([Alerting](docs/operations.md#alerting-slos-on-openobserve)).
 
 The research-phase screens (Coach, strategy lab, rulesets, replay and others), their API routes and the unbounded
 bots behind them have been removed from the app; their history stays in the database, and the offline research
