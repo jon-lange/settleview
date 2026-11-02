@@ -137,7 +137,6 @@ No persistent learning memory yet (plan L0's memory part comes later): just the 
 |---|---|---|
 | `GET /api/agent/sessions/{id}` | | `{ok, session: View, row: Row, pending_proposals: [Proposal], positions: [Position], server_ms}` |
 | `POST .../stop` (PC and phone) | | `{ok, session}` once every order of the session in flight (its own or a rule's) is answered and recorded (at most 30 s); the others keep running; `no_session` when it is not live |
-
 | `POST .../pause` (PC and phone) | | `{ok, session}`; `not_running` |
 | `POST .../resume` (PC; phone types `{"confirm": "RESUME"}`) | `{confirm?}` | `{ok, session}`; `not_paused`, `cannot_resume` (kill switch, mode change, global limit), `confirm_required` |
 | `POST .../note` (PC and phone) | `{text}` (1-1000) | `{ok, note: {id, session_id, ts, text, by, state: "queued", delivered_ts}}` |
