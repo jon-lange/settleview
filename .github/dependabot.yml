@@ -1,6 +1,10 @@
-# Dependabot version updates (security updates are separate and are not delayed by the cooldown).
-# cooldown: a release must be 14 days old before Dependabot proposes it, matching the project's rule that pinned
-# versions are at least two weeks old (AGENTS.md). Commit messages follow Conventional Commits for release-please.
+# Dependabot version updates (security updates are separate and are not delayed by the cooldown or the groups).
+# - cooldown: a release must be 14 days old before Dependabot proposes it, matching the project's rule that pinned
+#   versions are at least two weeks old (AGENTS.md).
+# - groups: one weekly PR per ecosystem for routine (minor/patch) bumps instead of one PR per package.
+# - ignore semver-major (and the Python interpreter's minor, e.g. 3.13 -> 3.14): those are deliberate, tested
+#   upgrades, not routine bumps.
+# Commit messages follow Conventional Commits for release-please.
 version: 2
 updates:
   - package-ecosystem: uv
@@ -9,9 +13,15 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    groups:
+      python-packages:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "build(deps)"
-    open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
     directory: /
@@ -19,6 +29,13 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "ci(deps)"
 
@@ -30,6 +47,15 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    groups:
+      docker-images:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "python"
+        update-types: ["version-update:semver-minor"]
     commit-message:
       prefix: "build(deps)"
 
@@ -39,5 +65,12 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    groups:
+      compose-images:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "build(deps)"
