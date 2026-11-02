@@ -79,7 +79,7 @@ evals = [
   "botocore==1.43.106",  # pulled by boto3; pinned
   "s3transfer==0.19.2",  # pulled by boto3; pinned
   "brotli==1.2.0",  # pulled by httpx[brotli] (inspect-ai); pinned
-  "brotlicffi==1.2.0.2",  # pulled by httpx[brotli]; pinned
+  "brotlicffi==1.2.1.0",  # pulled by httpx[brotli]; pinned
   "jsonpatch==1.35",  # pulled by inspect-ai; pinned
   "jsonpointer==3.2.1",  # pulled by jsonpatch; pinned
   "jsonpath-ng==1.11.0",  # pulled by inspect-ai; pinned
