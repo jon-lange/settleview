@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # gitleaks scans every commit of the branch, not only the checked-out tree
           persist-credentials: false
@@ -67,7 +67,7 @@ jobs:
     env:
       TRIVY_VERSION: v0.76.0  # the Trivy release the scans run (setup-trivy installs it; the database is cached)
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -193,7 +193,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # The action uses an installed `devcontainer` and otherwise installs the newest 0.x: pin the CLI here instead
       # (2026-08-31, older than two weeks when adopted; the version the local headless proof ran).
@@ -245,7 +245,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       BTCFLOW_TEST_DATABASE_URL: postgresql://postgres:ci-only-not-a-secret@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
@@ -293,7 +293,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
@@ -325,7 +325,7 @@ jobs:
     env:
       GIT_SHA: ${{ github.sha }}  # the image's revision label (compose.yaml's build arg reads it too)
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Throwaway passwords for this run (the same script a user runs once); nothing is printed but file names.
       - name: Make the secret files (Postgres, OpenObserve, OTLP headers)
@@ -452,7 +452,7 @@ jobs:
     env:
       SETTLEVIEW_IMAGE: settleview:ci
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Build the image and the dev image
         run: |
