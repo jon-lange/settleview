@@ -17,6 +17,10 @@ adapters/sqlite/research_tables.py). Moved from scripts/record_polymarket_us_ws.
     * trades arriving with no quote (MARKET_DATA_LITE) since for TRADES_NO_BOOK_S (60 s), or no quote at all for
       NO_BOOK_S (120 s) while trades arrived in that time, is BOOK SILENCE: a WARNING naming the lane and the
       reason, and the lane reconnects (fresh socket, fresh subscriptions);
+    * a connection that has already received data and then gets no message of any kind (quote or trade) for
+      ALL_QUIET_S (30 s) is ALL QUIET: the same warning and reconnect, instead of sitting on a dead socket until the
+      server's 1001 close at the next window boundary. Before a connection's first message this never fires (total
+      silence from the start is the stall watchdog's, below);
     * VENUE_OUTAGE_AFTER (3) book silences in a row with no quote on any of those connections is a venue-side book
       outage: said once at WARNING, the lane keeps reconnecting with a doubling wait (up to BOOK_SILENT_BACKOFF_MAX_S)
       and never spins (each try lasts at least TRADES_NO_BOOK_S). Trades are still recorded meanwhile, so the app's
@@ -79,6 +83,7 @@ SPANS = {"5m": 300, "15m": 900, "1h": 3600}
 RECONNECT_S = 5.0
 TRADES_NO_BOOK_S = 60  # trades but no quote for this long on one connection: book silence (reconnect)
 NO_BOOK_S = 120  # no quote at all for this long while trades arrived: book silence
+ALL_QUIET_S = 30  # no message of any kind for this long on a connection that already had data: reconnect
 VENUE_OUTAGE_AFTER = 3  # book silences in a row without a single quote: the venue's book feed is down
 BOOK_SILENT_BACKOFF_MAX_S = 120.0  # the longest wait between reconnects during a book silence
 STALL_EXIT_S = 600  # no quote from any lane for this long, and no venue outage: exit non-zero (restart)
@@ -276,6 +281,11 @@ def book_silence(seen: dict, now_ms: int) -> str | None:
     if (now_ms - last_book > NO_BOOK_S * 1000 and seen["trade_ms"] is not None
             and now_ms - seen["trade_ms"] <= NO_BOOK_S * 1000):
         return f"no quotes for {(now_ms - last_book) / 1000:.0f} s while trades arrived (limit {NO_BOOK_S} s)"
+    # All quiet: a connection that already had data and then received nothing at all. Before its first message,
+    # started_ms is not a message: total silence from the start is the stall watchdog's (STALL_EXIT_S).
+    last_msg = max((t for t in (seen["book_ms"], seen["trade_ms"]) if t is not None), default=None)
+    if last_msg is not None and now_ms - last_msg > ALL_QUIET_S * 1000:
+        return f"all quiet: no message of any kind for {(now_ms - last_msg) / 1000:.0f} s (limit {ALL_QUIET_S} s)"
     return None
 
 
