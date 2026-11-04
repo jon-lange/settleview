@@ -127,6 +127,66 @@ def test_book_silence_rules():
     assert rec.book_silence(s, 500_000) is None
 
 
+def test_all_quiet_rule():
+    q = rec.ALL_QUIET_S * 1000
+    # quotes then nothing at all: the newest message of either kind counts
+    s = {"started_ms": 0, "books": 3, "book_ms": 5_000, "unbooked_ms": None, "trade_ms": None, "trades": 0}
+    assert rec.book_silence(s, 5_000 + q) is None  # at the limit, not over
+    assert rec.book_silence(s, 5_000 + q + 1_000) == (
+        f"all quiet: no message of any kind for {rec.ALL_QUIET_S + 1} s (limit {rec.ALL_QUIET_S} s)")
+    s["trade_ms"] = 20_000  # a later trade is a message: quiet counts from it (and is under the trades-no-book limits)
+    s["unbooked_ms"] = 20_000
+    assert rec.book_silence(s, 20_000 + q) is None
+    assert "all quiet" in rec.book_silence(s, 20_000 + q + 1_000)
+    # trades only (no quote yet) then nothing: also all quiet, before NO_BOOK_S
+    s = {"started_ms": 0, "books": 0, "book_ms": None, "unbooked_ms": 1_000, "trade_ms": 1_000, "trades": 1}
+    assert "all quiet" in rec.book_silence(s, 1_000 + q + 1_000)
+    # steady messages: never all quiet
+    s = {"started_ms": 0, "books": 500, "book_ms": 499_000, "unbooked_ms": None, "trade_ms": 498_000, "trades": 500}
+    assert rec.book_silence(s, 500_000) is None
+    # nothing received yet on this connection: never all quiet, however long (the stall watchdog's job)
+    s = {"started_ms": 0, "books": 0, "book_ms": None, "unbooked_ms": None, "trade_ms": None, "trades": 0}
+    assert rec.book_silence(s, 100 * q) is None
+
+
+def test_steady_messages_keep_one_connection(tmp_path, caplog):
+    v = Venue(end_s=200)
+    with caplog.at_level(logging.WARNING):
+        quotes(tmp_path / rec.DB_NAME, v)
+    assert v.connects == 1 and "all quiet" not in caplog.text
+
+
+def test_a_socket_gone_all_quiet_mid_window_reconnects(tmp_path, caplog):
+    """Quotes and trades flow, then the socket goes fully silent mid-window (nothing until the server's 1001 close at
+    the next boundary, live): the lane reconnects after ALL_QUIET_S instead of waiting for that close."""
+    db = tmp_path / rec.DB_NAME
+    v = Venue(end_s=150)
+    v.at[NOW + 20] = {"books": False, "trades": False}
+    v.at[NOW + 100] = {"books": True, "trades": True}
+    closed_at: list[float] = []
+    markets = v.markets
+
+    def tracked():
+        ws = markets()
+        close = ws.close
+
+        async def close_and_note():
+            closed_at.append(v.t)
+            await close()
+
+        ws.close = close_and_note
+        return ws
+
+    v.markets = tracked
+    with caplog.at_level(logging.WARNING):
+        state = quotes(db, v)
+    assert "5m lane: book silence on a live connection (all quiet: no message of any kind for" in caplog.text
+    assert v.connects >= 2 and v.sockets[0].closed
+    assert NOW + 20 + rec.ALL_QUIET_S <= closed_at[0] <= NOW + 20 + rec.ALL_QUIET_S + 3  # at the limit, not later
+    assert state["5m"]["venue_outage"] is False
+    assert state["5m"]["seen"]["books"] > 0  # the fresh connection records again once the venue resumes
+
+
 def test_trades_without_quotes_reconnect_the_lane(tmp_path, caplog):
     db = tmp_path / rec.DB_NAME
     v = Venue(end_s=200)
