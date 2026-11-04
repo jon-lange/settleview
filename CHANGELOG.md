@@ -5,6 +5,19 @@ writes this file from the [Conventional Commits](https://www.conventionalcommits
 release (CONTRIBUTING.md); don't edit it by hand. Below the releases is the hand-written history before release-please
 (to 2026-11-01, in the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format).
 
+## [0.1.1](https://github.com/jon-lange/settleview/compare/v0.1.0...v0.1.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **recorders:** reconnect pm-quotes on all-quiet sockets ([#19](https://github.com/jon-lange/settleview/issues/19)) ([71fae62](https://github.com/jon-lange/settleview/commit/71fae626398ed5e7e10c4024e76a363d8da327ce))
+* **release:** create the SBOM output directory before Trivy writes it ([c5acfd2](https://github.com/jon-lange/settleview/commit/c5acfd2cabe150f401994203efa169e3e8090611))
+
+
+### Documentation
+
+* prepare README and docs for public release ([#17](https://github.com/jon-lange/settleview/issues/17)) ([0293b57](https://github.com/jon-lange/settleview/commit/0293b577e73fe10f8d2d213208eb58dee4e5b1f0))
+
 ## 0.1.0 (2026-11-02)
 
 
