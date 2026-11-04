@@ -8,7 +8,7 @@ Reusable SQL: `scripts/research/flag_gap_windows.sql` (read-only against `resear
 
 ## Cause (engineering)
 
-`book_silence()` only fired while trades kept arriving. A markets socket that went fully silent mid-window was not reconnected until Polymarket's server 1001 "going away" at the next window boundary. Fix (branch `fix/recorder-all-quiet-reconnect`, not deployed): reconnect when a connection that already received data gets no message of any kind for `ALL_QUIET_S` (30 s).
+`book_silence()` only fired while trades kept arriving. A markets socket that went fully silent mid-window was not reconnected until Polymarket's server 1001 "going away" at the next window boundary. Fix (branch `fix/recorder-all-quiet-reconnect`, not deployed): reconnect when a connection that already received data gets no quote or trade message for `ALL_QUIET_S` (30 s).
 
 ## Snapshot used for the flag list
 
@@ -17,6 +17,6 @@ Reusable SQL: `scripts/research/flag_gap_windows.sql` (read-only against `resear
 - Flagged when `missing_seconds > 60` or `gap_kind = no_quotes`.
 - Date range of flagged windows: **2026-10-29T11:00:00Z → 2026-11-04T18:15:00Z** (see CSV).
 - Counts in that snapshot: **103 × 15m**, **75 × 1h** (178 total).
-- The CSV is kept **out of the public tree** (operational snapshot) at `/workspace/reports/recorder-gap-windows.csv` on the agent box; regenerate anytime with the SQL above.
+- The CSV is kept **out of the public tree** (operational snapshot); regenerate anytime with the SQL above.
 
 No account data, keys, balances, or hostnames are in the CSV.
