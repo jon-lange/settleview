@@ -451,7 +451,7 @@ services:
   # observability up -d`; `docker compose up -d` alone never starts it. Single node, local disk (its own volume), 14 days
   # of data. An exact release (v1.1.1, 2026-10-16), never "latest". AGPL-3.0, run unmodified (docs/PUBLISHING.md).
   openobserve:
-    image: openobserve/openobserve:v1.1.1
+    image: openobserve/openobserve:v1.1.2
     profiles: [observability]
     restart: unless-stopped
     logging: *logging
