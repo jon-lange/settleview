@@ -14,7 +14,7 @@ dependencies = [
   "pydantic-settings==2.16.2",
   "sqlalchemy==2.1.6",
   "alembic==1.20.1",
-  "ccxt==4.5.64",
+  "ccxt==4.5.90",
   "httpx==0.28.1",
   "websockets==17.3",
   "numpy==2.5.4",
@@ -30,17 +30,17 @@ dependencies = [
   "aiohttp==3.14.5",  # the SDK's HTTP client; backend.py relies on its private _retry_connection switch
   "aiohttp-retry==2.9.1",  # imported by the SDK; unused (retries=None)
   "tzdata==2026.6",  # IANA time zones for zoneinfo (Windows has no system database)
-  "anthropic==1.15.0",  # Agent mode: official Anthropic SDK (user-approved 2026-10-30); runs on httpx2
+  "anthropic==1.17.0",  # Agent mode: official Anthropic SDK (user-approved 2026-10-30); runs on httpx2
   "mcp==2.3.0",  # Agent mode: official MCP SDK for the stdio server (user-approved 2026-10-30)
-  "claude-agent-sdk==0.2.168",  # Agent mode: the in-app agent's model loop runs on the Claude Agent SDK (user-approved 2026-10-30; newest release older than 2 weeks). Where a platform has no wheel, pip builds the sdist, which bundles no CLI: set BTCFLOW_AGENT_CLI_PATH
+  "claude-agent-sdk==0.2.174",  # Agent mode: the in-app agent's model loop runs on the Claude Agent SDK (user-approved 2026-10-30; newest release older than 2 weeks). Where a platform has no wheel, pip builds the sdist, which bundles no CLI: set BTCFLOW_AGENT_CLI_PATH
   "httpx2==2.13.1",  # pulled by anthropic and mcp; pinned so a resolve never picks a release under two weeks old
   "httpcore2==2.13.1",  # httpx2 pins this to its own version
-  "sse-starlette==3.5.0",  # pulled by mcp; pinned for the same reason
+  "sse-starlette==3.5.1",  # pulled by mcp; pinned for the same reason
   "python-telegram-bot==22.8",  # U11 Telegram bot (user-approved 2026-10-30): async, long polling only; runs on httpx 0.28
   "opentelemetry-api==1.45.1",  # pulled by fastapi, anthropic and mcp; pinned (the SDK and exporters are the `otel` extra)
   "tenacity==9.2.1",  # retry and reconnect loops (adapters/backoff.py; owner-approved 2026-11-01; 9.2.1 of 2026-10-07 is the newest release older than two weeks); pure Python, no dependencies
   "urllib3==2.8.0",  # pulled by kalshi_python_async and requests; pinned at the release that fixes CVE-2026-97687/97689
-  "setuptools==84.1.0",  # pulled by ccxt at run time; pinned (>= 78.1.1 for CVE-2025-47273; 84.2.x is under two weeks old)
+  "setuptools==84.2.1",  # pulled by ccxt at run time; pinned (>= 78.1.1 for CVE-2025-47273; 84.2.x is under two weeks old)
 ]
 
 [project.optional-dependencies]
@@ -63,9 +63,9 @@ otel = [
   "opentelemetry-instrumentation-asyncio==0.66b1",
   "opentelemetry-instrumentation-logging==0.66b1",
   "protobuf==7.36.2",  # pulled by opentelemetry-proto; pinned
-  "googleapis-common-protos==1.75.5",  # pulled by the OTLP exporter; pinned
+  "googleapis-common-protos==1.76.0",  # pulled by the OTLP exporter; pinned
   "wrapt==2.5.1",  # pulled by the instrumentations; pinned
-  "asgiref==3.12.1",  # pulled by the ASGI instrumentation; pinned
+  "asgiref==3.13.0",  # pulled by the ASGI instrumentation; pinned
 ]
 # Agent evals (evals/; docs/plans/2026-10-31-1900-agent-evals-plan.md): Inspect AI, the UK AI Security Institute's
 # eval framework (user-approved 2026-11-01). 0.3.281 (2026-10-15) is the newest release older than two weeks. Its
@@ -73,29 +73,29 @@ otel = [
 # The transitive pins below are the newest releases older than two weeks (a resolve picked newer ones). Inspect's
 # boto3/botocore pin python-dateutil < 3, so the lock holds python-dateutil 2.9.0.post0 (was 4.0.0).
 evals = [
-  "inspect-ai==0.3.281",
+  "inspect-ai==0.3.284",
   "aiobotocore==3.9.2",  # pulled by inspect-ai (s3fs); pinned
   "boto3==1.43.106",  # pulled by inspect-ai; pinned (aiobotocore 3.9.2 needs botocore < 1.43.107)
   "botocore==1.43.106",  # pulled by boto3; pinned
-  "s3transfer==0.19.2",  # pulled by boto3; pinned
-  "brotli==1.2.0",  # pulled by httpx[brotli] (inspect-ai); pinned
+  "s3transfer==0.19.3",  # pulled by boto3; pinned
+  "brotli==1.2.1",  # pulled by httpx[brotli] (inspect-ai); pinned
   "brotlicffi==1.2.1.0",  # pulled by httpx[brotli]; pinned
-  "jsonpatch==1.35",  # pulled by inspect-ai; pinned
-  "jsonpointer==3.3",  # pulled by jsonpatch; pinned
-  "jsonpath-ng==1.11.0",  # pulled by inspect-ai; pinned
+  "jsonpatch==1.37",  # pulled by inspect-ai; pinned
+  "jsonpointer==3.5",  # pulled by jsonpatch; pinned
+  "jsonpath-ng==1.13.0",  # pulled by inspect-ai; pinned
   "platformdirs==4.13.5",  # pulled by inspect-ai; pinned
-  "soupsieve==3.0.3",  # pulled by beautifulsoup4 (inspect-ai); pinned
-  "zipp==4.1.1",  # pulled by inspect-ai; pinned
+  "soupsieve==3.0.4",  # pulled by beautifulsoup4 (inspect-ai); pinned
+  "zipp==4.1.2",  # pulled by inspect-ai; pinned
 ]
 dev = [
   "pytest==9.2.0",
   "hypothesis==6.170.13",
   "time-machine==3.6.0",
   "import-linter==2.15",
-  "playwright==1.64.0",  # e2e browser tests of the web app (tests/e2e; user-approved 2026-10-30): drives the installed Edge/Chrome; pulls greenlet, pyee
+  "playwright==1.64.1",  # e2e browser tests of the web app (tests/e2e; user-approved 2026-10-30): drives the installed Edge/Chrome; pulls greenlet, pyee
   "greenlet==3.5.6",  # pulled by playwright; pinned
   "pyee==14.0.0",  # pulled by playwright; pinned
-  "ruff==0.17.1",  # the linter (user-approved 2026-10-31; newest release older than two weeks): `ruff check .`; .pre-commit-config.yaml pins the same
+  "ruff==0.17.2",  # the linter (user-approved 2026-10-31; newest release older than two weeks): `ruff check .`; .pre-commit-config.yaml pins the same
   "pre-commit==4.7.0",  # the quality-gate runner and git hooks (user-approved 2026-11-01): .pre-commit-config.yaml
 ]
 
