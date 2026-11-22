@@ -8,7 +8,7 @@
 # (`docker compose -f deploy/dev/compose.yaml build dev`; a no-op from the layer cache otherwise).
 #
 # Base: the root Dockerfile's image, pinned by the same multi-arch digest (refresh both together).
-FROM python:3.13.18-slim-trixie@sha256:76baad6037690d6e8c4397fbcaef17bca6f19eecef822b708fe8fa3417d30bb5
+FROM python:3.13.18-slim-trixie@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
 
 # uv, pinned by version (2026-10-14, older than two weeks when adopted) and multi-arch digest.
 COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 /uv /usr/local/bin/uv
