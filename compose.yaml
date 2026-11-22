@@ -451,7 +451,7 @@ services:
   # observability up -d`; `docker compose up -d` alone never starts it. Single node, local disk (its own volume), 14 days
   # of data. An exact release (v1.1.1, 2026-10-16), never "latest". AGPL-3.0, run unmodified (docs/PUBLISHING.md).
   openobserve:
-    image: openobserve/openobserve:v1.1.1
+    image: openobserve/openobserve:v1.1.2
     profiles: [observability]
     restart: unless-stopped
     logging: *logging
@@ -500,7 +500,7 @@ services:
   # Trivy (2026-11-01): one fixed HIGH, go-jose parsing JWKs, which this configuration never does (no OIDC or JWT
   # auth).
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+    image: otel/opentelemetry-collector-contrib:0.165.0@sha256:e40d61f10c9a617cca1ffd1be4d7e2b3a4b0f0001798ff07e58cabe82e618cea
     profiles: [observability]
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     restart: unless-stopped
