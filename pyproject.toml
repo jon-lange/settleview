@@ -1,6 +1,6 @@
 [project]
 name = "settleview"
-version = "0.1.0"
+version = "0.1.1"
 description = "Settleview: see where the window is likely to settle, then make your own call. A local decision aid for BTC Up/Down 15- and 5-minute prediction markets on Kalshi and Polymarket US."
 readme = "README.md"
 # Source-available, not OSI open source: free for noncommercial use; commercial use needs a separate license.
