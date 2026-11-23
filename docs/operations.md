@@ -1022,6 +1022,12 @@ Images from another browser or OS (fonts and anti-aliasing differ) are not commi
 
 ## Quality gates
 
+**What CI runs when** (to stay within GitHub Actions minutes): every push to `main` and every pull request runs the
+gates, Trivy, both test suites, staging and the image on **Linux, amd64**; a superseded run on the same branch is
+cancelled (`concurrency`). The **full matrix** — the supervisor and recorder tests on **macOS and Windows** (macOS
+minutes bill at 10x) and the **arm64** image under QEMU — runs weekly (`schedule`, Monday 06:17 UTC) and on a manual
+run: `gh workflow run ci.yml`. Releases build and scan both platforms regardless.
+
 The gates are [pre-commit](https://pre-commit.com) hooks (`.pre-commit-config.yaml`), each from the tool's own
 hook repository pinned to a commit, plus Trivy in CI with Aqua's official action. One command runs every hook: in the
 dev container locally, on the host, and in CI (`.github/workflows/ci.yml`, job `lint`: pre-commit's own
